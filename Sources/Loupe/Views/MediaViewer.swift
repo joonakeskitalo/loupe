@@ -62,6 +62,18 @@ struct MediaViewer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { if showingSingleImage { zoomHotkeys } }
+            // Trackpad swipes / horizontal scroll step between items. Sits
+            // behind the media so it only catches gestures the content itself
+            // doesn't consume (e.g. video, PDF, QuickLook). Images route their
+            // own swipe through ZoomableImageView while fitted.
+            .background {
+                if !isMulti {
+                    SwipeNavigator(
+                        onPrevious: { model.moveSelection(by: -1) },
+                        onNext: { model.moveSelection(by: 1) }
+                    )
+                }
+            }
 
             // Caption bar below the media — the filename lives here so it can
             // never cover the image.
@@ -109,7 +121,13 @@ struct MediaViewer: View {
     private func content(for item: MediaItem) -> some View {
         switch item.kind {
         case .image:
-            ZoomableImageView(url: item.url, command: $zoomCommand, zoomFactor: $zoomFactor)
+            ZoomableImageView(
+                url: item.url,
+                command: $zoomCommand,
+                zoomFactor: $zoomFactor,
+                onSwipePrevious: { model.moveSelection(by: -1) },
+                onSwipeNext: { model.moveSelection(by: 1) }
+            )
         case .video, .audio:
             VideoPlayerView(url: item.url) { controller in
                 videoController = controller

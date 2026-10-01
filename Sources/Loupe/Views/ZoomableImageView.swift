@@ -20,6 +20,10 @@ struct ZoomableImageView: NSViewRepresentable {
     let url: URL
     @Binding var command: ZoomCommand?
     @Binding var zoomFactor: CGFloat
+    /// Optional previous/next handlers invoked on a trackpad swipe or clear
+    /// horizontal scroll while the image is fitted (not zoomed in).
+    var onSwipePrevious: (() -> Void)?
+    var onSwipeNext: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(zoomFactor: $zoomFactor)
@@ -59,12 +63,17 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.onResize = { [weak coordinator = context.coordinator] in
             coordinator?.viewportResized()
         }
+        scrollView.onSwipePrevious = onSwipePrevious
+        scrollView.onSwipeNext = onSwipeNext
 
         DispatchQueue.main.async { context.coordinator.fit() }
         return scrollView
     }
 
     func updateNSView(_ nsView: ZoomScrollView, context: Context) {
+        nsView.onSwipePrevious = onSwipePrevious
+        nsView.onSwipeNext = onSwipeNext
+
         if context.coordinator.url != url {
             context.coordinator.url = url
             nsView.imageView?.image = NSImage(contentsOf: url)
@@ -234,6 +243,18 @@ final class ZoomScrollView: NSScrollView {
     weak var imageView: NSImageView?
     var onDoubleClick: (() -> Void)?
     var onResize: (() -> Void)?
+    var onSwipePrevious: (() -> Void)?
+    var onSwipeNext: (() -> Void)?
+
+    /// Accumulated horizontal scroll for the in-flight gesture, and whether it
+    /// has already stepped, so one flick navigates exactly once.
+    private var navAccumX: CGFloat = 0
+    private var navAccumY: CGFloat = 0
+    private var navTriggered = false
+    private let navThreshold: CGFloat = 50
+    /// Cooldown for discrete mouse-wheel steps (one notch == one item).
+    private var lastWheelStep: TimeInterval = 0
+    private let wheelCooldown: TimeInterval = 0.15
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
@@ -246,6 +267,93 @@ final class ZoomScrollView: NSScrollView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         onResize?()
+    }
+
+    private var hasNavHandlers: Bool { onSwipeNext != nil || onSwipePrevious != nil }
+
+    /// True when the whole image is visible horizontally (nothing to pan
+    /// sideways), so a horizontal gesture can be read as navigation.
+    private var canNavigateHorizontally: Bool {
+        guard let doc = documentView else { return false }
+        let docWidth = doc.frame.width * magnification
+        return docWidth <= contentView.frame.width + 1
+    }
+
+    /// True when the whole image is visible vertically (nothing to pan up or
+    /// down), so a mouse wheel can be read as navigation.
+    private var canNavigateVertically: Bool {
+        guard let doc = documentView else { return false }
+        let docHeight = doc.frame.height * magnification
+        return docHeight <= contentView.frame.height + 1
+    }
+
+    override func swipe(with event: NSEvent) {
+        if event.deltaX > 0 {
+            onSwipeNext?()
+        } else if event.deltaX < 0 {
+            onSwipePrevious?()
+        } else {
+            super.swipe(with: event)
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard hasNavHandlers else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        // Physical mouse wheel: coarse, non-precise, no gesture phase. Treat a
+        // notch as one step when the image can't be panned along that axis.
+        if !event.hasPreciseScrollingDeltas {
+            let dx = event.scrollingDeltaX
+            let dy = event.scrollingDeltaY
+            let delta = abs(dx) > abs(dy) ? dx : dy
+            let axisIsVertical = abs(dy) >= abs(dx)
+            let fittedOnAxis = axisIsVertical ? canNavigateVertically : canNavigateHorizontally
+
+            if delta != 0, fittedOnAxis {
+                let now = event.timestamp
+                if now - lastWheelStep > wheelCooldown {
+                    lastWheelStep = now
+                    if delta < 0 { onSwipeNext?() } else { onSwipePrevious?() }
+                }
+                return
+            }
+            // Zoomed in on this axis: let the scroll view pan.
+            super.scrollWheel(with: event)
+            return
+        }
+
+        // Trackpad precise scroll: navigate only when horizontally fitted,
+        // otherwise pan.
+        guard canNavigateHorizontally else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        if event.phase.contains(.began) {
+            navAccumX = 0
+            navAccumY = 0
+            navTriggered = false
+        }
+
+        if !event.momentumPhase.isEmpty { return }
+
+        navAccumX += event.scrollingDeltaX
+        navAccumY += event.scrollingDeltaY
+
+        if !navTriggered, abs(navAccumX) > navThreshold,
+           abs(navAccumX) > abs(navAccumY) {
+            navTriggered = true
+            if navAccumX > 0 { onSwipeNext?() } else { onSwipePrevious?() }
+        }
+
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+            navAccumX = 0
+            navAccumY = 0
+            navTriggered = false
+        }
     }
 
     /// Re-apply the clip view centering after a programmatic zoom change.
