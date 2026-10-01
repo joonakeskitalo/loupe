@@ -14,7 +14,7 @@ struct ThumbnailView: View {
         VStack(spacing: 6) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.secondary.opacity(0.12))
+                    .fill(Color.secondary.opacity(0.03))
 
                 if let image {
                     Image(nsImage: image)
