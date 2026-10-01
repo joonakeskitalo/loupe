@@ -16,6 +16,19 @@ final class VideoController: ObservableObject {
     private var statusObserver: AnyCancellable?
     private var endObserver: NSObjectProtocol?
 
+    /// True while the user is dragging the scrubber. During a scrub the
+    /// periodic time observer must not write `currentTime` back from the
+    /// player's (lagging) position, otherwise the thumb fights the drag and
+    /// stutters.
+    private var isScrubbing = false
+    /// Guards against overlapping seeks: a new scrub target is only dispatched
+    /// once the previous seek completes, with the latest requested time applied
+    /// at the end. This keeps fast dragging smooth instead of queuing seeks.
+    private var isSeekInFlight = false
+    private var pendingSeekTime: Double?
+    /// Whether playback was running when scrubbing began, so we can resume it.
+    private var wasPlayingBeforeScrub = false
+
     init(url: URL) {
         player = AVPlayer(url: url)
         observe()
@@ -39,7 +52,13 @@ final class VideoController: ObservableObject {
             // Delivered on the main queue, so it is safe to hop to the main actor.
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.currentTime = time.seconds
+                // While scrubbing OR while a keyboard-driven jump seek is still
+                // in flight, our target owns `currentTime`; don't let the
+                // player's lagging position overwrite it and snap the thumb
+                // backward (which looks like a stutter).
+                if !self.isScrubbing && !self.isSeekInFlight {
+                    self.currentTime = time.seconds
+                }
                 if let d = self.player.currentItem?.duration.seconds, d.isFinite {
                     self.duration = d
                 }
@@ -73,25 +92,92 @@ final class VideoController: ObservableObject {
         currentTime = seconds
     }
 
+    /// Call when the user starts dragging the scrubber. Pauses playback (so
+    /// audio doesn't chirp during the drag) and takes over `currentTime` so the
+    /// thumb tracks the finger precisely.
+    func beginScrubbing() {
+        isScrubbing = true
+        wasPlayingBeforeScrub = player.rate != 0
+        if wasPlayingBeforeScrub { player.pause() }
+    }
+
+    /// Called continuously as the scrubber is dragged. Updates the thumb
+    /// position immediately and issues a fast, tolerant seek. Overlapping seeks
+    /// are coalesced: only one runs at a time and the most recent target is
+    /// applied when it finishes, so rapid dragging stays smooth.
+    func scrub(to seconds: Double) {
+        currentTime = seconds
+        pendingSeekTime = seconds
+        dispatchPendingSeek()
+    }
+
+    /// Call when the user releases the scrubber. Does a final precise seek to
+    /// the drop point and resumes playback if it was playing before.
+    func endScrubbing() {
+        isScrubbing = false
+        let target = pendingSeekTime ?? currentTime
+        pendingSeekTime = nil
+        // Precise final seek so the frame matches exactly where the user let go.
+        // Seek completion handlers fire on an arbitrary queue, so hop to the
+        // main actor before touching player/published state.
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.wasPlayingBeforeScrub { self.play() }
+            }
+        }
+    }
+
+    /// Issues the next tolerant seek if one isn't already running. Tolerant
+    /// seeks (non-zero tolerance) are far cheaper than exact seeks, which is
+    /// what makes continuous scrubbing responsive.
+    private func dispatchPendingSeek() {
+        guard !isSeekInFlight, let target = pendingSeekTime else { return }
+        pendingSeekTime = nil
+        isSeekInFlight = true
+        let tolerance = CMTime(seconds: 0.25, preferredTimescale: 600)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+            // Completion fires on an arbitrary queue; hop to the main actor.
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSeekInFlight = false
+                // If more drag arrived while this seek ran, chase the latest.
+                self.dispatchPendingSeek()
+            }
+        }
+    }
+
+    /// A discrete, keyboard-driven jump (percentage keys, U/O skips). Moves the
+    /// thumb immediately, then uses the same coalesced, tolerant seek as the
+    /// scrubber so rapid presses stay smooth instead of queuing slow exact
+    /// seeks (which caused the thumb to stutter).
+    func jump(to seconds: Double) {
+        let target: Double
+        if duration.isFinite, duration > 0 {
+            target = min(max(seconds, 0), duration)
+        } else {
+            target = max(seconds, 0)
+        }
+        currentTime = target
+        pendingSeekTime = target
+        dispatchPendingSeek()
+    }
+
     /// Seeks to a fraction (0...1) of the total duration. Used by the number-key
     /// hotkeys that jump to 0%, 10%, … of the video. No-op until the duration is
     /// known (it's reported asynchronously once the item is ready).
     func seek(toFraction fraction: Double) {
         guard duration.isFinite, duration > 0 else { return }
         let clamped = min(max(fraction, 0), 1)
-        seek(to: duration * clamped)
+        jump(to: duration * clamped)
     }
 
     /// Skips forward (positive) or backward (negative) by a number of seconds,
     /// clamped to the valid range. Used by the U/O 15-second skip hotkeys.
     func skip(by seconds: Double) {
-        let target: Double
-        if duration.isFinite, duration > 0 {
-            target = min(max(currentTime + seconds, 0), duration)
-        } else {
-            target = max(currentTime + seconds, 0)
-        }
-        seek(to: target)
+        jump(to: currentTime + seconds)
     }
 
     /// Steps the video by a number of frames (negative = backward). Pauses
@@ -190,9 +276,16 @@ struct VideoPlayerView: View {
             Slider(
                 value: Binding(
                     get: { controller.currentTime },
-                    set: { controller.seek(to: $0) }
+                    set: { controller.scrub(to: $0) }
                 ),
-                in: 0...max(controller.duration, 0.1)
+                in: 0...max(controller.duration, 0.1),
+                onEditingChanged: { editing in
+                    if editing {
+                        controller.beginScrubbing()
+                    } else {
+                        controller.endScrubbing()
+                    }
+                }
             )
             .controlSize(.small)
 
