@@ -14,13 +14,24 @@ struct BrowserListView: View {
     /// keyboard navigation) doesn't yank a clicked, already-visible item.
     @State private var suppressNextScroll = false
 
+    /// Normalized zoom position in 0...1 across the grid's 90–320 range.
+    private var zoomFraction: Double {
+        (model.thumbnailSize - BrowserModel.minThumbnailSize)
+            / (BrowserModel.maxThumbnailSize - BrowserModel.minThumbnailSize)
+    }
+
     /// Row thumbnail size, derived from the shared zoom value so the toolbar
     /// slider scales list rows too. The grid's 90–320 range is mapped down to a
     /// compact 28–72 pt range that keeps rows readable.
     private var thumbSize: Double {
-        let t = (model.thumbnailSize - BrowserModel.minThumbnailSize)
-            / (BrowserModel.maxThumbnailSize - BrowserModel.minThumbnailSize)
-        return 28 + t * (72 - 28)
+        28 + zoomFraction * (72 - 28)
+    }
+
+    /// Vertical padding around each row, scaled with the zoom so the smallest
+    /// setting yields noticeably shorter rows (2 pt) and the largest stays
+    /// comfortable (6 pt).
+    private var rowVerticalPadding: Double {
+        2 + zoomFraction * (6 - 2)
     }
 
     var body: some View {
@@ -37,6 +48,7 @@ struct BrowserListView: View {
                                 ListRowView(
                                     item: item,
                                     thumbSize: thumbSize,
+                                    verticalPadding: rowVerticalPadding,
                                     isSelected: model.selectedItems.contains(item.id),
                                     isFlagged: model.isFlagged(item.id)
                                 )
@@ -227,6 +239,7 @@ enum ListRowMetrics {
 private struct ListRowView: View {
     let item: MediaItem
     let thumbSize: Double
+    let verticalPadding: Double
     let isSelected: Bool
     var isFlagged: Bool = false
 
@@ -279,7 +292,7 @@ private struct ListRowView: View {
         }
         .font(.callout)
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, verticalPadding)
         .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
         .background(
             isSelected ? Color.accentColor.opacity(0.15) : Color.clear

@@ -65,7 +65,25 @@ final class BrowserModel {
     }
     var sortOrder: SortOrder = .name
     var sortAscending = true
-    var thumbnailSize: Double = 160
+
+    /// Grid and list keep independent zoom levels. Grid starts at a comfortable
+    /// mid size; list starts at the minimum so rows are compact by default.
+    var gridThumbnailSize: Double = 160
+    var listThumbnailSize: Double = BrowserModel.minThumbnailSize
+
+    /// The zoom level for the active layout. Reads/writes the grid or list value
+    /// depending on `viewLayout`, so the toolbar slider and zoom commands drive
+    /// whichever view is currently shown.
+    var thumbnailSize: Double {
+        get { viewLayout == .grid ? gridThumbnailSize : listThumbnailSize }
+        set {
+            if viewLayout == .grid {
+                gridThumbnailSize = newValue
+            } else {
+                listThumbnailSize = newValue
+            }
+        }
+    }
 
     /// Whether files are shown as a thumbnail grid or a detailed list.
     var viewLayout: ViewLayout = .grid
