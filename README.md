@@ -30,6 +30,11 @@ window and browse all the images, videos, and PDFs inside it.
 - **Search** — a scoped search field in the toolbar filters by filename within
   the current scope (the selected folder in Folders mode, or All Media when
   flattened).
+- **Type & extension chips** — a chip bar above the grid lets you filter by
+  media type (Images, Videos, PDFs, Audio) and/or specific file extensions.
+  Chips show live counts for the current scope, multiple chips combine, and a
+  Clear chip resets them. The bar appears only when there's more than one type
+  or extension to distinguish.
 - **Keyboard navigation** — arrow keys move the grid selection (Up/Down jump a
   full row); Return or **G** opens the selection in the full viewer; **G**
   or Esc returns to the grid.

@@ -20,6 +20,17 @@ enum MediaKind: String, Sendable {
         }
     }
 
+    /// Human-readable plural name used for type filter chips.
+    var displayName: String {
+        switch self {
+        case .image: return "Images"
+        case .video: return "Videos"
+        case .pdf: return "PDFs"
+        case .audio: return "Audio"
+        case .other: return "Other"
+        }
+    }
+
     static func classify(url: URL) -> MediaKind {
         guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else {
             return .other

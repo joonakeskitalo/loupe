@@ -75,6 +75,16 @@ final class BrowserModel {
         didSet { clampSelection() }
     }
 
+    /// Active media-type chip filters (empty = all types).
+    var selectedKinds: Set<MediaKind> = [] {
+        didSet { clampSelection() }
+    }
+
+    /// Active file-extension chip filters, lowercased (empty = all extensions).
+    var selectedExtensions: Set<String> = [] {
+        didSet { clampSelection() }
+    }
+
     /// Whether the full-screen/detail viewer is presented.
     var isViewerPresented = false
 
@@ -105,8 +115,14 @@ final class BrowserModel {
         searchText = ""
         flaggedItems = []
         showFlaggedOnly = false
+        selectedKinds = []
+        selectedExtensions = []
 
         Task {
+            // Let the "Scanning…" state paint before we start the scan, so the
+            // window never appears frozen on the first drop while the split
+            // view and toolbar build for the first time.
+            await Task.yield()
             let result = await FolderScanner.scan(root: url)
             self.apply(result, resetSelectedFolder: true)
         }
@@ -141,9 +157,10 @@ final class BrowserModel {
         self.isScanning = false
     }
 
-    /// Items displayed in the grid for the current mode and sort, after the
-    /// search filter is applied.
-    var displayedItems: [MediaItem] {
+    /// Items in the current scope (folder/flag) after the text search, but
+    /// BEFORE the type/extension chip filters. Chip availability and counts are
+    /// derived from this set so selecting a chip never makes other chips vanish.
+    var scopedItems: [MediaItem] {
         var base: [MediaItem]
         switch mode {
         case .flattened:
@@ -166,7 +183,92 @@ final class BrowserModel {
                 $0.name.localizedCaseInsensitiveContains(query)
             }
         }
-        return sorted(base)
+        return base
+    }
+
+    /// Items displayed in the grid: the scoped set with the active type and
+    /// extension chip filters applied, then sorted.
+    var displayedItems: [MediaItem] {
+        sorted(scopedItems.filter { passesChipFilters($0) })
+    }
+
+    private func passesChipFilters(_ item: MediaItem) -> Bool {
+        if !selectedKinds.isEmpty, !selectedKinds.contains(item.kind) {
+            return false
+        }
+        if !selectedExtensions.isEmpty,
+           !selectedExtensions.contains(item.url.pathExtension.lowercased()) {
+            return false
+        }
+        return true
+    }
+
+    // MARK: - Filter chips
+
+    struct KindChip: Identifiable, Hashable {
+        let kind: MediaKind
+        let count: Int
+        var id: MediaKind { kind }
+    }
+
+    struct ExtensionChip: Identifiable, Hashable {
+        let ext: String        // lowercased, no dot
+        let count: Int
+        var id: String { ext }
+    }
+
+    /// Media-type chips available in the current scope, with counts, ordered by
+    /// a stable kind order. Derived from `scopedItems` so chips are stable.
+    var availableKindChips: [KindChip] {
+        var counts: [MediaKind: Int] = [:]
+        for item in scopedItems { counts[item.kind, default: 0] += 1 }
+        let order: [MediaKind] = [.image, .video, .pdf, .audio, .other]
+        return order.compactMap { kind in
+            guard let c = counts[kind], c > 0 else { return nil }
+            return KindChip(kind: kind, count: c)
+        }
+    }
+
+    /// Extension chips available in the current scope, with counts, ordered by
+    /// descending count then alphabetically.
+    var availableExtensionChips: [ExtensionChip] {
+        var counts: [String: Int] = [:]
+        for item in scopedItems {
+            let ext = item.url.pathExtension.lowercased()
+            guard !ext.isEmpty else { continue }
+            counts[ext, default: 0] += 1
+        }
+        return counts
+            .map { ExtensionChip(ext: $0.key, count: $0.value) }
+            .sorted {
+                $0.count != $1.count ? $0.count > $1.count : $0.ext < $1.ext
+            }
+    }
+
+    var hasActiveChipFilters: Bool {
+        !selectedKinds.isEmpty || !selectedExtensions.isEmpty
+    }
+
+    func toggleKind(_ kind: MediaKind) {
+        if selectedKinds.contains(kind) {
+            selectedKinds.remove(kind)
+        } else {
+            selectedKinds.insert(kind)
+        }
+    }
+
+    func toggleExtension(_ ext: String) {
+        let key = ext.lowercased()
+        if selectedExtensions.contains(key) {
+            selectedExtensions.remove(key)
+        } else {
+            selectedExtensions.insert(key)
+        }
+    }
+
+    func clearChipFilters() {
+        selectedKinds = []
+        selectedExtensions = []
     }
 
     /// Human-readable description of where search is scoped right now.

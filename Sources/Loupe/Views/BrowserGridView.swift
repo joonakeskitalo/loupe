@@ -33,7 +33,13 @@ struct BrowserGridView: View {
         let items = model.displayedItems
         Group {
             if items.isEmpty {
-                if model.showFlaggedOnly {
+                if model.hasActiveChipFilters && !model.scopedItems.isEmpty {
+                    ContentUnavailableView(
+                        "No Matching Files",
+                        systemImage: "line.3.horizontal.decrease.circle",
+                        description: Text("No files match the selected type/extension filters.")
+                    )
+                } else if model.showFlaggedOnly {
                     ContentUnavailableView(
                         "No Flagged Files",
                         systemImage: "flag",

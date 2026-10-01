@@ -57,6 +57,7 @@ struct ContentView: View {
                 ProgressView("Scanning \(model.rootName)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                FilterBar(model: model)
                 BrowserGridView(model: model, canAutoFocus: !searchFocused)
             }
         }
