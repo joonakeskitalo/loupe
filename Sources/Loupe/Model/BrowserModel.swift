@@ -174,6 +174,25 @@ final class BrowserModel {
     /// Whether the full-screen/detail viewer is presented.
     var isViewerPresented = false
 
+    /// Whether the film strip of thumbnails is shown in the single-item viewer.
+    var isFilmStripVisible = true
+
+    /// Height of the film strip (its thumbnails scale to fill it). Clamped to
+    /// `filmStripHeightRange` when set so a drag can't push it out of bounds.
+    var filmStripHeight: Double = 96 {
+        didSet {
+            let clamped = min(max(filmStripHeight, Self.filmStripHeightRange.lowerBound),
+                              Self.filmStripHeightRange.upperBound)
+            if clamped != filmStripHeight { filmStripHeight = clamped }
+        }
+    }
+
+    /// Allowed range for `filmStripHeight`, in points.
+    static let filmStripHeightRange: ClosedRange<Double> = 64...240
+
+    /// Toggles film strip visibility.
+    func toggleFilmStrip() { isFilmStripVisible.toggle() }
+
     /// Number of columns currently shown in the grid, reported by the grid view
     /// so keyboard Up/Down navigation can jump a full row.
     var gridColumnCount = 1

@@ -35,6 +35,12 @@ struct MediaViewer: View {
         !isMulti && items.first?.kind == .image
     }
 
+    /// Whether the film strip is applicable: single-item view with more than
+    /// one item to navigate between.
+    private var canShowFilmStrip: Bool {
+        !isMulti && model.displayedItems.count > 1
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Top chrome bar (close button) — separated from the media so it
@@ -62,6 +68,17 @@ struct MediaViewer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { if showingSingleImage { zoomHotkeys } }
+            // Bare "T" toggles the film strip whenever it's applicable.
+            .background {
+                if canShowFilmStrip {
+                    hotkey("t", []) {
+                        withAnimation(.easeInOut(duration: 0.2)) { model.toggleFilmStrip() }
+                    }
+                    .opacity(0)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+                }
+            }
             // Trackpad swipes / horizontal scroll step between items. Sits
             // behind the media so it only catches gestures the content itself
             // doesn't consume (e.g. video, PDF, QuickLook). Images route their
@@ -73,6 +90,17 @@ struct MediaViewer: View {
                         onNext: { model.moveSelection(by: 1) }
                     )
                 }
+            }
+
+            // Film strip of thumbnails for quick navigation between items.
+            // Only shown for the single-item view when there's more than one
+            // item to move between, and when the user hasn't hidden it.
+            if canShowFilmStrip && model.isFilmStripVisible {
+                FilmStrip(
+                    model: model,
+                    items: model.displayedItems,
+                    currentID: items.first?.id
+                )
             }
 
             // Caption bar below the media — the filename lives here so it can
@@ -167,10 +195,34 @@ struct MediaViewer: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            if canShowFilmStrip {
+                if showingSingleImage {
+                    Divider().frame(height: 16).overlay(Color.white.opacity(0.2))
+                }
+                filmStripToggle
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(white: 0.08))
+    }
+
+    /// Toggle button for the film strip's visibility.
+    private var filmStripToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.toggleFilmStrip()
+            }
+        } label: {
+            Image(systemName: model.isFilmStripVisible ? "rectangle.bottomthird.inset.filled" : "rectangle")
+                .font(.body)
+                .foregroundStyle(model.isFilmStripVisible ? Color.accentColor : .white)
+                .padding(6)
+                .background(.white.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(model.isFilmStripVisible ? "Hide film strip (T)" : "Show film strip (T)")
     }
 
     /// Zoom toolbar for the single-image viewer: zoom out / level / zoom in,
