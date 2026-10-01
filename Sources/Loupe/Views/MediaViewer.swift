@@ -13,6 +13,14 @@ struct MediaViewer: View {
     @State private var zoomCommand: ZoomCommand?
     @State private var zoomFactor: CGFloat = 1
 
+    /// The active video controller (when a single video/audio item is shown),
+    /// so the spacebar can toggle playback.
+    @State private var videoController: VideoController?
+
+    private var showingSingleVideo: Bool {
+        !isMulti && (items.first?.kind == .video || items.first?.kind == .audio)
+    }
+
     /// The items to show: all selected items, falling back to the primary one.
     private var items: [MediaItem] {
         let selected = model.selectedMediaItems
@@ -60,6 +68,20 @@ struct MediaViewer: View {
             captionBar
         }
         .background(Color.black.ignoresSafeArea())
+        .focusable()
+        .focusEffectDisabled()
+        // Consume the spacebar so it never bubbles up to the window's hidden
+        // shortcut buttons (which previously closed the viewer). For a single
+        // video/audio item, Space toggles play/pause.
+        .onKeyPress(.space) {
+            if showingSingleVideo, let videoController {
+                videoController.togglePlay()
+            }
+            return .handled
+        }
+        .onChange(of: items.first?.id) { _, _ in
+            if !showingSingleVideo { videoController = nil }
+        }
     }
 
     @ViewBuilder
@@ -89,7 +111,9 @@ struct MediaViewer: View {
         case .image:
             ZoomableImageView(url: item.url, command: $zoomCommand, zoomFactor: $zoomFactor)
         case .video, .audio:
-            VideoPlayerView(url: item.url)
+            VideoPlayerView(url: item.url) { controller in
+                videoController = controller
+            }
         case .pdf:
             PDFViewerRepresentable(url: item.url)
         case .other:
@@ -361,29 +385,8 @@ private struct GridPreview: View {
 /// Scroll-to-zoom and drag-to-pan image view.
 // MARK: - Video
 
-private struct VideoPlayerView: NSViewRepresentable {
-    let url: URL
-
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
-        view.controlsStyle = .inline
-        view.player = AVPlayer(url: url)
-        view.player?.play()
-        return view
-    }
-
-    func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        if (nsView.player?.currentItem?.asset as? AVURLAsset)?.url != url {
-            nsView.player?.pause()
-            nsView.player = AVPlayer(url: url)
-            nsView.player?.play()
-        }
-    }
-
-    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
-        nsView.player?.pause()
-    }
-}
+// VideoPlayerView now lives in VideoPlayer.swift (controls sit below the video,
+// not over it).
 
 // MARK: - PDF
 

@@ -44,7 +44,9 @@ window and browse all the images, videos, and PDFs inside it.
     double-click toggles between Fit and 100%. Zoom hotkeys: **⌘+** / **⌘−**
     zoom in and out (bare **+** / **−** also work), **⌘0** or **F** fits, and
     **⌘1** or **1** shows actual pixel size.
-  - Video & audio: inline AVKit player with transport controls.
+  - Video & audio: AVKit playback with a custom transport bar below the video
+    (play/pause, scrubber, time) so controls never cover the picture; Space
+    toggles play/pause.
   - PDFs: continuous-scroll PDFKit view.
   - Everything else: QuickLook preview.
   - Left/Right arrows move between items; Esc or **G** closes the viewer.
