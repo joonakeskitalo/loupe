@@ -389,24 +389,34 @@ final class BrowserModel {
 
     /// Media-type chips available in the current scope, with counts, ordered by
     /// a stable kind order. Derived from `scopedItems` so chips are stable.
+    /// An actively-selected kind is always included (count 0 if the current
+    /// scope has none) so the user can still see and clear it after changing
+    /// to a folder that lacks that type.
     var availableKindChips: [KindChip] {
         var counts: [MediaKind: Int] = [:]
         for item in scopedItems { counts[item.kind, default: 0] += 1 }
         let order: [MediaKind] = [.image, .video, .pdf, .audio, .markdown, .text, .other]
         return order.compactMap { kind in
-            guard let c = counts[kind], c > 0 else { return nil }
+            let c = counts[kind] ?? 0
+            guard c > 0 || selectedKinds.contains(kind) else { return nil }
             return KindChip(kind: kind, count: c)
         }
     }
 
     /// Extension chips available in the current scope, with counts, ordered by
-    /// descending count then alphabetically.
+    /// descending count then alphabetically. An actively-selected extension is
+    /// always included (count 0 if the current scope has none) so the user can
+    /// still see and clear it after changing to a folder that lacks it.
     var availableExtensionChips: [ExtensionChip] {
         var counts: [String: Int] = [:]
         for item in scopedItems {
             let ext = item.url.pathExtension.lowercased()
             guard !ext.isEmpty else { continue }
             counts[ext, default: 0] += 1
+        }
+        // Ensure selected extensions appear even with no matches in this scope.
+        for ext in selectedExtensions where counts[ext] == nil {
+            counts[ext] = 0
         }
         return counts
             .map { ExtensionChip(ext: $0.key, count: $0.value) }

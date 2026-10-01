@@ -55,8 +55,11 @@ struct FilterBar: View {
         let kinds = model.availableKindChips
         let exts = model.availableExtensionChips
 
-        // Only worth showing when there's more than one thing to distinguish.
-        if kinds.count > 1 || exts.count > 1 {
+        // Only worth showing when there's more than one thing to distinguish —
+        // but always keep the bar up while a filter is active, otherwise
+        // changing to a folder whose scope has just one kind would hide the bar
+        // (and its Clear button) with the filter still silently applied.
+        if kinds.count > 1 || exts.count > 1 || model.hasActiveChipFilters {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(kinds) { chip in
