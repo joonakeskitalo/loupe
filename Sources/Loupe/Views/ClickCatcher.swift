@@ -29,15 +29,19 @@ struct ClickCatcher: NSViewRepresentable {
     var dragURLs: () -> [URL] = { [] }
     /// Optional image shown under the cursor while dragging.
     var dragImage: () -> NSImage? = { nil }
+    /// Whether this cell is already part of the current selection. Used so a
+    /// plain mouse-down on an already-selected cell doesn't collapse the
+    /// selection before a multi-file drag can begin.
+    var isSelected: () -> Bool = { false }
 
     func makeNSView(context: Context) -> ClickView {
         let view = ClickView()
-        view.configure(onSingle: onSingle, onDouble: onDouble, dragURLs: dragURLs, dragImage: dragImage)
+        view.configure(onSingle: onSingle, onDouble: onDouble, dragURLs: dragURLs, dragImage: dragImage, isSelected: isSelected)
         return view
     }
 
     func updateNSView(_ nsView: ClickView, context: Context) {
-        nsView.configure(onSingle: onSingle, onDouble: onDouble, dragURLs: dragURLs, dragImage: dragImage)
+        nsView.configure(onSingle: onSingle, onDouble: onDouble, dragURLs: dragURLs, dragImage: dragImage, isSelected: isSelected)
     }
 
     final class ClickView: NSView, NSDraggingSource {
@@ -45,29 +49,42 @@ struct ClickCatcher: NSViewRepresentable {
         private var onDouble: (ClickModifiers) -> Void = { _ in }
         private var dragURLs: () -> [URL] = { [] }
         private var dragImage: () -> NSImage? = { nil }
+        private var isSelected: () -> Bool = { false }
 
         private var mouseDownPoint: CGPoint?
         private var mouseDownEvent: NSEvent?
+        /// A plain single-click action deferred to mouse-up (set only when the
+        /// user presses an already-selected cell with no modifier, so a drag of
+        /// the whole selection stays possible). Cleared if a drag begins.
+        private var deferredSingle: ClickModifiers?
 
         func configure(
             onSingle: @escaping (ClickModifiers) -> Void,
             onDouble: @escaping (ClickModifiers) -> Void,
             dragURLs: @escaping () -> [URL],
-            dragImage: @escaping () -> NSImage?
+            dragImage: @escaping () -> NSImage?,
+            isSelected: @escaping () -> Bool
         ) {
             self.onSingle = onSingle
             self.onDouble = onDouble
             self.dragURLs = dragURLs
             self.dragImage = dragImage
+            self.isSelected = isSelected
         }
 
         override func mouseDown(with event: NSEvent) {
             mouseDownPoint = convert(event.locationInWindow, from: nil)
             mouseDownEvent = event
+            deferredSingle = nil
 
             let mods = ClickModifiers(event.modifierFlags)
             if event.clickCount >= 2 {
                 onDouble(mods)
+            } else if !mods.command, !mods.shift, isSelected() {
+                // Plain press on an already-selected cell: defer the
+                // select-only to mouse-up so dragging can carry the whole
+                // selection. (Finder behaves the same way.)
+                deferredSingle = mods
             } else {
                 onSingle(mods)
             }
@@ -81,12 +98,20 @@ struct ClickCatcher: NSViewRepresentable {
 
             let urls = dragURLs()
             guard !urls.isEmpty else { return }
+            // A drag is starting, so the deferred collapse must not fire.
+            deferredSingle = nil
             mouseDownPoint = nil
             mouseDownEvent = nil
             beginDrag(urls: urls, event: downEvent)
         }
 
         override func mouseUp(with event: NSEvent) {
+            // No drag happened: honour the deferred plain click now by
+            // collapsing the selection to this cell.
+            if let mods = deferredSingle {
+                onSingle(mods)
+            }
+            deferredSingle = nil
             mouseDownPoint = nil
             mouseDownEvent = nil
         }
@@ -143,8 +168,9 @@ extension View {
         single: @escaping (ClickModifiers) -> Void,
         double: @escaping (ClickModifiers) -> Void,
         dragURLs: @escaping () -> [URL] = { [] },
-        dragImage: @escaping () -> NSImage? = { nil }
+        dragImage: @escaping () -> NSImage? = { nil },
+        isSelected: @escaping () -> Bool = { false }
     ) -> some View {
-        overlay(ClickCatcher(onSingle: single, onDouble: double, dragURLs: dragURLs, dragImage: dragImage))
+        overlay(ClickCatcher(onSingle: single, onDouble: double, dragURLs: dragURLs, dragImage: dragImage, isSelected: isSelected))
     }
 }

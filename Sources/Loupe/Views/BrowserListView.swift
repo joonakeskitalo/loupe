@@ -73,7 +73,8 @@ struct BrowserListView: View {
                                         }
                                         model.isViewerPresented = true
                                     },
-                                    dragURLs: { dragURLs(for: item) }
+                                    dragURLs: { dragURLs(for: item) },
+                                    isSelected: { model.selectedItems.contains(item.id) }
                                 )
                                 .contextMenu { contextMenu(for: item) }
                             }
