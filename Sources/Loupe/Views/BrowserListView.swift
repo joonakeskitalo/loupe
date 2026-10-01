@@ -39,6 +39,10 @@ struct BrowserListView: View {
         Group {
             if items.isEmpty {
                 emptyState
+                    // Fill the available area so the surrounding VStack keeps
+                    // the filter bar pinned to the top instead of centering it
+                    // vertically alongside a compact empty-state view.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {

@@ -296,7 +296,19 @@ final class BrowserModel {
         allItems = merged
         itemsByDirectory = byDir
         trees = newTrees
+        pruneStaleChipFilters()
         clampSelection()
+    }
+
+    /// Drops any active type/extension chip filters that no longer have a
+    /// matching file after a rescan (e.g. the last file of that type was
+    /// deleted, then the folder was refreshed). Without this the grid gets
+    /// stuck on a "No Matching Files" state filtered by a type that's gone.
+    private func pruneStaleChipFilters() {
+        let availableKinds = Set(allItems.map(\.kind))
+        let availableExts = Set(allItems.map { $0.url.pathExtension.lowercased() })
+        selectedKinds.formIntersection(availableKinds)
+        selectedExtensions.formIntersection(availableExts)
     }
 
     /// All directory URLs across every root's tree (used to validate the

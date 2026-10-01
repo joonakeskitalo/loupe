@@ -38,27 +38,11 @@ struct BrowserGridView: View {
         let items = model.displayedItems
         Group {
             if items.isEmpty {
-                if model.hasActiveChipFilters && !model.scopedItems.isEmpty {
-                    ContentUnavailableView(
-                        "No Matching Files",
-                        systemImage: "line.3.horizontal.decrease.circle",
-                        description: Text("No files match the selected type/extension filters.")
-                    )
-                } else if model.showFlaggedOnly {
-                    ContentUnavailableView(
-                        "No Flagged Files",
-                        systemImage: "flag",
-                        description: Text("Flag files with F to see them here, or turn off the flagged filter.")
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "Nothing Here",
-                        systemImage: "photo.on.rectangle.angled",
-                        description: Text(model.mode == .folders
-                            ? "This folder has no files."
-                            : "The dropped folder has no files.")
-                    )
-                }
+                emptyState
+                    // Fill the available area so the surrounding VStack keeps
+                    // the filter bar pinned to the top instead of centering it
+                    // vertically alongside a compact empty-state view.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GeometryReader { geo in
                     ScrollViewReader { proxy in
@@ -151,6 +135,34 @@ struct BrowserGridView: View {
                 // (Shift) alongside the arrow key from the KeyPress.
                 .onKeyPress { press in handleKey(press) }
             }
+        }
+    }
+
+    /// Shown when nothing matches the current scope/filters. Kept as a separate
+    /// view so it can be given an expanding frame; a bare `ContentUnavailableView`
+    /// in a `VStack` sizes to its content and lets siblings drift to the middle.
+    @ViewBuilder
+    private var emptyState: some View {
+        if model.hasActiveChipFilters && !model.scopedItems.isEmpty {
+            ContentUnavailableView(
+                "No Matching Files",
+                systemImage: "line.3.horizontal.decrease.circle",
+                description: Text("No files match the selected type/extension filters.")
+            )
+        } else if model.showFlaggedOnly {
+            ContentUnavailableView(
+                "No Flagged Files",
+                systemImage: "flag",
+                description: Text("Flag files with F to see them here, or turn off the flagged filter.")
+            )
+        } else {
+            ContentUnavailableView(
+                "Nothing Here",
+                systemImage: "photo.on.rectangle.angled",
+                description: Text(model.mode == .folders
+                    ? "This folder has no files."
+                    : "The dropped folder has no files.")
+            )
         }
     }
 
