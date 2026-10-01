@@ -14,6 +14,8 @@ inside it.
   folder gets its own section in the sidebar. Use **Add Folder…** at the bottom
   of the sidebar to add more, and the minus button (or right-click → Remove
   Folder) on a folder's header to remove it.
+- **Open via the Dock** — drop folders or files onto Loupe's Dock icon (or use
+  Finder's "Open With"), and they open in a new window.
 - **Flattened by default** — every previewable file in the folder tree is shown
   in one grid, no matter how deeply nested.
 - **Folder sidebar** — switch to **Folders** mode (or click a folder in the
@@ -26,7 +28,7 @@ inside it.
   The full viewer shows a single item on its own, or a grid when multiple items
   are selected.
 - **File actions** — right-click any item (or use the shortcuts) to **Open with
-  Default App** (⌘↓) or **Reveal in Finder** (⇧⌘R). Both act on the whole
+  Default App** (⌘↓) or **Reveal in Finder** (F1). Both act on the whole
   selection when the clicked item is part of it.
 - **Flag for later** — flag files to triage them within a session. Press **F**
   (or **⌘K**, or right-click → Flag) to flag/unflag the selection; flagged

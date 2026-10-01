@@ -2,17 +2,21 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    /// Folder to open when this window first appears (nil shows the drop zone).
-    let initialFolder: URL?
+    /// Folders/files to open when this window first appears (empty shows the
+    /// drop zone).
+    let initialURLs: [URL]
 
     @State private var model = BrowserModel()
     @State private var isTargeted = false
+    /// Registration token while this window is empty and available to receive a
+    /// dropped/opened batch (see OpenURLBridge).
+    @State private var emptyWindowID: UUID?
     /// Whether the toolbar search field currently has keyboard focus. Used to
     /// suspend modifier-less window hotkeys so typing isn't hijacked.
     @FocusState private var searchFocused: Bool
 
-    init(initialFolder: URL? = nil) {
-        self.initialFolder = initialFolder
+    init(initialURLs: [URL] = []) {
+        self.initialURLs = initialURLs
     }
 
     var body: some View {
@@ -44,8 +48,29 @@ struct ContentView: View {
             MediaViewer(model: model)
         }
         .onAppear {
-            if let initialFolder, !model.hasContent {
-                model.open(url: initialFolder)
+            if !initialURLs.isEmpty {
+                // Window was opened with an explicit batch (e.g. a drop while
+                // already running).
+                for url in initialURLs { openURL(url) }
+            } else if !model.hasContent {
+                // An empty window: offer it to the bridge so a Dock/"open with"
+                // drop reuses it instead of spawning a duplicate window.
+                emptyWindowID = OpenURLBridge.shared.registerEmptyWindow { batch in
+                    for url in batch { openURL(url) }
+                }
+            }
+        }
+        .onDisappear {
+            if let id = emptyWindowID {
+                OpenURLBridge.shared.unregisterEmptyWindow(id)
+                emptyWindowID = nil
+            }
+        }
+        .onChange(of: model.hasContent) { _, hasContent in
+            // Once this window has content it's no longer a reuse target.
+            if hasContent, let id = emptyWindowID {
+                OpenURLBridge.shared.unregisterEmptyWindow(id)
+                emptyWindowID = nil
             }
         }
     }
@@ -102,7 +127,8 @@ struct ContentView: View {
                 .keyboardShortcut(.downArrow, modifiers: .command)
                 .disabled(model.selectedItems.isEmpty || searchFocused)
             Button("Reveal in Finder") { model.revealInFinder() }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+                // F1 — NSF1FunctionKey is U+F704.
+                .keyboardShortcut(KeyEquivalent("\u{F704}"), modifiers: [])
                 .disabled(model.selectedItems.isEmpty || searchFocused)
             Button("Flag for Later") { model.toggleFlag() }
                 .keyboardShortcut("k", modifiers: .command)
@@ -169,20 +195,25 @@ struct ContentView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        _ = provider.loadObject(ofClass: URL.self) { url, _ in
-            guard let url else { return }
-            Task { @MainActor in
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                    model.open(url: url)
-                } else {
-                    // A file was dropped: show it (and browse its folder when
-                    // the sandbox allows reading it).
-                    model.openFile(url)
-                }
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in openURL(url) }
             }
         }
         return true
+    }
+
+    /// Opens a folder or file into the current window, appending to any folders
+    /// already present.
+    private func openURL(_ url: URL) {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            model.open(url: url)
+        } else {
+            // A file: show it (and browse its folder when the sandbox allows).
+            model.openFile(url)
+        }
     }
 }
