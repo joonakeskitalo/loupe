@@ -109,6 +109,7 @@ struct MediaViewer: View {
             // never cover the image.
             captionBar
         }
+        .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
         .focusable()
         .focusEffectDisabled()
@@ -179,9 +180,9 @@ struct MediaViewer: View {
                 model.isViewerPresented = false
             } label: {
                 Image(systemName: "xmark")
-                    .font(.title3)
+                    .font(.body)
                     .foregroundStyle(.white)
-                    .padding(8)
+                    .padding(6)
                     .background(.white.opacity(0.12), in: Circle())
             }
             .buttonStyle(.plain)
@@ -206,7 +207,7 @@ struct MediaViewer: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .background(Color(white: 0.08))
     }
 
