@@ -38,7 +38,8 @@ struct FilmStrip: View {
                             item: item,
                             size: thumbnailSize,
                             isSelected: selectedIDs.contains(item.id),
-                            isCurrent: item.id == currentID
+                            isCurrent: item.id == currentID,
+                            isFlagged: model.isFlagged(item.id)
                         )
                         .id(item.id)
                         // Match the grid's click conventions: plain click
@@ -136,6 +137,8 @@ private struct FilmStripCell: View {
     let isSelected: Bool
     /// The primary/anchor item within the selection.
     let isCurrent: Bool
+    /// Whether this item is flagged (shows a flag badge, like the grid).
+    var isFlagged: Bool = false
 
     @State private var image: NSImage?
 
@@ -176,11 +179,25 @@ private struct FilmStripCell: View {
             }
         }
         .frame(width: size, height: size)
+        // Dim only the thumbnail content for unselected items; the flag badge
+        // and border overlays below stay at full opacity so a flag is always
+        // clearly visible.
+        .opacity(isCurrent || isSelected ? 1 : 0.65)
+        .overlay(alignment: .topTrailing) {
+            if isFlagged {
+                Image(systemName: "flag.fill")
+                    .font(.system(size: max(8, size * 0.16)))
+                    .foregroundStyle(.white)
+                    .padding(max(2, size * 0.05))
+                    .background(Color.orange, in: Circle())
+                    .shadow(radius: 1)
+                    .padding(3)
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 4)
                 .stroke(borderColor, lineWidth: borderWidth)
         )
-        .opacity(isCurrent || isSelected ? 1 : 0.65)
         .help(item.name)
         .task(id: thumbnailKey) {
             let scale = NSScreen.main?.backingScaleFactor ?? 2

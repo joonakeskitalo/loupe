@@ -137,14 +137,25 @@ struct MediaViewer: View {
         }
     }
 
+    /// Number of currently shown items that are flagged.
+    private var flaggedShownCount: Int {
+        items.filter { model.isFlagged($0.id) }.count
+    }
+
     @ViewBuilder
     private var captionBar: some View {
         HStack {
             if isMulti {
                 Text("\(items.count) items selected")
+                if flaggedShownCount > 0 {
+                    flagChip(text: "\(flaggedShownCount) flagged")
+                }
             } else if let item = items.first {
                 Image(systemName: item.kind.fallbackSymbol)
                 Text(item.url.path).help(item.url.path)
+                if model.isFlagged(item.id) {
+                    flagChip(text: "Flagged")
+                }
             }
             Spacer()
         }
@@ -156,6 +167,20 @@ struct MediaViewer: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
         .background(Color(white: 0.08))
+    }
+
+    /// A small orange flag pill shown in the caption bar when the viewed
+    /// item(s) are flagged, matching the grid's orange flag styling.
+    private func flagChip(text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "flag.fill")
+            Text(text)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.orange, in: Capsule())
     }
 
     @ViewBuilder
