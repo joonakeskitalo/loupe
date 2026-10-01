@@ -13,7 +13,12 @@ struct FilmStrip: View {
     /// The items to represent — the same ordered set the grid shows.
     let items: [MediaItem]
 
-    /// The item currently being viewed (highlighted and scrolled to).
+    /// Every selected item (all are highlighted). Mirrors the grid's
+    /// multi-selection so the strip and grid stay in sync.
+    let selectedIDs: Set<MediaItem.ID>
+
+    /// The primary/anchor item — the one scrolled into view and drawn with the
+    /// strongest highlight.
     let currentID: MediaItem.ID?
 
     private let spacing: CGFloat = 6
@@ -32,12 +37,28 @@ struct FilmStrip: View {
                         FilmStripCell(
                             item: item,
                             size: thumbnailSize,
+                            isSelected: selectedIDs.contains(item.id),
                             isCurrent: item.id == currentID
                         )
                         .id(item.id)
-                        .onTapGesture {
-                            model.selectOnly(item.id)
-                        }
+                        // Match the grid's click conventions: plain click
+                        // selects one, Command toggles, Shift extends a range.
+                        // Double-click isn't needed here — the viewer is
+                        // already open — so it collapses to a single select.
+                        .onClick(
+                            single: { mods in
+                                if mods.command {
+                                    model.toggleSelection(item.id)
+                                } else if mods.shift {
+                                    model.extendSelection(to: item.id)
+                                } else {
+                                    model.selectOnly(item.id)
+                                }
+                            },
+                            double: { _ in model.selectOnly(item.id) },
+                            dragURLs: { dragURLs(for: item) },
+                            isSelected: { selectedIDs.contains(item.id) }
+                        )
                     }
                 }
                 .padding(.horizontal, 12)
@@ -88,6 +109,16 @@ struct FilmStrip: View {
         .help("Drag to resize the film strip")
     }
 
+    /// File URLs to drag out: the whole selection if the item is part of it,
+    /// otherwise just that item. Mirrors the grid so a drag from either place
+    /// behaves identically.
+    private func dragURLs(for item: MediaItem) -> [URL] {
+        if selectedIDs.contains(item.id) {
+            return items.filter { selectedIDs.contains($0.id) }.map(\.url)
+        }
+        return [item.url]
+    }
+
     private func scrollTo(_ id: MediaItem.ID?, in proxy: ScrollViewProxy) {
         guard let id else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -101,9 +132,25 @@ struct FilmStrip: View {
 private struct FilmStripCell: View {
     let item: MediaItem
     let size: CGFloat
+    /// Part of the current multi-selection.
+    let isSelected: Bool
+    /// The primary/anchor item within the selection.
     let isCurrent: Bool
 
     @State private var image: NSImage?
+
+    /// Border color: strongest for the primary item, accent for other selected
+    /// items, faint otherwise.
+    private var borderColor: Color {
+        if isCurrent || isSelected { return .accentColor }
+        return .white.opacity(0.08)
+    }
+
+    private var borderWidth: CGFloat {
+        if isCurrent { return 3 }
+        if isSelected { return 2 }
+        return 1
+    }
 
     var body: some View {
         ZStack {
@@ -131,10 +178,9 @@ private struct FilmStripCell: View {
         .frame(width: size, height: size)
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(isCurrent ? Color.accentColor : Color.white.opacity(0.08),
-                        lineWidth: isCurrent ? 2.5 : 1)
+                .stroke(borderColor, lineWidth: borderWidth)
         )
-        .opacity(isCurrent ? 1 : 0.65)
+        .opacity(isCurrent || isSelected ? 1 : 0.65)
         .help(item.name)
         .task(id: thumbnailKey) {
             let scale = NSScreen.main?.backingScaleFactor ?? 2

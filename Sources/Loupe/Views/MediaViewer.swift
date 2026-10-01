@@ -35,10 +35,11 @@ struct MediaViewer: View {
         !isMulti && items.first?.kind == .image
     }
 
-    /// Whether the film strip is applicable: single-item view with more than
-    /// one item to navigate between.
+    /// Whether the film strip is applicable: there's more than one item to
+    /// navigate/select between. Shown in both the single-item and multi-grid
+    /// views so a multi-selection can be built up straight from the strip.
     private var canShowFilmStrip: Bool {
-        !isMulti && model.displayedItems.count > 1
+        model.displayedItems.count > 1
     }
 
     var body: some View {
@@ -99,7 +100,8 @@ struct MediaViewer: View {
                 FilmStrip(
                     model: model,
                     items: model.displayedItems,
-                    currentID: items.first?.id
+                    selectedIDs: model.selectedItems,
+                    currentID: model.selectedItem
                 )
             }
 
