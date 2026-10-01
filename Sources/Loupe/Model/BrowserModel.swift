@@ -205,6 +205,15 @@ final class BrowserModel {
         }
     }
 
+    /// Select every item currently shown in the grid (Cmd+A).
+    func selectAll() {
+        let items = displayedItems
+        guard !items.isEmpty else { return }
+        selectedItems = Set(items.map(\.id))
+        selectedItem = items.last?.id
+        rangeAnchor = items.first?.id
+    }
+
     // MARK: Selection mutations (driven by clicks)
 
     /// Replace the selection with a single item (plain click).
@@ -307,6 +316,34 @@ final class BrowserModel {
                 isViewerPresented = true
             }
         }
+    }
+
+    // MARK: - File actions
+
+    /// URLs for the current selection, falling back to a specific item when the
+    /// action is invoked on an unselected row (e.g. a right-click).
+    func actionURLs(preferring item: MediaItem? = nil) -> [URL] {
+        if let item, !selectedItems.contains(item.id) {
+            return [item.url]
+        }
+        let selected = selectedMediaItems.map(\.url)
+        if !selected.isEmpty { return selected }
+        if let item { return [item.url] }
+        return []
+    }
+
+    /// Open the given items (or the current selection) in their default apps.
+    func openInDefaultApp(_ item: MediaItem? = nil) {
+        for url in actionURLs(preferring: item) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Reveal the given items (or the current selection) in Finder.
+    func revealInFinder(_ item: MediaItem? = nil) {
+        let urls = actionURLs(preferring: item)
+        guard !urls.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
     // MARK: - Folder (sidebar) navigation

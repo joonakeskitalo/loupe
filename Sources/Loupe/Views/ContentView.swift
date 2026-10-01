@@ -84,6 +84,15 @@ struct ContentView: View {
             .disabled(model.displayedItems.isEmpty)
             Button("Refresh") { model.refresh() }
                 .keyboardShortcut("r", modifiers: .command)
+            Button("Select All") { model.selectAll() }
+                .keyboardShortcut("a", modifiers: .command)
+                .disabled(model.displayedItems.isEmpty)
+            Button("Open with Default App") { model.openInDefaultApp() }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(model.selectedItems.isEmpty)
+            Button("Reveal in Finder") { model.revealInFinder() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(model.selectedItems.isEmpty)
         }
         .opacity(0)
         .frame(width: 0, height: 0)

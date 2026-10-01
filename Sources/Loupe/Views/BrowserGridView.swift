@@ -72,6 +72,7 @@ struct BrowserGridView: View {
                                             model.isViewerPresented = true
                                         }
                                     )
+                                    .contextMenu { contextMenu(for: item) }
                                 }
                             }
                             .padding(padding)
@@ -111,6 +112,12 @@ struct BrowserGridView: View {
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard !model.isViewerPresented else { return .ignored }
 
+        // Cmd+A selects everything in the grid.
+        if press.modifiers.contains(.command), press.key == KeyEquivalent("a") {
+            model.selectAll()
+            return .handled
+        }
+
         let direction: BrowserModel.MoveDirection
         switch press.key {
         case .leftArrow:  direction = .left
@@ -124,5 +131,24 @@ struct BrowserGridView: View {
         let extend = press.modifiers.contains(.shift)
         model.moveSelection(direction, columns: model.gridColumnCount, extend: extend)
         return .handled
+    }
+
+    /// Right-click menu for a grid item. Actions apply to the whole selection
+    /// when the clicked item is part of it, otherwise just to that item.
+    @ViewBuilder
+    private func contextMenu(for item: MediaItem) -> some View {
+        let count = model.actionURLs(preferring: item).count
+        let suffix = count > 1 ? " (\(count) items)" : ""
+
+        Button("Open in Viewer") {
+            if !model.selectedItems.contains(item.id) { model.selectOnly(item.id) }
+            model.isViewerPresented = true
+        }
+        Button("Open with Default App\(suffix)") {
+            model.openInDefaultApp(item)
+        }
+        Button("Reveal in Finder\(suffix)") {
+            model.revealInFinder(item)
+        }
     }
 }

@@ -15,8 +15,12 @@ window and browse all the images, videos, and PDFs inside it.
 - **Thumbnails** — fast QuickLook-generated thumbnails with an adjustable size
   slider, plus sorting by name, date, size, or kind.
 - **Multi-selection** — click to select, Command-click to toggle individual
-  items, Shift-click to select a range. The full viewer shows a single item on
-  its own, or a scrollable grid when multiple items are selected.
+  items, Shift-click (or Shift+arrow) to select a range, **⌘A** to select all.
+  The full viewer shows a single item on its own, or a grid when multiple items
+  are selected.
+- **File actions** — right-click any item (or use the menu shortcuts) to **Open
+  with Default App** (⌘↓) or **Reveal in Finder** (⇧⌘R). Both act on the whole
+  selection when the clicked item is part of it.
 - **Search** — a scoped search field in the toolbar filters by filename within
   the current scope (the selected folder in Folders mode, or All Media when
   flattened).
