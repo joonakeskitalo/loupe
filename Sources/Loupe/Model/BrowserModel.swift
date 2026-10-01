@@ -101,22 +101,9 @@ final class BrowserModel {
         root?.lastPathComponent ?? "Loupe"
     }
 
+    /// Opens a folder `url` as the browsing root.
     func open(url: URL) {
-        scopedURL?.stopAccessingSecurityScopedResource()
-        let didScope = url.startAccessingSecurityScopedResource()
-        scopedURL = didScope ? url : nil
-
-        isScanning = true
-        root = url.standardizedFileURL
-        selectedFolder = url.standardizedFileURL
-        selectedItem = nil
-        rangeAnchor = nil
-        selectedItems = []
-        searchText = ""
-        flaggedItems = []
-        showFlaggedOnly = false
-        selectedKinds = []
-        selectedExtensions = []
+        beginOpen(scopeURL: url, root: url.standardizedFileURL)
 
         Task {
             // Let the "Scanning…" state paint before we start the scan, so the
@@ -126,6 +113,63 @@ final class BrowserModel {
             let result = await FolderScanner.scan(root: url)
             self.apply(result, resetSelectedFolder: true)
         }
+    }
+
+    /// Opens a single dropped file. The sandbox only grants access to the
+    /// dropped item (not its parent), so enumerating the parent folder returns
+    /// nothing. We therefore try the folder first and, if that comes back empty
+    /// (access denied), fall back to showing just the dropped file.
+    func openFile(_ fileURL: URL) {
+        let file = fileURL.standardizedFileURL
+        let parent = file.deletingLastPathComponent()
+
+        // Scope on the file itself — that's what the drag authorized.
+        beginOpen(scopeURL: file, root: parent)
+
+        Task {
+            await Task.yield()
+            let result = await FolderScanner.scan(root: parent)
+            if result.allItems.contains(where: { $0.id == file }) {
+                // We can read the folder: browse it normally with the file selected.
+                self.apply(result, resetSelectedFolder: true)
+                self.selectOnly(file)
+            } else {
+                // Folder enumeration was blocked (or the file isn't previewable
+                // to the scan) — show just the dropped file.
+                self.applySingleFile(file, root: parent)
+            }
+        }
+    }
+
+    /// Shared reset performed at the start of either open path.
+    private func beginOpen(scopeURL: URL, root newRoot: URL) {
+        scopedURL?.stopAccessingSecurityScopedResource()
+        let didScope = scopeURL.startAccessingSecurityScopedResource()
+        scopedURL = didScope ? scopeURL : nil
+
+        isScanning = true
+        root = newRoot
+        selectedFolder = newRoot
+        selectedItem = nil
+        rangeAnchor = nil
+        selectedItems = []
+        searchText = ""
+        flaggedItems = []
+        showFlaggedOnly = false
+        selectedKinds = []
+        selectedExtensions = []
+    }
+
+    /// Populate the model with a single file (fallback for a sandboxed file drop).
+    private func applySingleFile(_ file: URL, root newRoot: URL) {
+        let item = MediaItem(url: file)
+        self.root = newRoot
+        self.allItems = [item]
+        self.itemsByDirectory = [newRoot: [item]]
+        self.tree = FolderNode(url: newRoot, children: [], directMediaCount: 1)
+        self.selectedFolder = newRoot
+        self.isScanning = false
+        self.selectOnly(file)
     }
 
     /// Re-scans the current root, preserving the sidebar folder selection.

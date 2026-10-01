@@ -177,8 +177,9 @@ struct ContentView: View {
                 if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
                     model.open(url: url)
                 } else {
-                    // A file was dropped: open its enclosing folder.
-                    model.open(url: url.deletingLastPathComponent())
+                    // A file was dropped: show it (and browse its folder when
+                    // the sandbox allows reading it).
+                    model.openFile(url)
                 }
             }
         }

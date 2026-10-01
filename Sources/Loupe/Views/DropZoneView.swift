@@ -12,10 +12,10 @@ struct DropZoneView: View {
                 .font(.system(size: 72))
                 .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
 
-            Text("Drop a folder to browse")
+            Text("Drop a folder or file to browse")
                 .font(.title2.weight(.medium))
 
-            Text("Images, videos, and PDFs will be flattened into one view.\nUse the sidebar to browse folders individually.")
+            Text("Drop a folder to browse everything inside it, or drop a single file to open its folder with that file selected.\nUse the sidebar to browse folders individually.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 

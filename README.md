@@ -6,8 +6,10 @@ inside it.
 
 ## Features
 
-- **Drop a folder to open** — drag any folder onto the window, or use
-  `File ▸ Open Folder…` (⌘O) / the **Choose Folder…** button.
+- **Drop a folder or file to open** — drag a folder onto the window to browse
+  it, or drop a single file to open its enclosing folder with that file
+  selected. You can also use `File ▸ Open Folder…` (⌘O) / the **Choose Folder…**
+  button.
 - **Flattened by default** — every previewable file in the folder tree is shown
   in one grid, no matter how deeply nested.
 - **Folder sidebar** — switch to **Folders** mode (or click a folder in the
