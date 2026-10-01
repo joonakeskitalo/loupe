@@ -1,7 +1,9 @@
 import SwiftUI
+import AppKit
 
 /// Sidebar showing the folder tree. Selecting a folder switches the grid to
-/// `.folders` mode and shows that folder's direct contents.
+/// `.folders` mode and shows that folder's contents. Cmd-click adds or removes
+/// folders from a multi-selection, so the grid can show several folders at once.
 ///
 /// We drive selection highlighting manually (rather than through `List`'s
 /// selection binding) because a `DisclosureGroup`'s label row does not reliably
@@ -127,14 +129,20 @@ private struct FolderRow: View {
     @State private var isExpanded: Bool = true
 
     private var isSelected: Bool {
-        !model.showFlaggedOnly && model.mode == .folders && model.selectedFolder == node.url
+        !model.showFlaggedOnly && model.mode == .folders && model.selectedFolders.contains(node.url)
     }
 
     private var rowLabel: some View {
         Button {
             model.showFlaggedOnly = false
             model.mode = .folders
-            model.selectedFolder = node.url
+            // Cmd-click toggles the folder in/out of a multi-selection;
+            // a plain click selects just this folder.
+            if NSEvent.modifierFlags.contains(.command) {
+                model.toggleFolderSelection(node.url)
+            } else {
+                model.selectFolder(node.url)
+            }
             focused.wrappedValue = true
         } label: {
             SidebarLabel(

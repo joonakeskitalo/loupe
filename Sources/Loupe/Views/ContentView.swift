@@ -182,6 +182,15 @@ struct ContentView: View {
             .help("Flattened shows all media; Folders shows one folder at a time.")
         }
 
+        ToolbarItem(id: "subfolders") {
+            Toggle(isOn: $model.includeSubfolders) {
+                Label("Include Subfolders", systemImage: "arrow.turn.down.right")
+            }
+            .toggleStyle(.button)
+            .disabled(model.mode != .folders)
+            .help("When on, a selected folder also shows media from its subfolders.")
+        }
+
         ToolbarItem {
             Button {
                 model.refresh()

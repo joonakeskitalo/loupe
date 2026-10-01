@@ -88,9 +88,53 @@ final class BrowserModel {
     /// Whether files are shown as a thumbnail grid or a detailed list.
     var viewLayout: ViewLayout = .grid
 
-    /// The folder selected in the sidebar (used in `.folders` mode).
-    var selectedFolder: URL? {
+    /// All folders selected in the sidebar (used in `.folders` mode). Supports
+    /// multi-selection; the grid shows the union of every selected folder.
+    var selectedFolders: Set<URL> = [] {
         didSet { clampSelection() }
+    }
+
+    /// The anchor/primary selected folder: the folder most recently clicked and
+    /// the cursor for arrow-key navigation. Kept in sync with `selectedFolders`.
+    private(set) var folderAnchor: URL?
+
+    /// Backwards-compatible single-folder accessor. Reading returns the anchor
+    /// (or any member); writing replaces the whole selection with one folder
+    /// (or clears it when set to nil).
+    var selectedFolder: URL? {
+        get { folderAnchor ?? selectedFolders.first }
+        set {
+            if let newValue {
+                selectedFolders = [newValue]
+                folderAnchor = newValue
+            } else {
+                selectedFolders = []
+                folderAnchor = nil
+            }
+        }
+    }
+
+    /// When true, a selected folder also shows media from all of its
+    /// subdirectories; when false, only files directly inside it.
+    var includeSubfolders = false {
+        didSet { clampSelection() }
+    }
+
+    /// Selects a single folder, replacing any existing selection.
+    func selectFolder(_ url: URL) {
+        selectedFolders = [url]
+        folderAnchor = url
+    }
+
+    /// Toggles a folder in/out of the current multi-selection (Cmd-click).
+    func toggleFolderSelection(_ url: URL) {
+        if selectedFolders.contains(url) {
+            selectedFolders.remove(url)
+            if folderAnchor == url { folderAnchor = selectedFolders.first }
+        } else {
+            selectedFolders.insert(url)
+            folderAnchor = url
+        }
     }
 
     /// The anchor/primary item: the moving cursor for arrow-key navigation.
@@ -231,16 +275,24 @@ final class BrowserModel {
         roots.removeAll { $0 == std }
         resultsByRoot[std] = nil
         singleFileRoots.remove(std)
-        if selectedFolder == std || !(selectedFolder.map(allDirectories.contains) ?? false) {
-            selectedFolder = roots.first
-        }
         rebuildMerged()
+        // Drop any selected folders that belonged to the removed root; if the
+        // selection becomes empty, fall back to the first remaining root.
+        let valid = allDirectories
+        selectedFolders = selectedFolders.filter(valid.contains)
+        if let anchor = folderAnchor, !valid.contains(anchor) {
+            folderAnchor = selectedFolders.first
+        }
+        if selectedFolders.isEmpty, let first = roots.first {
+            selectFolder(first)
+        }
     }
 
     /// Re-scans every root, preserving the sidebar folder selection.
     func refresh() {
         guard !roots.isEmpty else { return }
-        let folderToKeep = selectedFolder
+        let foldersToKeep = selectedFolders
+        let anchorToKeep = folderAnchor
         isScanning = true
         let currentRoots = roots
         Task {
@@ -249,10 +301,17 @@ final class BrowserModel {
                 self.resultsByRoot[root] = result
             }
             self.rebuildMerged()
-            if let folderToKeep, self.allDirectories.contains(folderToKeep) {
-                self.selectedFolder = folderToKeep
+            let valid = self.allDirectories
+            let kept = foldersToKeep.filter(valid.contains)
+            if kept.isEmpty {
+                if let first = self.roots.first { self.selectFolder(first) }
             } else {
-                self.selectedFolder = self.roots.first
+                self.selectedFolders = kept
+                if let anchor = anchorToKeep, valid.contains(anchor) {
+                    self.folderAnchor = anchor
+                } else {
+                    self.folderAnchor = kept.first
+                }
             }
             self.isScanning = false
         }
@@ -327,6 +386,46 @@ final class BrowserModel {
         url.startAccessingSecurityScopedResource()
     }
 
+    /// Directories whose direct contents should be shown for the current
+    /// folder selection: every selected folder, plus (when `includeSubfolders`
+    /// is on) all of their descendant directories.
+    private func scopedDirectories() -> Set<URL> {
+        guard !selectedFolders.isEmpty else { return [] }
+        guard includeSubfolders else { return selectedFolders }
+
+        // Walk the folder trees to collect each selected folder's subtree.
+        var out: Set<URL> = []
+        func collect(_ node: FolderNode) {
+            out.insert(node.url)
+            for child in node.children { collect(child) }
+        }
+        func find(_ node: FolderNode) {
+            if selectedFolders.contains(node.url) {
+                collect(node)
+            } else {
+                for child in node.children { find(child) }
+            }
+        }
+        trees.forEach(find)
+        // Fall back to the selected folders themselves if the tree lookup
+        // somehow missed them (e.g. single-file roots).
+        return out.union(selectedFolders)
+    }
+
+    /// The union of media items across every selected folder (and their
+    /// subfolders when `includeSubfolders` is on), de-duplicated and sorted.
+    private func itemsInSelectedFolders() -> [MediaItem] {
+        let dirs = scopedDirectories()
+        var seen = Set<MediaItem.ID>()
+        var out: [MediaItem] = []
+        for dir in dirs {
+            for item in itemsByDirectory[dir] ?? [] where seen.insert(item.id).inserted {
+                out.append(item)
+            }
+        }
+        return out.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
     /// Items in the current scope (folder/flag) after the text search, but
     /// BEFORE the type/extension chip filters. Chip availability and counts are
     /// derived from this set so selecting a chip never makes other chips vanish.
@@ -336,10 +435,10 @@ final class BrowserModel {
         case .flattened:
             base = allItems
         case .folders:
-            if let folder = selectedFolder {
-                base = itemsByDirectory[folder] ?? []
-            } else {
+            if selectedFolders.isEmpty {
                 base = allItems
+            } else {
+                base = itemsInSelectedFolders()
             }
         }
 
@@ -472,8 +571,11 @@ final class BrowserModel {
         if showFlaggedOnly {
             return "Flagged"
         }
-        if mode == .folders, let folder = selectedFolder {
-            return folder.lastPathComponent
+        if mode == .folders, !selectedFolders.isEmpty {
+            if selectedFolders.count == 1, let folder = selectedFolders.first {
+                return folder.lastPathComponent
+            }
+            return "\(selectedFolders.count) Folders"
         }
         return "All Media"
     }
@@ -826,8 +928,12 @@ final class BrowserModel {
         var base: String
         if showFlaggedOnly {
             base = "\(count) flagged \(noun)"
-        } else if mode == .folders, let folder = selectedFolder {
-            base = "\(count) \(noun) in \(folder.lastPathComponent)"
+        } else if mode == .folders, !selectedFolders.isEmpty {
+            if selectedFolders.count == 1, let folder = selectedFolders.first {
+                base = "\(count) \(noun) in \(folder.lastPathComponent)"
+            } else {
+                base = "\(count) \(noun) in \(selectedFolders.count) folders"
+            }
         } else {
             base = "\(count) \(noun)"
         }
