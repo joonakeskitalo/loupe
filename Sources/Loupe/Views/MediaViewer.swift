@@ -143,6 +143,12 @@ struct MediaViewer: View {
         items.filter { model.isFlagged($0.id) }.count
     }
 
+    /// Total on-disk size of all currently shown items, for the multi-item
+    /// caption's combined size readout.
+    private var combinedSize: Int64 {
+        items.reduce(0) { $0 + $1.fileSize }
+    }
+
     @ViewBuilder
     private var captionBar: some View {
         HStack {
@@ -151,7 +157,12 @@ struct MediaViewer: View {
                 if flaggedShownCount > 0 {
                     flagChip(text: "\(flaggedShownCount) flagged")
                 }
-                Spacer()
+                Spacer(minLength: 8)
+                Text(formattedSize(combinedSize))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
             } else if let item = items.first {
                 Image(systemName: item.kind.fallbackSymbol)
                     .layoutPriority(1)
