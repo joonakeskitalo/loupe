@@ -15,7 +15,15 @@ struct PathBar: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            if let item = model.primarySelectedItem {
+                Text(formattedSize(item.fileSize))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
@@ -53,5 +61,11 @@ struct PathBar: View {
     /// empty component produced by the root "/".
     private func pathComponents(of url: URL) -> [String] {
         url.standardizedFileURL.pathComponents.filter { $0 != "/" }
+    }
+
+    /// A human-readable file size (e.g. "4.2 MB") using the system's file
+    /// byte-count formatting.
+    private func formattedSize(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
