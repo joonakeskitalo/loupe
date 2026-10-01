@@ -246,7 +246,7 @@ struct MediaViewer: View {
                         .background(.white.opacity(0.12), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.delete, modifiers: .command)
+                .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 .help(isMulti ? "Move \(items.count) items to Trash (⌘⌫)" : "Move to Trash (⌘⌫)")
             }
 

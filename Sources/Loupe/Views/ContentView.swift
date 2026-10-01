@@ -1,6 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension KeyEquivalent {
+    /// The Mac keyboard "delete" key (⌫), which sends backspace (U+0008).
+    ///
+    /// SwiftUI's built-in `.delete` maps to forward-delete (U+007F, the key
+    /// labeled "delete" on full keyboards / fn+⌫ on laptops), so a shortcut
+    /// bound to `.delete` never fires for a plain ⌘⌫ press. Use this instead.
+    static let deleteBackspace = KeyEquivalent("\u{8}")
+}
+
 struct ContentView: View {
     /// Folders/files to open when this window first appears (empty shows the
     /// drop zone).
@@ -141,7 +150,9 @@ struct ContentView: View {
                 .keyboardShortcut(KeyEquivalent("\u{F704}"), modifiers: [])
                 .disabled(model.selectedItems.isEmpty || searchFocused)
             Button("Move to Trash") { model.moveToTrash() }
-                .keyboardShortcut(.delete, modifiers: .command)
+                // ⌘⌫ — the Mac "delete" key sends backspace (U+0008), not
+                // SwiftUI's `.delete` which is forward-delete (U+007F).
+                .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 .disabled(!model.canTrashSelection || searchFocused)
             Button("Flag for Later") { model.toggleFlag() }
                 .keyboardShortcut("k", modifiers: .command)

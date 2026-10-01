@@ -218,7 +218,7 @@ struct BrowserListView: View {
         Button("Move to Trash\(suffix)", systemImage: "trash", role: .destructive) {
             model.moveToTrash(item)
         }
-        .keyboardShortcut(.delete, modifiers: .command)
+        .keyboardShortcut(.deleteBackspace, modifiers: .command)
     }
 
     private enum FlagState { case allFlagged, someOrNone }
