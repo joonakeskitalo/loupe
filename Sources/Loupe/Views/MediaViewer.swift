@@ -151,14 +151,26 @@ struct MediaViewer: View {
                 if flaggedShownCount > 0 {
                     flagChip(text: "\(flaggedShownCount) flagged")
                 }
+                Spacer()
             } else if let item = items.first {
                 Image(systemName: item.kind.fallbackSymbol)
-                Text(item.url.path).help(item.url.path)
+                    .layoutPriority(1)
+                Text(item.url.path)
+                    .help(item.url.path)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isFlagged(item.id) {
-                    flagChip(text: "Flagged")
+                    flagChip(text: "Flagged").layoutPriority(1)
                 }
+                Text(formattedSize(item.fileSize))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+            } else {
+                Spacer()
             }
-            Spacer()
         }
         .font(.caption)
         .foregroundStyle(.white.opacity(0.6))
@@ -176,6 +188,12 @@ struct MediaViewer: View {
 
     /// Fixed height for the caption bar's content row.
     private let captionContentHeight: CGFloat = 20
+
+    /// A human-readable file size (e.g. "4.2 MB") using the system's file
+    /// byte-count formatting, matching the grid's PathBar.
+    private func formattedSize(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
 
     /// A small orange flag pill shown in the caption bar when the viewed
     /// item(s) are flagged, matching the grid's orange flag styling.
