@@ -53,11 +53,11 @@ enum FFmpegThumbnailer {
             return nil
         }
 
-        // Seek ~10% in (capped at 2s) to avoid black intro frames, when the
-        // stream exposes a usable duration. Best-effort: ignore failures.
+        // Seek ~20% in (clamped to 0.5…20s) so we start sampling past typical
+        // intros, when the stream exposes a usable duration. Best-effort.
         seekPastIntro(formatCtx: formatCtx, stream: stream, streamIndex: streamIndex)
 
-        guard let frame = decodeFirstFrame(
+        guard let frame = decodeBestFrame(
             formatCtx: formatCtx, codecCtx: codecCtx, streamIndex: streamIndex
         ) else {
             return nil
@@ -82,7 +82,10 @@ enum FFmpegThumbnailer {
         let durationSeconds = Double(durationTicks) / Double(AV_TIME_BASE)
         guard durationSeconds > 0 else { return }
 
-        let targetSeconds = min(2.0, durationSeconds * 0.1)
+        // Aim for 25% in, with a 3s floor so short clips still clear a typical
+        // fade-from-black intro, capped so we don't overshoot into end credits.
+        // The brightness search below handles whatever the seek lands on.
+        let targetSeconds = min(max(3.0, durationSeconds * 0.25), durationSeconds * 0.5)
         let timeBase = stream.pointee.time_base
         guard timeBase.den != 0 else { return }
         let targetTs = Int64(targetSeconds * Double(timeBase.den) / Double(timeBase.num))
@@ -92,7 +95,26 @@ enum FFmpegThumbnailer {
 
     // MARK: - Decoding
 
-    private static func decodeFirstFrame(
+    /// A frame is "bright enough" to stop searching once its average luma (on a
+    /// 0–255 scale) clears this threshold. Picked empirically: dark-but-visible
+    /// night scenes still pass, while fade-from-black frames don't.
+    private static let brightnessThreshold: Double = 50
+
+    /// How many decoded frames to score before giving up and taking the
+    /// best-so-far. Bounds the work for videos that are black/dark throughout.
+    private static let maxFramesToSample = 20
+
+    /// Score only every Nth decoded frame so our samples span more wall-clock
+    /// time (a fade-in can last a couple of seconds = dozens of frames). We
+    /// still decode every frame — codecs need the intermediate ones — but skip
+    /// the brightness math and candidate-cloning on most of them.
+    private static let sampleEveryNFrames = 4
+
+    /// Decodes frames starting at the current (post-seek) position and returns
+    /// the first one bright enough to be useful, or — if none clears the
+    /// threshold — the brightest frame seen among the sampled candidates. This
+    /// is what prevents all-black thumbnails on videos that fade in.
+    private static func decodeBestFrame(
         formatCtx: UnsafeMutablePointer<AVFormatContext>?,
         codecCtx: UnsafeMutablePointer<AVCodecContext>,
         streamIndex: Int32
@@ -102,37 +124,113 @@ enum FFmpegThumbnailer {
         defer { av_packet_free(&packetOpt) }
 
         guard let frame = av_frame_alloc() else { return nil }
+        var frameOpt: UnsafeMutablePointer<AVFrame>? = frame
+        defer { av_frame_free(&frameOpt) }
 
-        // Read packets for our video stream and feed the decoder until a frame
-        // comes out. Give up after a bounded number of packets so a corrupt or
-        // audio-heavy file can't spin forever.
+        // Keep the brightest candidate in a separate frame we own, so it stays
+        // valid while we keep reusing `frame` for subsequent decodes.
+        var best: UnsafeMutablePointer<AVFrame>? = nil
+        var bestScore = -1.0
+
+        var framesSampled = 0
+        var framesDecoded = 0
         var packetsTried = 0
-        let maxPackets = 600
+        let maxPackets = 1200
 
-        while packetsTried < maxPackets, av_read_frame(formatCtx, packet) >= 0 {
+        // Returns true when we've found a frame good enough to stop early.
+        func handle(_ f: UnsafeMutablePointer<AVFrame>) -> Bool {
+            framesDecoded += 1
+            // Score only every Nth decoded frame so samples span more time.
+            guard framesDecoded % sampleEveryNFrames == 1 || sampleEveryNFrames == 1 else {
+                return false
+            }
+
+            framesSampled += 1
+            let score = averageLuma(of: f)
+            if score > bestScore {
+                bestScore = score
+                var old: UnsafeMutablePointer<AVFrame>? = best
+                if old != nil { av_frame_free(&old) }
+                best = av_frame_clone(f)
+            }
+            return score >= brightnessThreshold
+        }
+
+        while packetsTried < maxPackets, framesSampled < maxFramesToSample,
+              av_read_frame(formatCtx, packet) >= 0 {
             defer { av_packet_unref(packet) }
             packetsTried += 1
 
             guard packet.pointee.stream_index == streamIndex else { continue }
-
             guard avcodec_send_packet(codecCtx, packet) >= 0 else { continue }
 
-            let ret = avcodec_receive_frame(codecCtx, frame)
-            if ret == 0 {
-                return frame
+            // A packet may yield multiple frames; drain them.
+            while avcodec_receive_frame(codecCtx, frame) == 0 {
+                if handle(frame) {
+                    return best
+                }
             }
-            // EAGAIN: decoder needs more input — keep reading.
         }
 
-        // Flush: some decoders buffer and only emit after a null packet.
+        // Flush any buffered frames.
         avcodec_send_packet(codecCtx, nil)
-        if avcodec_receive_frame(codecCtx, frame) == 0 {
-            return frame
+        while framesSampled < maxFramesToSample,
+              avcodec_receive_frame(codecCtx, frame) == 0 {
+            if handle(frame) {
+                return best
+            }
         }
 
-        var f: UnsafeMutablePointer<AVFrame>? = frame
-        av_frame_free(&f)
-        return nil
+        return best
+    }
+
+    /// Average brightness of a frame on a 0–255 scale.
+    ///
+    /// Source frames arrive in many pixel formats (planar YUV at various bit
+    /// depths, planar GBR for VP9, etc.), so rather than special-case each one
+    /// we downscale the frame to a tiny 8-bit grayscale buffer with libswscale
+    /// and average that. Correct for every format and cheap: the destination
+    /// is only 32×32.
+    private static func averageLuma(of frame: UnsafeMutablePointer<AVFrame>) -> Double {
+        let srcW = Int(frame.pointee.width)
+        let srcH = Int(frame.pointee.height)
+        guard srcW > 0, srcH > 0 else { return 0 }
+
+        let dstW = 32
+        let dstH = 32
+        let srcPixFmt = AVPixelFormat(frame.pointee.format)
+
+        guard let sws = sws_getContext(
+            Int32(srcW), Int32(srcH), srcPixFmt,
+            Int32(dstW), Int32(dstH), AV_PIX_FMT_GRAY8,
+            Int32(SWS_BILINEAR.rawValue), nil, nil, nil
+        ) else {
+            return 0
+        }
+        defer { sws_freeContext(sws) }
+
+        // Tightly-packed GRAY8 destination: one byte per pixel.
+        var buffer = [UInt8](repeating: 0, count: dstW * dstH)
+        let avg: Double = buffer.withUnsafeMutableBufferPointer { buf -> Double in
+            var dstData: [UnsafeMutablePointer<UInt8>?] = [buf.baseAddress, nil, nil, nil]
+            var dstLinesize: [Int32] = [Int32(dstW), 0, 0, 0]
+
+            withUnsafePointer(to: &frame.pointee.data.0) { srcDataPtr in
+                withUnsafePointer(to: &frame.pointee.linesize.0) { srcLinePtr in
+                    _ = srcDataPtr.withMemoryRebound(to: UnsafePointer<UInt8>?.self, capacity: 8) { src in
+                        srcLinePtr.withMemoryRebound(to: Int32.self, capacity: 8) { lines in
+                            sws_scale(sws, src, lines, 0, Int32(srcH), &dstData, &dstLinesize)
+                        }
+                    }
+                }
+            }
+
+            var sum = 0
+            for v in buf { sum += Int(v) }
+            return Double(sum) / Double(buf.count)
+        }
+
+        return avg
     }
 
     // MARK: - Pixel conversion
