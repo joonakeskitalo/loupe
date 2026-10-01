@@ -167,6 +167,21 @@ struct BrowserListView: View {
             return .handled
         }
 
+        // Cmd+⌫ moves the selection to Trash. Handled here as well as via the
+        // global hotkey in ContentView: while the list is focused its
+        // `.onKeyPress` sees the keystroke first and returning `.ignored` does
+        // not reliably forward a modified key up to a `.keyboardShortcut`
+        // button, so the global ⌘⌫ handler would otherwise never fire for list
+        // key events (e.g. right after ⌘A, which leaves the list focused).
+        if press.modifiers.contains(.command),
+           press.key == .deleteBackspace || press.key == .delete {
+            if model.canTrashSelection {
+                model.moveToTrash()
+                return .handled
+            }
+            return .ignored
+        }
+
         if press.modifiers.isEmpty, press.key == KeyEquivalent("f") {
             model.toggleFlag()
             return .handled

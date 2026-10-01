@@ -215,6 +215,21 @@ struct BrowserGridView: View {
             return .handled
         }
 
+        // Cmd+⌫ moves the selection to Trash. Handled here as well as via the
+        // global hotkey in ContentView: while the grid is focused its
+        // `.onKeyPress` sees the keystroke first and returning `.ignored` does
+        // not reliably forward a modified key up to a `.keyboardShortcut`
+        // button, so the global ⌘⌫ handler would otherwise never fire for grid
+        // key events (e.g. right after ⌘A, which leaves the grid focused).
+        if press.modifiers.contains(.command),
+           press.key == .deleteBackspace || press.key == .delete {
+            if model.canTrashSelection {
+                model.moveToTrash()
+                return .handled
+            }
+            return .ignored
+        }
+
         // F (no modifiers) flags/unflags the current selection.
         if press.modifiers.isEmpty, press.key == KeyEquivalent("f") {
             model.toggleFlag()
