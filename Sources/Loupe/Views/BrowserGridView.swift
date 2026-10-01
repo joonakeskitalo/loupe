@@ -3,6 +3,10 @@ import SwiftUI
 /// The main content area: a scrollable grid of thumbnails.
 struct BrowserGridView: View {
     @Bindable var model: BrowserModel
+    /// When false (e.g. the search field is focused), the grid must not grab
+    /// keyboard focus on appear, so typing in search is never interrupted.
+    var canAutoFocus: Bool = true
+
     @FocusState private var gridFocused: Bool
     /// Set when selection changes via a click, so the auto-scroll (used for
     /// keyboard navigation) doesn't yank a clicked, already-visible item.
@@ -98,7 +102,11 @@ struct BrowserGridView: View {
                 .focusable()
                 .focused($gridFocused)
                 .focusEffectDisabled()
-                .onAppear { gridFocused = true }
+                // Only auto-focus when permitted. This branch reappears every
+                // time search results return after being empty, so grabbing
+                // focus unconditionally here would steal it from the search
+                // field mid-type.
+                .onAppear { if canAutoFocus { gridFocused = true } }
                 // Single unfiltered handler so we can read modifier keys
                 // (Shift) alongside the arrow key from the KeyPress.
                 .onKeyPress { press in handleKey(press) }

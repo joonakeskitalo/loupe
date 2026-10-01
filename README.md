@@ -44,7 +44,7 @@ window and browse all the images, videos, and PDFs inside it.
 
 ## Requirements
 
-- macOS 14 or later
+- macOS 15 or later
 - Xcode 16 / Swift 6 toolchain
 
 ## Build & run

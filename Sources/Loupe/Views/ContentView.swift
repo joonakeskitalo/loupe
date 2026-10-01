@@ -7,6 +7,9 @@ struct ContentView: View {
 
     @State private var model = BrowserModel()
     @State private var isTargeted = false
+    /// Whether the toolbar search field currently has keyboard focus. Used to
+    /// suspend modifier-less window hotkeys so typing isn't hijacked.
+    @FocusState private var searchFocused: Bool
 
     init(initialFolder: URL? = nil) {
         self.initialFolder = initialFolder
@@ -54,7 +57,7 @@ struct ContentView: View {
                 ProgressView("Scanning \(model.rootName)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                BrowserGridView(model: model)
+                BrowserGridView(model: model, canAutoFocus: !searchFocused)
             }
         }
         // Hide the window chrome's controls while the full viewer is up so the
@@ -66,33 +69,40 @@ struct ContentView: View {
             placement: .toolbar,
             prompt: "Search in \(model.searchScopeName)"
         )
+        .searchFocused($searchFocused)
         .navigationTitle(model.rootName)
         .navigationSubtitle(model.statusText)
         .background(hotkeys)
     }
 
     /// Invisible buttons that carry global keyboard shortcuts for the window.
+    ///
+    /// All of these are suspended while the search field has focus: a disabled
+    /// `Button` releases its keyboard shortcut, so plain keys (and ⌘A etc.) go
+    /// to the text field for normal typing/editing instead of being hijacked.
     private var hotkeys: some View {
         ZStack {
             Button("Toggle Viewer") { model.toggleViewer() }
                 .keyboardShortcut("g", modifiers: [])
+                .disabled(searchFocused)
             Button("Open") {
                 model.selectFirstIfNeeded()
                 if !model.selectedItems.isEmpty { model.isViewerPresented = true }
             }
             .keyboardShortcut(.return, modifiers: [])
-            .disabled(model.displayedItems.isEmpty)
+            .disabled(model.displayedItems.isEmpty || searchFocused)
             Button("Refresh") { model.refresh() }
                 .keyboardShortcut("r", modifiers: .command)
+                .disabled(searchFocused)
             Button("Select All") { model.selectAll() }
                 .keyboardShortcut("a", modifiers: .command)
-                .disabled(model.displayedItems.isEmpty)
+                .disabled(model.displayedItems.isEmpty || searchFocused)
             Button("Open with Default App") { model.openInDefaultApp() }
                 .keyboardShortcut(.downArrow, modifiers: .command)
-                .disabled(model.selectedItems.isEmpty)
+                .disabled(model.selectedItems.isEmpty || searchFocused)
             Button("Reveal in Finder") { model.revealInFinder() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(model.selectedItems.isEmpty)
+                .disabled(model.selectedItems.isEmpty || searchFocused)
         }
         .opacity(0)
         .frame(width: 0, height: 0)

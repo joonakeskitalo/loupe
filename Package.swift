@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "Loupe",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15)
     ],
     targets: [
         .executableTarget(
