@@ -24,11 +24,19 @@ enum SortOrder: String, CaseIterable {
 @MainActor
 @Observable
 final class BrowserModel {
-    private(set) var root: URL?
+    /// Root folders added to this window, in the order they were added.
+    private(set) var roots: [URL] = []
+    /// Per-root scan results, keyed by root URL.
+    private var resultsByRoot: [URL: ScanResult] = [:]
+
     private(set) var allItems: [MediaItem] = []
     private(set) var itemsByDirectory: [URL: [MediaItem]] = [:]
-    private(set) var tree: FolderNode?
+    /// One folder tree per root, in `roots` order.
+    private(set) var trees: [FolderNode] = []
     private(set) var isScanning = false
+
+    /// True once at least one folder (or file) has been added.
+    var hasContent: Bool { !roots.isEmpty }
 
     var mode: BrowseMode = .flattened {
         didSet {
@@ -92,113 +100,185 @@ final class BrowserModel {
     /// so keyboard Up/Down navigation can jump a full row.
     var gridColumnCount = 1
 
-    // Keep the security-scoped access alive for the dropped folder. We stop the
-    // previous scope when opening a new folder; the OS reclaims any remaining
-    // scope on process exit.
-    private var scopedURL: URL?
+    // Security-scoped access is kept alive per root for the lifetime of the
+    // window; stopped when a root is removed. The OS reclaims the rest on exit.
+    private var scopedURLs: Set<URL> = []
+    /// Single-file roots (dropped files whose folder couldn't be enumerated),
+    /// so refresh/merge treats them specially.
+    private var singleFileRoots: Set<URL> = []
 
+    /// Window title: the folder name for a single root, else a folder count.
     var rootName: String {
-        root?.lastPathComponent ?? "Loupe"
-    }
-
-    /// Opens a folder `url` as the browsing root.
-    func open(url: URL) {
-        beginOpen(scopeURL: url, root: url.standardizedFileURL)
-
-        Task {
-            // Let the "Scanning…" state paint before we start the scan, so the
-            // window never appears frozen on the first drop while the split
-            // view and toolbar build for the first time.
-            await Task.yield()
-            let result = await FolderScanner.scan(root: url)
-            self.apply(result, resetSelectedFolder: true)
+        switch roots.count {
+        case 0: return "Loupe"
+        case 1: return roots[0].lastPathComponent
+        default: return "\(roots.count) Folders"
         }
     }
 
-    /// Opens a single dropped file. The sandbox only grants access to the
-    /// dropped item (not its parent), so enumerating the parent folder returns
-    /// nothing. We therefore try the folder first and, if that comes back empty
-    /// (access denied), fall back to showing just the dropped file.
+    /// Adds a folder as an additional root (or the first one). Existing roots
+    /// are kept; the new folder's contents are merged in.
+    func open(url: URL) {
+        let root = url.standardizedFileURL
+        guard !roots.contains(root) else { return }   // already added
+
+        if scopeAccess(root) { scopedURLs.insert(root) }
+        roots.append(root)
+        isScanning = true
+        if selectedFolder == nil { selectedFolder = root }
+
+        Task {
+            await Task.yield()
+            let result = await FolderScanner.scan(root: root)
+            self.resultsByRoot[root] = result
+            self.rebuildMerged()
+            self.isScanning = false
+        }
+    }
+
+    /// Adds a dropped single file. If its folder can't be enumerated (sandbox),
+    /// the file is added as a single-file root.
     func openFile(_ fileURL: URL) {
         let file = fileURL.standardizedFileURL
         let parent = file.deletingLastPathComponent()
 
-        // Scope on the file itself — that's what the drag authorized.
-        beginOpen(scopeURL: file, root: parent)
+        if scopeAccess(file) { scopedURLs.insert(file) }
+        isScanning = true
 
         Task {
             await Task.yield()
             let result = await FolderScanner.scan(root: parent)
-            if result.allItems.contains(where: { $0.id == file }) {
-                // We can read the folder: browse it normally with the file selected.
-                self.apply(result, resetSelectedFolder: true)
+            if result.allItems.contains(where: { $0.id == file }),
+               !self.roots.contains(parent) {
+                // Folder is readable: add it as a normal root, select the file.
+                self.roots.append(parent)
+                self.resultsByRoot[parent] = result
+                self.rebuildMerged()
                 self.selectOnly(file)
             } else {
-                // Folder enumeration was blocked (or the file isn't previewable
-                // to the scan) — show just the dropped file.
-                self.applySingleFile(file, root: parent)
+                // Add just the file as a single-file root.
+                self.addSingleFileRoot(file)
             }
+            self.isScanning = false
         }
     }
 
-    /// Shared reset performed at the start of either open path.
-    private func beginOpen(scopeURL: URL, root newRoot: URL) {
-        scopedURL?.stopAccessingSecurityScopedResource()
-        let didScope = scopeURL.startAccessingSecurityScopedResource()
-        scopedURL = didScope ? scopeURL : nil
-
-        isScanning = true
-        root = newRoot
-        selectedFolder = newRoot
-        selectedItem = nil
-        rangeAnchor = nil
-        selectedItems = []
-        searchText = ""
-        flaggedItems = []
-        showFlaggedOnly = false
-        selectedKinds = []
-        selectedExtensions = []
-    }
-
-    /// Populate the model with a single file (fallback for a sandboxed file drop).
-    private func applySingleFile(_ file: URL, root newRoot: URL) {
+    private func addSingleFileRoot(_ file: URL) {
+        guard !roots.contains(file) else { selectOnly(file); return }
         let item = MediaItem(url: file)
-        self.root = newRoot
-        self.allItems = [item]
-        self.itemsByDirectory = [newRoot: [item]]
-        self.tree = FolderNode(url: newRoot, children: [], directMediaCount: 1)
-        self.selectedFolder = newRoot
-        self.isScanning = false
-        self.selectOnly(file)
+        let parent = file.deletingLastPathComponent()
+
+        // The sidebar node represents the file's PARENT directory (not the file
+        // itself), and items are keyed under that directory — so selecting the
+        // sidebar row in Folders mode finds the file. The root is still keyed by
+        // the file URL in `roots`/`resultsByRoot`/`singleFileRoots` so it has a
+        // unique identity and can be removed independently.
+        let node = FolderNode(url: parent, children: [], directMediaCount: 1)
+        let result = ScanResult(
+            root: parent,
+            allItems: [item],
+            itemsByDirectory: [parent: [item]],
+            tree: node
+        )
+        roots.append(file)
+        singleFileRoots.insert(file)
+        resultsByRoot[file] = result
+        rebuildMerged()
+        selectOnly(file)
     }
 
-    /// Re-scans the current root, preserving the sidebar folder selection.
+    /// Removes a root folder, releasing its security scope and un-merging it.
+    func removeRoot(_ root: URL) {
+        let std = root.standardizedFileURL
+        guard roots.contains(std) else { return }
+        if scopedURLs.remove(std) != nil {
+            std.stopAccessingSecurityScopedResource()
+        }
+        roots.removeAll { $0 == std }
+        resultsByRoot[std] = nil
+        singleFileRoots.remove(std)
+        if selectedFolder == std || !(selectedFolder.map(allDirectories.contains) ?? false) {
+            selectedFolder = roots.first
+        }
+        rebuildMerged()
+    }
+
+    /// Re-scans every root, preserving the sidebar folder selection.
     func refresh() {
-        guard let root else { return }
+        guard !roots.isEmpty else { return }
         let folderToKeep = selectedFolder
         isScanning = true
+        let currentRoots = roots
         Task {
-            let result = await FolderScanner.scan(root: root)
-            self.apply(result, resetSelectedFolder: false)
-            // Restore the previously-selected folder if it still exists.
-            if let folderToKeep, self.itemsByDirectory[folderToKeep] != nil
-                || folderToKeep == result.root {
+            for root in currentRoots where !self.singleFileRoots.contains(root) {
+                let result = await FolderScanner.scan(root: root)
+                self.resultsByRoot[root] = result
+            }
+            self.rebuildMerged()
+            if let folderToKeep, self.allDirectories.contains(folderToKeep) {
                 self.selectedFolder = folderToKeep
             } else {
-                self.selectedFolder = result.root
+                self.selectedFolder = self.roots.first
             }
+            self.isScanning = false
         }
     }
 
-    private func apply(_ result: ScanResult, resetSelectedFolder: Bool) {
-        self.root = result.root
-        self.allItems = result.allItems
-        self.itemsByDirectory = result.itemsByDirectory
-        self.tree = result.tree
-        if resetSelectedFolder {
-            self.selectedFolder = result.root
+    /// A root paired with its tree, for the sidebar. `key` is the stable root
+    /// identity used for removal (the file URL for single-file roots); `tree`
+    /// is what to render (its parent directory for single-file roots).
+    struct RootEntry: Identifiable {
+        let key: URL
+        let tree: FolderNode
+        var id: URL { key }
+        var isSingleFile: Bool
+    }
+
+    var rootEntries: [RootEntry] {
+        roots.compactMap { root in
+            guard let result = resultsByRoot[root] else { return nil }
+            return RootEntry(key: root, tree: result.tree,
+                             isSingleFile: singleFileRoots.contains(root))
         }
-        self.isScanning = false
+    }
+
+    /// Merge all per-root scan results into the flattened item list, the
+    /// directory map, and the ordered list of trees.
+    private func rebuildMerged() {
+        var merged: [MediaItem] = []
+        var byDir: [URL: [MediaItem]] = [:]
+        var newTrees: [FolderNode] = []
+
+        for root in roots {
+            guard let result = resultsByRoot[root] else { continue }
+            merged.append(contentsOf: result.allItems)
+            for (dir, items) in result.itemsByDirectory {
+                byDir[dir, default: []].append(contentsOf: items)
+            }
+            newTrees.append(result.tree)
+        }
+
+        merged.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        allItems = merged
+        itemsByDirectory = byDir
+        trees = newTrees
+        clampSelection()
+    }
+
+    /// All directory URLs across every root's tree (used to validate the
+    /// sidebar selection after changes).
+    private var allDirectories: Set<URL> {
+        var out: Set<URL> = []
+        func visit(_ node: FolderNode) {
+            out.insert(node.url)
+            for c in node.children { visit(c) }
+        }
+        trees.forEach(visit)
+        return out
+    }
+
+    private func scopeAccess(_ url: URL) -> Bool {
+        url.startAccessingSecurityScopedResource()
     }
 
     /// Items in the current scope (folder/flag) after the text search, but
@@ -567,13 +647,12 @@ final class BrowserModel {
     /// Folders in sidebar display order (depth-first pre-order from the root),
     /// matching how `FolderSidebar` renders its disclosure tree.
     var flatFolderOrder: [URL] {
-        guard let tree else { return [] }
         var out: [URL] = []
         func visit(_ node: FolderNode) {
             out.append(node.url)
             for child in node.children { visit(child) }
         }
-        visit(tree)
+        trees.forEach(visit)
         return out
     }
 

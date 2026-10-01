@@ -17,7 +17,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if model.root == nil {
+            if !model.hasContent {
                 DropZoneView(model: model)
             } else {
                 NavigationSplitView {
@@ -44,7 +44,7 @@ struct ContentView: View {
             MediaViewer(model: model)
         }
         .onAppear {
-            if let initialFolder, model.root == nil {
+            if let initialFolder, !model.hasContent {
                 model.open(url: initialFolder)
             }
         }
@@ -134,8 +134,8 @@ struct ContentView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .disabled(model.root == nil || model.isScanning)
-            .help("Rescan the current folder (⌘R)")
+            .disabled(!model.hasContent || model.isScanning)
+            .help("Rescan all folders (⌘R)")
         }
 
 

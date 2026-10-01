@@ -17,7 +17,7 @@ struct FolderSidebar: View {
                 Button {
                     model.showFlaggedOnly = false
                     model.mode = .flattened
-                    model.selectedFolder = model.root
+                    model.selectedFolder = model.roots.first
                     focused = true
                 } label: {
                     SidebarLabel(
@@ -44,13 +44,46 @@ struct FolderSidebar: View {
                 .disabled(model.flaggedCount == 0 && !model.showFlaggedOnly)
             }
 
-            if let tree = model.tree {
-                Section("Folders") {
-                    FolderRow(node: tree, model: model, focused: $focused)
+            // One section per root, each with its own tree and a Remove action.
+            // We iterate root entries (keyed by the stable root identity) rather
+            // than the trees, so a single dropped file — whose tree node is its
+            // parent directory — still removes correctly and stays unique.
+            ForEach(model.rootEntries) { entry in
+                Section {
+                    FolderRow(node: entry.tree, model: model, focused: $focused)
+                } header: {
+                    HStack {
+                        Text(entry.isSingleFile ? entry.key.lastPathComponent : entry.tree.name)
+                        Spacer()
+                        Button {
+                            model.removeRoot(entry.key)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Remove this folder from the window")
+                    }
+                    .contextMenu {
+                        Button("Remove Folder", role: .destructive) {
+                            model.removeRoot(entry.key)
+                        }
+                    }
                 }
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            Button {
+                addFolder()
+            } label: {
+                Label("Add Folder…", systemImage: "plus")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+        }
         // Make the whole sidebar focusable so arrow keys move the folder
         // selection once a folder is selected or the sidebar is clicked.
         .focusable()
@@ -63,6 +96,16 @@ struct FolderSidebar: View {
         .onKeyPress(.downArrow) {
             model.moveFolderSelection(by: 1)
             return .handled
+        }
+    }
+
+    private func addFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        if panel.runModal() == .OK {
+            for url in panel.urls { model.open(url: url) }
         }
     }
 }
