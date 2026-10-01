@@ -31,6 +31,9 @@ inside it.
   multiple items are selected.
 - **Grid zoom** — **⌘+** / **⌘−** grow and shrink the thumbnails (or use the
   size slider in the toolbar).
+- **Drag out to other apps** — drag a thumbnail to Finder, the Dock, or any app
+  to open/copy the file there. Dragging a selected item carries the whole
+  selection.
 - **File actions** — right-click any item (or use the shortcuts) to **Open with
   Default App** (⌘↓) or **Reveal in Finder** (F1). Both act on the whole
   selection when the clicked item is part of it.

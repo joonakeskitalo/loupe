@@ -33,7 +33,8 @@ struct ContentView: View {
             }
         }
         .overlay {
-            if isTargeted {
+            // Don't show the drop highlight for our own grid's drags.
+            if isTargeted && !InternalDrag.inProgress {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.accentColor, lineWidth: 4)
                     .background(Color.accentColor.opacity(0.08))
@@ -214,6 +215,8 @@ struct ContentView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        // Ignore files dragged out of our own grid and dropped back in.
+        guard !InternalDrag.inProgress else { return false }
         guard !providers.isEmpty else { return false }
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in

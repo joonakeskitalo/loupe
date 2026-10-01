@@ -95,7 +95,8 @@ struct BrowserGridView: View {
                                                 model.selectOnly(item.id)
                                             }
                                             model.isViewerPresented = true
-                                        }
+                                        },
+                                        dragURLs: { dragURLs(for: item) }
                                     )
                                     .contextMenu { contextMenu(for: item) }
                                 }
@@ -167,6 +168,15 @@ struct BrowserGridView: View {
                 .position(x: rect.midX, y: rect.midY)
                 .allowsHitTesting(false)
         }
+    }
+
+    /// File URLs to drag out when dragging `item`: the whole selection if the
+    /// item is part of it, otherwise just that item.
+    private func dragURLs(for item: MediaItem) -> [URL] {
+        if model.selectedItems.contains(item.id) {
+            return model.selectedMediaItems.map(\.url)
+        }
+        return [item.url]
     }
 
     /// Called by the AppKit marquee layer: `rect` is the live rectangle, or nil
