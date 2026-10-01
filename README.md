@@ -24,7 +24,9 @@ window and browse all the images, videos, and PDFs inside it.
   full row); Return or **G** opens the selection in the full viewer; **G**
   or Esc returns to the grid.
 - **Full viewer** — double-click, Return, or **G** to open an item:
-  - Images: scroll/pinch to zoom, drag to pan, double-click to toggle zoom.
+  - Images: pinch or scroll-wheel to zoom, drag/trackpad to pan. The toolbar
+    shows the live zoom level with zoom in/out, **Fit** (F) and **100%** (1)
+    buttons; double-click toggles between Fit and 100%.
   - Video & audio: inline AVKit player with transport controls.
   - PDFs: continuous-scroll PDFKit view.
   - Everything else: QuickLook preview.

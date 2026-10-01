@@ -9,6 +9,10 @@ import QuickLookUI
 struct MediaViewer: View {
     @Bindable var model: BrowserModel
 
+    /// Pending zoom command and live zoom factor for the single-image viewer.
+    @State private var zoomCommand: ZoomCommand?
+    @State private var zoomFactor: CGFloat = 1
+
     /// The items to show: all selected items, falling back to the primary one.
     private var items: [MediaItem] {
         let selected = model.selectedMediaItems
@@ -17,6 +21,11 @@ struct MediaViewer: View {
     }
 
     private var isMulti: Bool { items.count > 1 }
+
+    /// True when the single-item view is showing a zoomable image.
+    private var showingSingleImage: Bool {
+        !isMulti && items.first?.kind == .image
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,10 +41,15 @@ struct MediaViewer: View {
                 } else if isMulti {
                     MultiGrid(items: items)
                 } else {
+                    // No `.id(...)` here: reusing the same underlying view across
+                    // navigation lets the image swap + refit happen in one pass,
+                    // avoiding the flash of recreating the NSView from scratch.
                     content(for: items[0])
-                        .id(items[0].id)
                         .overlay(alignment: .leading) { navButton(symbol: "chevron.left", offset: -1) }
                         .overlay(alignment: .trailing) { navButton(symbol: "chevron.right", offset: 1) }
+                        // Always start a freshly-opened image fitted — never
+                        // inherit a previous zoom level.
+                        .onAppear { zoomCommand = .fit }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,7 +86,7 @@ struct MediaViewer: View {
     private func content(for item: MediaItem) -> some View {
         switch item.kind {
         case .image:
-            ZoomableImageView(url: item.url)
+            ZoomableImageView(url: item.url, command: $zoomCommand, zoomFactor: $zoomFactor)
         case .video, .audio:
             VideoPlayerView(url: item.url)
         case .pdf:
@@ -99,7 +113,9 @@ struct MediaViewer: View {
 
             Spacer()
 
-            if isMulti {
+            if showingSingleImage {
+                zoomControls
+            } else if isMulti {
                 Text("Grid")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -108,6 +124,60 @@ struct MediaViewer: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(white: 0.08))
+    }
+
+    /// Zoom toolbar for the single-image viewer: zoom out / level / zoom in,
+    /// plus Fit and 100% buttons.
+    private var zoomControls: some View {
+        HStack(spacing: 8) {
+            zoomButton("minus.magnifyingglass", command: .zoomOut, help: "Zoom out (−)")
+                .keyboardShortcut("-", modifiers: [])
+
+            Text("\(Int((zoomFactor * 100).rounded()))%")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.white)
+                .frame(width: 56)
+
+            zoomButton("plus.magnifyingglass", command: .zoomIn, help: "Zoom in (+)")
+                .keyboardShortcut("=", modifiers: [])
+
+            Divider().frame(height: 16).overlay(Color.white.opacity(0.2))
+
+            pillButton("Fit", help: "Fit image to the view (F)") { zoomCommand = .fit }
+                .keyboardShortcut("f", modifiers: [])
+
+            pillButton("100%", help: "Show the image at actual pixel size (1)") { zoomCommand = .actualSize }
+                .keyboardShortcut("1", modifiers: [])
+        }
+    }
+
+    /// A clearly-tappable pill button for the dark viewer toolbar.
+    private func pillButton(_ title: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(.white.opacity(0.15), in: Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func zoomButton(_ symbol: String, command: ZoomCommand, help: String) -> some View {
+        Button {
+            zoomCommand = command
+        } label: {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(.white)
+                .padding(6)
+                .background(.white.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     @ViewBuilder
@@ -172,7 +242,11 @@ private struct MultiGrid: View {
 
     private func cell(_ item: MediaItem) -> some View {
         VStack(spacing: 4) {
+            // Tie the cell's identity to the item so its per-cell zoom state is
+            // reset when a grid position maps to a different image, rather than
+            // inheriting the previous item's zoom.
             GridPreview(item: item)
+                .id(item.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(white: 0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -208,21 +282,21 @@ private struct MultiGrid: View {
     }
 }
 
-/// A compact, non-interactive preview used inside the multi-selection grid.
+/// A preview used inside the multi-selection grid. Images are individually
+/// zoomable/pannable (pinch or scroll-wheel to zoom, drag to pan); other kinds
+/// use their native players/preview.
 private struct GridPreview: View {
     let item: MediaItem
+
+    // Per-cell zoom state so each image in the grid zooms independently.
+    @State private var command: ZoomCommand?
+    @State private var zoomFactor: CGFloat = 1
 
     var body: some View {
         switch item.kind {
         case .image:
-            if let image = NSImage(contentsOf: item.url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(4)
-            } else {
-                fallback
-            }
+            ZoomableImageView(url: item.url, command: $command, zoomFactor: $zoomFactor)
+                .overlay(alignment: .bottomTrailing) { zoomBadge }
         case .video, .audio:
             VideoPlayerView(url: item.url)
         case .pdf:
@@ -232,66 +306,27 @@ private struct GridPreview: View {
         }
     }
 
-    private var fallback: some View {
-        Image(systemName: item.kind.fallbackSymbol)
-            .font(.system(size: 48))
-            .foregroundStyle(.secondary)
+    /// Small live zoom readout / reset for a grid cell.
+    private var zoomBadge: some View {
+        Button {
+            command = .fit
+        } label: {
+            Text("\(Int((zoomFactor * 100).rounded()))%")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.black.opacity(0.55), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Click to fit")
+        .padding(6)
     }
 }
 
 // MARK: - Image
 
 /// Scroll-to-zoom and drag-to-pan image view.
-private struct ZoomableImageView: View {
-    let url: URL
-    @State private var scale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
-
-    var body: some View {
-        GeometryReader { geo in
-            if let nsImage = NSImage(contentsOf: url) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .gesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                scale = max(1, value)
-                            }
-                    )
-                    .simultaneousGesture(
-                        DragGesture()
-                            .onChanged { value in
-                                guard scale > 1 else { return }
-                                offset = CGSize(
-                                    width: lastOffset.width + value.translation.width,
-                                    height: lastOffset.height + value.translation.height
-                                )
-                            }
-                            .onEnded { _ in lastOffset = offset }
-                    )
-                    .onTapGesture(count: 2) {
-                        withAnimation(.spring) {
-                            if scale > 1 {
-                                scale = 1; offset = .zero; lastOffset = .zero
-                            } else {
-                                scale = 2
-                            }
-                        }
-                    }
-            } else {
-                Text("Unable to load image")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-    }
-}
-
 // MARK: - Video
 
 private struct VideoPlayerView: NSViewRepresentable {
