@@ -373,20 +373,36 @@ final class BrowserModel {
         !selectedKinds.isEmpty || !selectedExtensions.isEmpty
     }
 
-    func toggleKind(_ kind: MediaKind) {
-        if selectedKinds.contains(kind) {
-            selectedKinds.remove(kind)
+    /// Click a type chip. A plain click replaces the whole chip filter with
+    /// just this type (clicking the only active chip clears it). An additive
+    /// click (Shift/Command) toggles this type within the current selection.
+    func selectKind(_ kind: MediaKind, additive: Bool) {
+        if additive {
+            if selectedKinds.contains(kind) {
+                selectedKinds.remove(kind)
+            } else {
+                selectedKinds.insert(kind)
+            }
         } else {
-            selectedKinds.insert(kind)
+            let isOnlyThis = selectedKinds == [kind] && selectedExtensions.isEmpty
+            selectedExtensions = []
+            selectedKinds = isOnlyThis ? [] : [kind]
         }
     }
 
-    func toggleExtension(_ ext: String) {
+    /// Click an extension chip. Mirrors `selectKind`.
+    func selectExtension(_ ext: String, additive: Bool) {
         let key = ext.lowercased()
-        if selectedExtensions.contains(key) {
-            selectedExtensions.remove(key)
+        if additive {
+            if selectedExtensions.contains(key) {
+                selectedExtensions.remove(key)
+            } else {
+                selectedExtensions.insert(key)
+            }
         } else {
-            selectedExtensions.insert(key)
+            let isOnlyThis = selectedExtensions == [key] && selectedKinds.isEmpty
+            selectedKinds = []
+            selectedExtensions = isOnlyThis ? [] : [key]
         }
     }
 

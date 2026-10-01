@@ -1,42 +1,48 @@
 import SwiftUI
 
-/// A single toggleable filter chip: label, optional count, selected state.
+/// A single filter chip. A plain click replaces the filter with this chip;
+/// Shift- or Command-click adds/removes it (multi-select). `action` receives
+/// `additive = true` when a modifier key was held.
 struct FilterChip: View {
     let title: String
     var systemImage: String? = nil
     var count: Int? = nil
     let isSelected: Bool
-    let action: () -> Void
+    let action: (_ additive: Bool) -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.caption)
-                }
-                Text(title)
-                    .font(.callout)
-                if let count {
-                    Text("\(count)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.85) : .secondary)
-                }
+        HStack(spacing: 5) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.caption)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .foregroundStyle(isSelected ? Color.white : Color.primary)
-            .background(
-                Capsule().fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.15))
-            )
-            .overlay(
-                Capsule().stroke(
-                    isSelected ? Color.clear : Color.secondary.opacity(0.25),
-                    lineWidth: 1
-                )
-            )
+            Text(title)
+                .font(.callout)
+            if let count {
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : .secondary)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .foregroundStyle(isSelected ? Color.white : Color.primary)
+        .background(
+            Capsule().fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.15))
+        )
+        .overlay(
+            Capsule().stroke(
+                isSelected ? Color.clear : Color.secondary.opacity(0.25),
+                lineWidth: 1
+            )
+        )
+        .contentShape(Capsule())
+        // AppKit-level click so we can read the Shift/Command modifiers.
+        .onClick(
+            single: { mods in action(mods.shift || mods.command) },
+            double: { mods in action(mods.shift || mods.command) }
+        )
+        .help("Click to filter by this; Shift- or ⌘-click to select multiple")
     }
 }
 
@@ -59,8 +65,8 @@ struct FilterBar: View {
                             systemImage: chip.kind.fallbackSymbol,
                             count: chip.count,
                             isSelected: model.selectedKinds.contains(chip.kind)
-                        ) {
-                            model.toggleKind(chip.kind)
+                        ) { additive in
+                            model.selectKind(chip.kind, additive: additive)
                         }
                     }
 
@@ -73,8 +79,8 @@ struct FilterBar: View {
                             title: ".\(chip.ext)",
                             count: chip.count,
                             isSelected: model.selectedExtensions.contains(chip.ext)
-                        ) {
-                            model.toggleExtension(chip.ext)
+                        ) { additive in
+                            model.selectExtension(chip.ext, additive: additive)
                         }
                     }
 

@@ -40,8 +40,9 @@ inside it.
   the current scope (the selected folder in Folders mode, or All Media when
   flattened).
 - **Type & extension chips** — a chip bar above the grid lets you filter by
-  media type (Images, Videos, PDFs, Audio) and/or specific file extensions.
-  Chips show live counts for the current scope, multiple chips combine, and a
+  media type (Images, Videos, PDFs, Audio, Markdown, Text) and/or specific file
+  extensions. Clicking a chip filters by just that one; Shift- or ⌘-click adds
+  or removes chips to filter by several at once. Chips show live counts, and a
   Clear chip resets them. The bar appears only when there's more than one type
   or extension to distinguish.
 - **Keyboard navigation** — arrow keys move the grid selection (Up/Down jump a
