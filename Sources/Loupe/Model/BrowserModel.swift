@@ -42,8 +42,20 @@ final class BrowserModel {
         didSet { clampSelection() }
     }
 
-    /// The item currently selected in the grid.
+    /// The anchor/primary item: the moving cursor for arrow-key navigation.
     var selectedItem: MediaItem.ID?
+
+    /// Fixed anchor for Shift range selection (click or Shift+arrow). The
+    /// selected range always spans from this anchor to `selectedItem`.
+    private var rangeAnchor: MediaItem.ID?
+
+    /// All currently selected items (supports multi-selection).
+    var selectedItems: Set<MediaItem.ID> = []
+
+    /// Free-text filter, scoped to the current browse mode / selected folder.
+    var searchText: String = "" {
+        didSet { clampSelection() }
+    }
 
     /// Whether the full-screen/detail viewer is presented.
     var isViewerPresented = false
@@ -70,6 +82,9 @@ final class BrowserModel {
         root = url.standardizedFileURL
         selectedFolder = url.standardizedFileURL
         selectedItem = nil
+        rangeAnchor = nil
+        selectedItems = []
+        searchText = ""
 
         Task {
             let result = await FolderScanner.scan(root: url)
@@ -106,9 +121,10 @@ final class BrowserModel {
         self.isScanning = false
     }
 
-    /// Items displayed in the grid for the current mode and sort.
+    /// Items displayed in the grid for the current mode and sort, after the
+    /// search filter is applied.
     var displayedItems: [MediaItem] {
-        let base: [MediaItem]
+        var base: [MediaItem]
         switch mode {
         case .flattened:
             base = allItems
@@ -119,7 +135,22 @@ final class BrowserModel {
                 base = allItems
             }
         }
+
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            base = base.filter {
+                $0.name.localizedCaseInsensitiveContains(query)
+            }
+        }
         return sorted(base)
+    }
+
+    /// Human-readable description of where search is scoped right now.
+    var searchScopeName: String {
+        if mode == .folders, let folder = selectedFolder {
+            return folder.lastPathComponent
+        }
+        return "All Media"
     }
 
     private func sorted(_ items: [MediaItem]) -> [MediaItem] {
@@ -144,22 +175,72 @@ final class BrowserModel {
 
     // MARK: - Selection helpers
 
+    /// Drops any selected ids that are no longer in the displayed set (e.g.
+    /// after a mode switch, folder change, or search filter).
     private func clampSelection() {
-        let items = displayedItems
-        if let sel = selectedItem, !items.contains(where: { $0.id == sel }) {
-            selectedItem = items.first?.id
+        let valid = Set(displayedItems.map(\.id))
+        selectedItems.formIntersection(valid)
+        if let sel = selectedItem, !valid.contains(sel) {
+            selectedItem = selectedItems.first ?? displayedItems.first?.id
+            if let selectedItem { selectedItems.insert(selectedItem) }
         }
     }
 
+    /// The single primary item (used by the viewer when only one is selected).
     var selectedMediaItem: MediaItem? {
         guard let id = selectedItem else { return nil }
         return displayedItems.first { $0.id == id }
     }
 
+    /// All selected items in display order (used by the multi-item viewer).
+    var selectedMediaItems: [MediaItem] {
+        displayedItems.filter { selectedItems.contains($0.id) }
+    }
+
     func selectFirstIfNeeded() {
-        if selectedItem == nil {
-            selectedItem = displayedItems.first?.id
+        if selectedItem == nil || selectedItems.isEmpty {
+            if let first = displayedItems.first?.id {
+                selectOnly(first)
+            }
         }
+    }
+
+    // MARK: Selection mutations (driven by clicks)
+
+    /// Replace the selection with a single item (plain click).
+    func selectOnly(_ id: MediaItem.ID) {
+        selectedItem = id
+        rangeAnchor = id
+        selectedItems = [id]
+    }
+
+    /// Toggle an item in/out of the selection (Command-click).
+    func toggleSelection(_ id: MediaItem.ID) {
+        if selectedItems.contains(id) {
+            selectedItems.remove(id)
+            if selectedItem == id {
+                selectedItem = selectedItems.first
+            }
+        } else {
+            selectedItems.insert(id)
+            selectedItem = id
+        }
+        rangeAnchor = selectedItem
+    }
+
+    /// Select the contiguous range from the anchor to `id` (Shift-click).
+    func extendSelection(to id: MediaItem.ID) {
+        let items = displayedItems
+        guard let anchor = rangeAnchor ?? selectedItem ?? selectedItems.first,
+              let a = items.firstIndex(where: { $0.id == anchor }),
+              let b = items.firstIndex(where: { $0.id == id }) else {
+            selectOnly(id)
+            return
+        }
+        if rangeAnchor == nil { rangeAnchor = anchor }
+        let range = min(a, b)...max(a, b)
+        selectedItems = Set(items[range].map(\.id))
+        selectedItem = id
     }
 
     func moveSelection(by offset: Int) {
@@ -167,11 +248,11 @@ final class BrowserModel {
         guard !items.isEmpty else { return }
         guard let current = selectedItem,
               let idx = items.firstIndex(where: { $0.id == current }) else {
-            selectedItem = items.first?.id
+            selectOnly(items[0].id)
             return
         }
         let next = (idx + offset).clamped(to: 0...(items.count - 1))
-        selectedItem = items[next].id
+        selectOnly(items[next].id)
     }
 
     /// Direction for grid keyboard navigation.
@@ -179,14 +260,19 @@ final class BrowserModel {
 
     /// Moves the grid selection in a direction, treating the grid as `columns`
     /// wide so Up/Down jump a full row.
-    func moveSelection(_ direction: MoveDirection, columns: Int) {
+    ///
+    /// With `extend: false` this sets a single selection. With `extend: true`
+    /// (Shift+arrow) it keeps the range anchor fixed and selects everything
+    /// between the anchor and the moved cursor, so the selection grows and
+    /// shrinks like a standard range selection.
+    func moveSelection(_ direction: MoveDirection, columns: Int, extend: Bool = false) {
         let items = displayedItems
         guard !items.isEmpty else { return }
         let cols = max(1, columns)
 
         guard let current = selectedItem,
               let idx = items.firstIndex(where: { $0.id == current }) else {
-            selectedItem = items.first?.id
+            selectOnly(items[0].id)
             return
         }
 
@@ -198,7 +284,18 @@ final class BrowserModel {
         case .down:  target = idx + cols
         }
         guard target >= 0, target < items.count else { return }
-        selectedItem = items[target].id
+
+        if extend {
+            // Establish an anchor the first time we start extending.
+            let anchorID = rangeAnchor ?? current
+            rangeAnchor = anchorID
+            let anchorIdx = items.firstIndex { $0.id == anchorID } ?? idx
+            let range = min(anchorIdx, target)...max(anchorIdx, target)
+            selectedItems = Set(items[range].map(\.id))
+            selectedItem = items[target].id
+        } else {
+            selectOnly(items[target].id)
+        }
     }
 
     func toggleViewer() {
@@ -206,7 +303,7 @@ final class BrowserModel {
             isViewerPresented = false
         } else {
             selectFirstIfNeeded()
-            if selectedItem != nil {
+            if !selectedItems.isEmpty {
                 isViewerPresented = true
             }
         }
@@ -247,10 +344,16 @@ final class BrowserModel {
     var statusText: String {
         let count = displayedItems.count
         let noun = count == 1 ? "item" : "items"
+        var base: String
         if mode == .folders, let folder = selectedFolder {
-            return "\(count) \(noun) in \(folder.lastPathComponent)"
+            base = "\(count) \(noun) in \(folder.lastPathComponent)"
+        } else {
+            base = "\(count) \(noun)"
         }
-        return "\(count) \(noun)"
+        if selectedItems.count > 1 {
+            base += " · \(selectedItems.count) selected"
+        }
+        return base
     }
 }
 

@@ -45,21 +45,30 @@ struct BrowserGridView: View {
                                     ThumbnailView(
                                         item: item,
                                         size: model.thumbnailSize,
-                                        isSelected: model.selectedItem == item.id
+                                        isSelected: model.selectedItems.contains(item.id)
                                     )
                                     .id(item.id)
                                     .contentShape(Rectangle())
                                     // AppKit-level click handling: selection fires
                                     // on mouse-down with no double-click delay.
+                                    // Command toggles, Shift extends a range.
                                     .onClick(
-                                        single: {
+                                        single: { mods in
                                             suppressNextScroll = true
-                                            model.selectedItem = item.id
+                                            if mods.command {
+                                                model.toggleSelection(item.id)
+                                            } else if mods.shift {
+                                                model.extendSelection(to: item.id)
+                                            } else {
+                                                model.selectOnly(item.id)
+                                            }
                                             gridFocused = true
                                         },
-                                        double: {
+                                        double: { _ in
                                             suppressNextScroll = true
-                                            model.selectedItem = item.id
+                                            if !model.selectedItems.contains(item.id) {
+                                                model.selectOnly(item.id)
+                                            }
                                             model.isViewerPresented = true
                                         }
                                     )
@@ -89,20 +98,31 @@ struct BrowserGridView: View {
                 .focused($gridFocused)
                 .focusEffectDisabled()
                 .onAppear { gridFocused = true }
-                .onKeyPress(.leftArrow) { handleArrow(.left) }
-                .onKeyPress(.rightArrow) { handleArrow(.right) }
-                .onKeyPress(.upArrow) { handleArrow(.up) }
-                .onKeyPress(.downArrow) { handleArrow(.down) }
+                // Single unfiltered handler so we can read modifier keys
+                // (Shift) alongside the arrow key from the KeyPress.
+                .onKeyPress { press in handleKey(press) }
             }
         }
     }
 
-    /// Arrow keys navigate the grid. When the viewer is open it owns the arrow
-    /// keys (left/right between items), so the grid ignores them.
-    private func handleArrow(_ direction: BrowserModel.MoveDirection) -> KeyPress.Result {
+    /// Arrow keys navigate the grid; holding Shift extends the selection as a
+    /// range. When the viewer is open it owns the arrow keys, so the grid
+    /// ignores them.
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard !model.isViewerPresented else { return .ignored }
+
+        let direction: BrowserModel.MoveDirection
+        switch press.key {
+        case .leftArrow:  direction = .left
+        case .rightArrow: direction = .right
+        case .upArrow:    direction = .up
+        case .downArrow:  direction = .down
+        default:          return .ignored
+        }
+
         model.selectFirstIfNeeded()
-        model.moveSelection(direction, columns: model.gridColumnCount)
+        let extend = press.modifiers.contains(.shift)
+        model.moveSelection(direction, columns: model.gridColumnCount, extend: extend)
         return .handled
     }
 }

@@ -61,6 +61,11 @@ struct ContentView: View {
         // sort/zoom/view controls don't float over the fullscreen image.
         .toolbar(model.isViewerPresented ? .hidden : .automatic, for: .windowToolbar)
         .toolbar { toolbarContent }
+        .searchable(
+            text: $model.searchText,
+            placement: .toolbar,
+            prompt: "Search in \(model.searchScopeName)"
+        )
         .navigationTitle(model.rootName)
         .navigationSubtitle(model.statusText)
         .background(hotkeys)
@@ -73,7 +78,7 @@ struct ContentView: View {
                 .keyboardShortcut("g", modifiers: [])
             Button("Open") {
                 model.selectFirstIfNeeded()
-                if model.selectedItem != nil { model.isViewerPresented = true }
+                if !model.selectedItems.isEmpty { model.isViewerPresented = true }
             }
             .keyboardShortcut(.return, modifiers: [])
             .disabled(model.displayedItems.isEmpty)
