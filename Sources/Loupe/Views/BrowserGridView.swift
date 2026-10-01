@@ -12,6 +12,11 @@ struct BrowserGridView: View {
     /// keyboard navigation) doesn't yank a clicked, already-visible item.
     @State private var suppressNextScroll = false
 
+    // Rubber-band (marquee) selection state, in the "grid" coordinate space.
+    @State private var cellFrames: [URL: CGRect] = [:]
+    @State private var marqueeRect: CGRect?
+
+    private let gridSpace = "grid"
     private let spacing: CGFloat = 12
     private let padding: CGFloat = 16
 
@@ -67,6 +72,7 @@ struct BrowserGridView: View {
                                         isFlagged: model.isFlagged(item.id)
                                     )
                                     .id(item.id)
+                                    .reportCellFrame(id: item.id, in: gridSpace)
                                     .contentShape(Rectangle())
                                     // AppKit-level click handling: selection fires
                                     // on mouse-down with no double-click delay.
@@ -95,7 +101,20 @@ struct BrowserGridView: View {
                                 }
                             }
                             .padding(padding)
+                            .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .top)
+                            // Marquee layer sits behind the cells (AppKit-level,
+                            // so the scroll view never sees the drag): a drag
+                            // beginning on empty space rubber-band-selects; drags
+                            // on a cell are consumed by the cell's own overlay.
+                            .background(
+                                MarqueeView { rect in
+                                    handleMarquee(rect)
+                                }
+                            )
+                            .overlay(marqueeRectangle)
                         }
+                        .coordinateSpace(name: gridSpace)
+                        .onPreferenceChange(CellFramesKey.self) { cellFrames = $0 }
                         .onChange(of: model.selectedItem) { _, newValue in
                             // Clicks already land on a visible item, so only
                             // auto-scroll for keyboard navigation.
@@ -127,6 +146,34 @@ struct BrowserGridView: View {
                 .onKeyPress { press in handleKey(press) }
             }
         }
+    }
+
+    // MARK: - Marquee (rubber-band) selection
+
+    /// A transparent background that captures drags starting on empty space and
+    /// turns them into a rubber-band selection.
+    /// The visible selection rectangle while dragging.
+    @ViewBuilder
+    private var marqueeRectangle: some View {
+        if let rect = marqueeRect {
+            Rectangle()
+                .fill(Color.accentColor.opacity(0.15))
+                .overlay(Rectangle().stroke(Color.accentColor.opacity(0.8), lineWidth: 1))
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Called by the AppKit marquee layer: `rect` is the live rectangle, or nil
+    /// when the drag ends.
+    private func handleMarquee(_ rect: CGRect?) {
+        marqueeRect = rect
+        guard let rect else { return }
+        gridFocused = true
+        suppressNextScroll = true
+        let hits = cellFrames.compactMap { $0.value.intersects(rect) ? $0.key : nil }
+        model.setSelection(hits)
     }
 
     /// Arrow keys navigate the grid; holding Shift extends the selection as a

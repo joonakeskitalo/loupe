@@ -24,9 +24,10 @@ inside it.
 - **Thumbnails** — fast QuickLook-generated thumbnails with an adjustable size
   slider, plus sorting by name, date, size, or kind.
 - **Multi-selection** — click to select, Command-click to toggle individual
-  items, Shift-click (or Shift+arrow) to select a range, **⌘A** to select all.
-  The full viewer shows a single item on its own, or a grid when multiple items
-  are selected.
+  items, Shift-click (or Shift+arrow) to select a range, **⌘A** to select all,
+  or drag a rubber-band rectangle across empty space to select everything it
+  touches (like Finder). The full viewer shows a single item on its own, or a
+  grid when multiple items are selected.
 - **File actions** — right-click any item (or use the shortcuts) to **Open with
   Default App** (⌘↓) or **Reveal in Finder** (F1). Both act on the whole
   selection when the clicked item is part of it.

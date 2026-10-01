@@ -481,6 +481,25 @@ final class BrowserModel {
         }
     }
 
+    /// Replace the selection with an explicit set of ids (used by rubber-band
+    /// marquee selection). Items are ordered by their position in the grid so
+    /// the primary/anchor stays sensible.
+    func setSelection(_ ids: [MediaItem.ID]) {
+        let set = Set(ids)
+        if set.isEmpty {
+            selectedItems = []
+            selectedItem = nil
+            return
+        }
+        selectedItems = set
+        // Keep the anchor/primary within the new set, in display order.
+        let ordered = displayedItems.map(\.id).filter { set.contains($0) }
+        selectedItem = ordered.last
+        if rangeAnchor == nil || !set.contains(rangeAnchor!) {
+            rangeAnchor = ordered.first
+        }
+    }
+
     /// Select every item currently shown in the grid (Cmd+A).
     func selectAll() {
         let items = displayedItems
