@@ -140,6 +140,9 @@ struct ContentView: View {
                 // F1 — NSF1FunctionKey is U+F704.
                 .keyboardShortcut(KeyEquivalent("\u{F704}"), modifiers: [])
                 .disabled(model.selectedItems.isEmpty || searchFocused)
+            Button("Move to Trash") { model.moveToTrash() }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(!model.canTrashSelection || searchFocused)
             Button("Flag for Later") { model.toggleFlag() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(model.selectedItems.isEmpty || searchFocused)

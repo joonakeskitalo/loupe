@@ -189,6 +189,21 @@ struct MediaViewer: View {
             .keyboardShortcut(.escape, modifiers: [])
             .help("Close viewer (Esc)")
 
+            if model.canTrashSelection {
+                Button {
+                    model.moveToTrash()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.body)
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .background(.white.opacity(0.12), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.delete, modifiers: .command)
+                .help(isMulti ? "Move \(items.count) items to Trash (⌘⌫)" : "Move to Trash (⌘⌫)")
+            }
+
             Spacer()
 
             if showingSingleImage {

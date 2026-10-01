@@ -265,6 +265,13 @@ struct BrowserGridView: View {
         Button("Reveal in Finder\(suffix)") {
             model.revealInFinder(item)
         }
+
+        Divider()
+
+        Button("Move to Trash\(suffix)", systemImage: "trash", role: .destructive) {
+            model.moveToTrash(item)
+        }
+        .keyboardShortcut(.delete, modifiers: .command)
     }
 
     private enum FlagState { case allFlagged, someOrNone }

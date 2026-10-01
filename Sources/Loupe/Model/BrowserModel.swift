@@ -910,6 +910,85 @@ final class BrowserModel {
         NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
+    /// Whether a trash action currently has any target (used to enable/disable
+    /// the menu item and keyboard shortcut).
+    var canTrashSelection: Bool { !selectedItems.isEmpty }
+
+    /// Moves the given items (or the current selection) to the Trash.
+    ///
+    /// Files are sent to the system Trash (recoverable), then removed from the
+    /// in-memory model so the grid/list/viewer update immediately without a
+    /// full rescan. The selection advances to the next surviving item in
+    /// display order so keyboard-driven culling stays on a sensible cursor, and
+    /// the viewer closes if nothing is left to show.
+    @discardableResult
+    func moveToTrash(_ item: MediaItem? = nil) -> Int {
+        let urls = actionURLs(preferring: item)
+        guard !urls.isEmpty else { return 0 }
+
+        // Remember where the cursor was so we can land on the next item.
+        let order = displayedItems.map(\.id)
+        let trashedSet = Set(urls)
+        let firstTrashedIndex = order.firstIndex { trashedSet.contains($0) }
+
+        var trashed: Set<URL> = []
+        let fm = FileManager.default
+        for url in urls {
+            do {
+                try fm.trashItem(at: url, resultingItemURL: nil)
+                trashed.insert(url.standardizedFileURL)
+            } catch {
+                // Skip files that can't be trashed (e.g. permissions); the rest
+                // still go. The failed file simply stays in the view.
+                NSLog("Loupe: failed to trash \(url.path): \(error.localizedDescription)")
+            }
+        }
+
+        guard !trashed.isEmpty else { return 0 }
+
+        removeItemsFromModel(trashed)
+
+        // Choose a new primary selection: the item that now occupies the first
+        // trashed slot, or the last surviving item if we trashed the tail.
+        let survivors = displayedItems.map(\.id)
+        if survivors.isEmpty {
+            clearSelection()
+            isViewerPresented = false
+        } else if let idx = firstTrashedIndex {
+            let next = min(idx, survivors.count - 1)
+            selectOnly(survivors[next])
+        } else {
+            clampSelection()
+        }
+
+        return trashed.count
+    }
+
+    /// Removes a set of (standardized) file URLs from every per-root scan
+    /// result and the flagged set, then rebuilds the merged state. Does not
+    /// touch the folder trees — empty folders simply remain until the next
+    /// refresh, which matches the existing refresh model.
+    private func removeItemsFromModel(_ trashed: Set<URL>) {
+        for (root, result) in resultsByRoot {
+            let newAll = result.allItems.filter { !trashed.contains($0.id.standardizedFileURL) }
+            if newAll.count == result.allItems.count { continue }   // nothing here
+
+            var newByDir: [URL: [MediaItem]] = [:]
+            for (dir, items) in result.itemsByDirectory {
+                let kept = items.filter { !trashed.contains($0.id.standardizedFileURL) }
+                if !kept.isEmpty { newByDir[dir] = kept }
+            }
+            resultsByRoot[root] = ScanResult(
+                root: result.root,
+                allItems: newAll,
+                itemsByDirectory: newByDir,
+                tree: result.tree
+            )
+        }
+        flaggedItems.subtract(trashed)
+        rebuildMerged()
+    }
+
     // MARK: - Folder (sidebar) navigation
 
     /// Folders in sidebar display order (depth-first pre-order from the root),
