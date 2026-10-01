@@ -14,12 +14,21 @@ window and browse all the images, videos, and PDFs inside it.
   tree with per-folder media counts.
 - **Thumbnails** — fast QuickLook-generated thumbnails with an adjustable size
   slider, plus sorting by name, date, size, or kind.
-- **Full viewer** — double-click (or press Return) to open an item:
+- **Keyboard navigation** — arrow keys move the grid selection (Up/Down jump a
+  full row); Return or **G** opens the selected item in the full viewer; **G**
+  or Esc returns to the grid.
+- **Full viewer** — double-click, Return, or **G** to open an item:
   - Images: scroll/pinch to zoom, drag to pan, double-click to toggle zoom.
   - Video & audio: inline AVKit player with transport controls.
   - PDFs: continuous-scroll PDFKit view.
   - Everything else: QuickLook preview.
-  - Arrow keys move between items; Esc closes the viewer.
+  - Left/Right arrows move between items; Esc or **G** closes the viewer.
+  - The window toolbar hides while the viewer is open, so controls don't float
+    over the image.
+- **Refresh** — rescan the current folder with the toolbar button or **⌘R**
+  (keeps your sidebar folder selection).
+- **Multiple windows** — **⌘N** opens a new empty window; **⌘O** opens a chosen
+  folder in a new window. Each window browses independently.
 
 ## Requirements
 

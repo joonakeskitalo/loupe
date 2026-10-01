@@ -10,10 +10,8 @@ extension View {
         overlay {
             if isPresented.wrappedValue {
                 content()
-                    .transition(.opacity)
                     .zIndex(1)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: isPresented.wrappedValue)
     }
 }

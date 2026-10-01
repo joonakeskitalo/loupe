@@ -2,8 +2,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @Bindable var model: BrowserModel
+    /// Folder to open when this window first appears (nil shows the drop zone).
+    let initialFolder: URL?
+
+    @State private var model = BrowserModel()
     @State private var isTargeted = false
+
+    init(initialFolder: URL? = nil) {
+        self.initialFolder = initialFolder
+    }
 
     var body: some View {
         Group {
@@ -33,6 +40,11 @@ struct ContentView: View {
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
         }
+        .onAppear {
+            if let initialFolder, model.root == nil {
+                model.open(url: initialFolder)
+            }
+        }
     }
 
     @ViewBuilder
@@ -45,9 +57,32 @@ struct ContentView: View {
                 BrowserGridView(model: model)
             }
         }
+        // Hide the window chrome's controls while the full viewer is up so the
+        // sort/zoom/view controls don't float over the fullscreen image.
+        .toolbar(model.isViewerPresented ? .hidden : .automatic, for: .windowToolbar)
         .toolbar { toolbarContent }
         .navigationTitle(model.rootName)
         .navigationSubtitle(model.statusText)
+        .background(hotkeys)
+    }
+
+    /// Invisible buttons that carry global keyboard shortcuts for the window.
+    private var hotkeys: some View {
+        ZStack {
+            Button("Toggle Viewer") { model.toggleViewer() }
+                .keyboardShortcut("g", modifiers: [])
+            Button("Open") {
+                model.selectFirstIfNeeded()
+                if model.selectedItem != nil { model.isViewerPresented = true }
+            }
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(model.displayedItems.isEmpty)
+            Button("Refresh") { model.refresh() }
+                .keyboardShortcut("r", modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     @ToolbarContentBuilder
@@ -60,6 +95,16 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .help("Flattened shows all media; Folders shows one folder at a time.")
+        }
+
+        ToolbarItem {
+            Button {
+                model.refresh()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .disabled(model.root == nil || model.isScanning)
+            .help("Rescan the current folder (⌘R)")
         }
 
         ToolbarItem {
@@ -87,8 +132,7 @@ struct ContentView: View {
                 Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
             }
             .disabled(model.displayedItems.isEmpty)
-            .help("Open selected item in viewer (Return)")
-            .keyboardShortcut(.return, modifiers: [])
+            .help("Open selected item in viewer (G or Return)")
         }
     }
 
