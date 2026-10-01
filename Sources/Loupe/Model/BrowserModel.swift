@@ -448,11 +448,38 @@ final class BrowserModel {
     /// after a mode switch, folder change, or search filter).
     private func clampSelection() {
         let valid = Set(displayedItems.map(\.id))
+        // Only prune ids that are no longer visible — never force a fallback
+        // selection, so an empty selection is a valid state.
         selectedItems.formIntersection(valid)
         if let sel = selectedItem, !valid.contains(sel) {
-            selectedItem = selectedItems.first ?? displayedItems.first?.id
-            if let selectedItem { selectedItems.insert(selectedItem) }
+            // Keep the anchor within the surviving selection if any remains,
+            // otherwise clear it.
+            selectedItem = selectedItems.first
         }
+        if let anchor = rangeAnchor, !valid.contains(anchor) {
+            rangeAnchor = selectedItem
+        }
+    }
+
+    /// Clear the entire selection (Escape / click on empty space).
+    func clearSelection() {
+        selectedItems = []
+        selectedItem = nil
+        rangeAnchor = nil
+    }
+
+    // MARK: - Grid zoom
+
+    static let minThumbnailSize: Double = 90
+    static let maxThumbnailSize: Double = 320
+    private static let thumbnailStep: Double = 40
+
+    func zoomGridIn() {
+        thumbnailSize = min(Self.maxThumbnailSize, thumbnailSize + Self.thumbnailStep)
+    }
+
+    func zoomGridOut() {
+        thumbnailSize = max(Self.minThumbnailSize, thumbnailSize - Self.thumbnailStep)
     }
 
     /// The primary selected item, resolved against the full item list so it is

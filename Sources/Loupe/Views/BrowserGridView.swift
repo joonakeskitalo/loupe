@@ -107,9 +107,13 @@ struct BrowserGridView: View {
                             // beginning on empty space rubber-band-selects; drags
                             // on a cell are consumed by the cell's own overlay.
                             .background(
-                                MarqueeView { rect in
-                                    handleMarquee(rect)
-                                }
+                                MarqueeView(
+                                    onChange: { rect in handleMarquee(rect) },
+                                    onEmptyClick: {
+                                        gridFocused = true
+                                        model.clearSelection()
+                                    }
+                                )
                             )
                             .overlay(marqueeRectangle)
                         }

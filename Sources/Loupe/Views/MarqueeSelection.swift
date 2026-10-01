@@ -36,30 +36,38 @@ struct MarqueeView: NSViewRepresentable {
     /// Called with the current rectangle (in this view's coordinates) during a
     /// drag, and with nil when the drag ends.
     var onChange: (CGRect?) -> Void
+    /// Called when the user clicks empty space without dragging (clear).
+    var onEmptyClick: () -> Void
 
     func makeNSView(context: Context) -> MarqueeNSView {
         let view = MarqueeNSView()
         view.onChange = onChange
+        view.onEmptyClick = onEmptyClick
         return view
     }
 
     func updateNSView(_ nsView: MarqueeNSView, context: Context) {
         nsView.onChange = onChange
+        nsView.onEmptyClick = onEmptyClick
     }
 }
 
 final class MarqueeNSView: NSView {
     var onChange: ((CGRect?) -> Void)?
+    var onEmptyClick: (() -> Void)?
     private var startPoint: CGPoint?
+    private var didDrag = false
 
     override var isFlipped: Bool { true }   // match SwiftUI's top-left origin
 
     override func mouseDown(with event: NSEvent) {
         startPoint = convert(event.locationInWindow, from: nil)
+        didDrag = false
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let start = startPoint else { return }
+        didDrag = true
         let current = convert(event.locationInWindow, from: nil)
         let rect = CGRect(
             x: min(start.x, current.x),
@@ -71,7 +79,11 @@ final class MarqueeNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        let dragged = didDrag
         startPoint = nil
+        didDrag = false
         onChange?(nil)
+        // A click on empty space (no drag) clears the selection, like Finder.
+        if !dragged { onEmptyClick?() }
     }
 }

@@ -136,6 +136,23 @@ struct ContentView: View {
             Button("Show Flagged Only") { model.showFlaggedOnly.toggle() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled((model.flaggedCount == 0 && !model.showFlaggedOnly) || searchFocused)
+
+            // Clear the selection entirely (empty selection is allowed).
+            Button("Deselect All") { model.clearSelection() }
+                .keyboardShortcut(.escape, modifiers: [])
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
+
+            // Grid zoom. Suspended while the viewer is open so its image-zoom
+            // shortcuts (⌘+/⌘−/⌘0) take precedence there instead.
+            Button("Zoom Grid In") { model.zoomGridIn() }
+                .keyboardShortcut("=", modifiers: .command)
+                .disabled(model.isViewerPresented || searchFocused)
+            Button("Zoom Grid In (plus)") { model.zoomGridIn() }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(model.isViewerPresented || searchFocused)
+            Button("Zoom Grid Out") { model.zoomGridOut() }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(model.isViewerPresented || searchFocused)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -177,7 +194,8 @@ struct ContentView: View {
         }
 
         ToolbarItem {
-            Slider(value: $model.thumbnailSize, in: 90...320)
+            Slider(value: $model.thumbnailSize,
+                   in: BrowserModel.minThumbnailSize...BrowserModel.maxThumbnailSize)
                 .frame(width: 120)
                 .help("Thumbnail size")
         }
