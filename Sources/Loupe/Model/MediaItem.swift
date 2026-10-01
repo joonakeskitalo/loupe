@@ -43,9 +43,17 @@ enum MediaKind: String, Sendable {
         "md", "markdown", "mdown", "mkd", "mdx"
     ]
 
+    /// Video containers the system doesn't reliably map to `.movie` (e.g. the
+    /// Matroska `.mkv` type resolves to a dynamic UTI). Treating them as video
+    /// explicitly lets AVFoundation handle playback and thumbnailing.
+    static let videoExtensions: Set<String> = [
+        "mkv", "webm"
+    ]
+
     static func classify(url: URL) -> MediaKind {
         let ext = url.pathExtension.lowercased()
         if markdownExtensions.contains(ext) { return .markdown }
+        if videoExtensions.contains(ext) { return .video }
 
         guard let type = UTType(filenameExtension: ext) else {
             return .other
