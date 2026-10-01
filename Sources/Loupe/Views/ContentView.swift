@@ -137,10 +137,11 @@ struct ContentView: View {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled((model.flaggedCount == 0 && !model.showFlaggedOnly) || searchFocused)
 
-            // Clear the selection entirely (empty selection is allowed).
-            Button("Deselect All") { model.clearSelection() }
+            // Escape clears the selection; if nothing is selected it clears the
+            // active type/extension filters instead.
+            Button("Clear Selection or Filters") { model.escape() }
                 .keyboardShortcut(.escape, modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
+                .disabled(!model.canEscape || model.isViewerPresented || searchFocused)
 
             // Grid zoom. Suspended while the viewer is open so its image-zoom
             // shortcuts (⌘+/⌘−/⌘0) take precedence there instead.

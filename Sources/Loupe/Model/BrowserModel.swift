@@ -468,6 +468,21 @@ final class BrowserModel {
         rangeAnchor = nil
     }
 
+    /// Escape behavior in the grid: clear the selection if there is one,
+    /// otherwise clear the active type/extension filters.
+    func escape() {
+        if !selectedItems.isEmpty {
+            clearSelection()
+        } else if hasActiveChipFilters {
+            clearChipFilters()
+        }
+    }
+
+    /// Whether Escape would do anything right now.
+    var canEscape: Bool {
+        !selectedItems.isEmpty || hasActiveChipFilters
+    }
+
     // MARK: - Grid zoom
 
     static let minThumbnailSize: Double = 90
