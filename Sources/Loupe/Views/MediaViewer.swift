@@ -80,6 +80,13 @@ struct MediaViewer: View {
                     .accessibilityHidden(true)
                 }
             }
+            // Number keys jump to a percentage of the video: 1→10%, 2→20%, …,
+            // 9→90%, and 0→start. Only active for a single video/audio item.
+            .background {
+                if showingSingleVideo {
+                    percentageSeekHotkeys
+                }
+            }
             // Trackpad swipes / horizontal scroll step between items. Sits
             // behind the media so it only catches gestures the content itself
             // doesn't consume (e.g. video, PDF, QuickLook). Images route their
@@ -288,6 +295,23 @@ struct MediaViewer: View {
             // Actual size (100%): ⌘1 and bare 1
             hotkey("1", [.command]) { zoomCommand = .actualSize }
             hotkey("1", []) { zoomCommand = .actualSize }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    /// Invisible buttons that map the number row to a percentage of the video's
+    /// duration: 1→10%, 2→20%, … 9→90%, and 0→start (0%). Only mounted for a
+    /// single video/audio item, so they never clash with the image zoom keys.
+    @ViewBuilder
+    private var percentageSeekHotkeys: some View {
+        ZStack {
+            ForEach(0..<10, id: \.self) { digit in
+                hotkey(KeyEquivalent(Character("\(digit)")), []) {
+                    videoController?.seek(toFraction: Double(digit) / 10.0)
+                }
+            }
         }
         .opacity(0)
         .frame(width: 0, height: 0)

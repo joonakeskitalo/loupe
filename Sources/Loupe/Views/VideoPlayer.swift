@@ -73,6 +73,15 @@ final class VideoController: ObservableObject {
         currentTime = seconds
     }
 
+    /// Seeks to a fraction (0...1) of the total duration. Used by the number-key
+    /// hotkeys that jump to 0%, 10%, … of the video. No-op until the duration is
+    /// known (it's reported asynchronously once the item is ready).
+    func seek(toFraction fraction: Double) {
+        guard duration.isFinite, duration > 0 else { return }
+        let clamped = min(max(fraction, 0), 1)
+        seek(to: duration * clamped)
+    }
+
     /// Stops playback and removes observers. Call when the view disappears.
     func teardown() {
         player.pause()
