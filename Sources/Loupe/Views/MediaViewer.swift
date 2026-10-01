@@ -14,8 +14,9 @@ struct MediaViewer: View {
     @State private var zoomFactor: CGFloat = 1
 
     /// The active video controller (when a single video/audio item is shown),
-    /// so the spacebar can toggle playback.
-    @State private var videoController: VideoController?
+    /// so the spacebar can toggle playback. Either backend (AVFoundation or
+    /// libmpv) is driven through the `PlaybackController` protocol.
+    @State private var videoController: (any PlaybackController)?
 
     private var showingSingleVideo: Bool {
         !isMulti && (items.first?.kind == .video || items.first?.kind == .audio)

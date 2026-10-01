@@ -2,10 +2,11 @@
 # Builds Loupe and packages it as a proper macOS .app bundle.
 #
 # Loupe links the official FFmpeg libraries (libavformat/avcodec/avutil/swscale)
-# to thumbnail containers QuickLook can't handle (.mkv/.webm). Those libraries
-# and their whole Homebrew dependency chain are copied into the bundle's
-# Frameworks directory and rewritten to load via @rpath so the app is
-# self-contained and runs on machines without Homebrew.
+# to thumbnail containers QuickLook can't handle (.mkv/.webm), and libmpv to
+# *play* those same containers. Those libraries and their whole Homebrew
+# dependency chain are copied into the bundle's Frameworks directory and
+# rewritten to load via @rpath so the app is self-contained and runs on
+# machines without Homebrew.
 set -euo pipefail
 
 CONFIG="${1:-release}"
@@ -39,7 +40,7 @@ cp "Resources/Info.plist" "$BUNDLE/Contents/Info.plist"
 # rewrite its own id and all its Homebrew-pointing dependencies to @rpath.
 # ---------------------------------------------------------------------------
 
-echo "==> Bundling FFmpeg libraries from $BREW_PREFIX..."
+echo "==> Bundling FFmpeg + mpv libraries from $BREW_PREFIX..."
 
 # Resolve a possibly-symlinked dylib to its real file so we copy the actual
 # versioned binary rather than a relative symlink.
@@ -60,10 +61,14 @@ enqueue() {
     esac
 }
 
-# Seed with the four libraries Loupe links against directly.
+# Seed with the libraries Loupe links against directly: the four FFmpeg libs
+# (for thumbnailing) and libmpv (for playback). libmpv pulls in its own large
+# dependency chain — including its own copy of the FFmpeg libs — which the
+# closure walk below discovers and bundles automatically.
 for lib in libavformat libavcodec libavutil libswscale; do
     enqueue "$BREW_PREFIX/opt/ffmpeg/lib/$lib.dylib"
 done
+enqueue "$BREW_PREFIX/opt/mpv/lib/libmpv.dylib"
 
 # Walk the closure. QUEUE grows as we discover dependencies.
 i=0

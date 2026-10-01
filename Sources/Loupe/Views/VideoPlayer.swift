@@ -5,7 +5,7 @@ import Combine
 /// Drives an AVPlayer and publishes just enough state for a custom control bar
 /// that sits BELOW the video, so the controls never overlap the picture.
 @MainActor
-final class VideoController: ObservableObject {
+final class VideoController: ObservableObject, PlaybackController {
     let player: AVPlayer
 
     @Published var isPlaying = false
@@ -207,23 +207,55 @@ final class VideoController: ObservableObject {
     }
 }
 
-/// A video player whose transport controls live in a bar beneath the video,
-/// so they never cover the picture. Space toggles play/pause (handled by the
-/// parent viewer, which calls `controller.togglePlay()`).
+/// Picks the playback backend for a video/audio item. AVFoundation handles
+/// everything the system can demux; libmpv (via `MPVVideoPlayerView`) handles
+/// the containers it can't — Matroska `.mkv` and WebM `.webm`. Both render the
+/// same control bar beneath the picture and expose the same
+/// `PlaybackController` to the parent viewer, so the keyboard shortcuts work
+/// identically regardless of which engine is decoding.
 struct VideoPlayerView: View {
     let url: URL
     /// Lets the parent reach the controller (e.g. for the spacebar shortcut).
-    var onController: ((VideoController) -> Void)? = nil
-    /// J over the video surface — move to the previous item. Handled in the
-    /// player view so AVPlayerView's own J/L transport never intercepts it.
+    var onController: ((any PlaybackController) -> Void)? = nil
+    /// J over the video surface — move to the previous item.
     var onPrevious: (() -> Void)? = nil
     /// L over the video surface — move to the next item.
+    var onNext: (() -> Void)? = nil
+
+    /// True when the extension is one AVFoundation can't demux and mpv must
+    /// handle. Reuses the single source of truth in `MediaItem`.
+    private var needsMPV: Bool {
+        MediaKind.videoExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    var body: some View {
+        // `.id(needsMPV)` so switching between an AV item and an mpv item
+        // rebuilds the correct backing view instead of reusing the wrong one.
+        Group {
+            if needsMPV {
+                MPVVideoPlayerView(url: url, onController: onController,
+                                   onPrevious: onPrevious, onNext: onNext)
+            } else {
+                AVVideoPlayerView(url: url, onController: onController,
+                                  onPrevious: onPrevious, onNext: onNext)
+            }
+        }
+        .id(needsMPV)
+    }
+}
+
+/// AVFoundation-backed player: the original Loupe video view. Transport
+/// controls live in a bar beneath the video so they never cover the picture.
+struct AVVideoPlayerView: View {
+    let url: URL
+    var onController: ((any PlaybackController) -> Void)? = nil
+    var onPrevious: (() -> Void)? = nil
     var onNext: (() -> Void)? = nil
 
     @StateObject private var controller: VideoController
 
     init(url: URL,
-         onController: ((VideoController) -> Void)? = nil,
+         onController: ((any PlaybackController) -> Void)? = nil,
          onPrevious: (() -> Void)? = nil,
          onNext: (() -> Void)? = nil) {
         self.url = url
@@ -245,7 +277,7 @@ struct VideoPlayerView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            controlBar
+            PlaybackControlBar(controller: controller)
         }
         .onAppear { onController?(controller) }
         .onDisappear { controller.teardown() }
@@ -254,8 +286,56 @@ struct VideoPlayerView: View {
             onController?(controller)
         }
     }
+}
 
-    private var controlBar: some View {
+/// libmpv-backed player for `.mkv` / `.webm`. Mirrors `AVVideoPlayerView`'s
+/// layout: the mpv GL surface fills the space with the shared control bar
+/// beneath it.
+struct MPVVideoPlayerView: View {
+    let url: URL
+    var onController: ((any PlaybackController) -> Void)? = nil
+    var onPrevious: (() -> Void)? = nil
+    var onNext: (() -> Void)? = nil
+
+    @StateObject private var controller: MPVController
+
+    init(url: URL,
+         onController: ((any PlaybackController) -> Void)? = nil,
+         onPrevious: (() -> Void)? = nil,
+         onNext: (() -> Void)? = nil) {
+        self.url = url
+        self.onController = onController
+        self.onPrevious = onPrevious
+        self.onNext = onNext
+        _controller = StateObject(wrappedValue: MPVController(url: url))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MPVSurface(controller: controller, onPrevious: onPrevious, onNext: onNext)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            PlaybackControlBar(controller: controller)
+        }
+        .onAppear {
+            controller.start()
+            onController?(controller)
+        }
+        .onDisappear { controller.teardown() }
+        .onChange(of: url) { _, newURL in
+            controller.load(url: newURL)
+            onController?(controller)
+        }
+    }
+}
+
+/// The transport bar shown beneath the video for either backend. Generic over
+/// the concrete `PlaybackController` so SwiftUI observes the right
+/// `ObservableObject` and redraws as its published state changes.
+struct PlaybackControlBar<C: PlaybackController>: View {
+    @ObservedObject var controller: C
+
+    var body: some View {
         HStack(spacing: 12) {
             Button {
                 controller.togglePlay()
