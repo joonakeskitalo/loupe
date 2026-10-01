@@ -11,6 +11,12 @@ struct FolderSidebar: View {
     @Bindable var model: BrowserModel
     @FocusState private var focused: Bool
 
+    /// Shared row insets applied to both each section's header and its rows so
+    /// their content shares identical leading/trailing edges — the only way to
+    /// make the header's remove button line up with the rows' count badges
+    /// without hand-tuning version-specific `List` insets.
+    private static let rowInsets = EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 0)
+
     var body: some View {
         List {
             Section("Library") {
@@ -26,8 +32,12 @@ struct FolderSidebar: View {
                         count: nil,
                         isSelected: !model.showFlaggedOnly && model.mode == .flattened
                     )
+                    // Counteract the List section's leading content inset so
+                    // the Library rows sit flush-left like the root headers.
+                    .padding(.leading, -12)
                 }
                 .buttonStyle(.plain)
+                .listRowInsets(Self.rowInsets)
 
                 Button {
                     model.showFlaggedOnly = true
@@ -39,9 +49,11 @@ struct FolderSidebar: View {
                         count: model.flaggedCount > 0 ? model.flaggedCount : nil,
                         isSelected: model.showFlaggedOnly
                     )
+                    .padding(.leading, -12)
                 }
                 .buttonStyle(.plain)
                 .disabled(model.flaggedCount == 0 && !model.showFlaggedOnly)
+                .listRowInsets(Self.rowInsets)
             }
 
             // One section per root, each with its own tree and a Remove action.
@@ -49,26 +61,22 @@ struct FolderSidebar: View {
             // than the trees, so a single dropped file — whose tree node is its
             // parent directory — still removes correctly and stays unique.
             ForEach(model.rootEntries) { entry in
+                // The root header is rendered as a regular row (not a Section
+                // header) so its content sits in the SAME layout context as the
+                // folder rows below. That's the only reliable way to make the
+                // remove button line up with the rows' trailing count badges —
+                // `List` gives section headers a different inset than rows, so
+                // no amount of header padding matches the counts.
                 Section {
+                    RootHeaderRow(entry: entry) { model.removeRoot(entry.key) }
+                        .listRowInsets(Self.rowInsets)
+                        .contextMenu {
+                            Button("Remove Folder", role: .destructive) {
+                                model.removeRoot(entry.key)
+                            }
+                        }
                     FolderRow(node: entry.tree, model: model, focused: $focused)
-                } header: {
-                    HStack {
-                        Text(entry.isSingleFile ? entry.key.lastPathComponent : entry.tree.name)
-                        Spacer()
-                        Button {
-                            model.removeRoot(entry.key)
-                        } label: {
-                            Image(systemName: "minus.circle")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Remove this folder from the window")
-                    }
-                    .contextMenu {
-                        Button("Remove Folder", role: .destructive) {
-                            model.removeRoot(entry.key)
-                        }
-                    }
+                        .listRowInsets(Self.rowInsets)
                 }
             }
         }
@@ -149,8 +157,59 @@ private struct FolderRow: View {
                 }
             } label: {
                 rowLabel
+                    // Pull the label back toward the disclosure chevron, which
+                    // otherwise leaves a wide default gap on macOS.
+                    .padding(.leading, -3)
             }
         }
+    }
+}
+
+/// The header row for a root folder: its name and a trailing remove button.
+///
+/// Mirrors `SidebarLabel`'s internal layout (same `Spacer` + `.padding(6)`),
+/// so — because this is a real `List` row with the same `listRowInsets` as the
+/// folder rows — the remove button's glyph lands at exactly the same trailing
+/// x-position as the rows' count badges.
+private struct RootHeaderRow: View {
+    let entry: BrowserModel.RootEntry
+    let onRemove: () -> Void
+
+    private var title: String {
+        entry.isSingleFile ? entry.key.lastPathComponent : entry.tree.name
+    }
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            Button(action: onRemove) {
+                Image(systemName: "minus.circle.fill")
+                    .font(.body)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary)
+                    // Glyph flush to the trailing edge (matching the count
+                    // badge's trailing edge in the rows below); the wider frame
+                    // only extends the clickable area to the left.
+                    .frame(width: 28, height: 20, alignment: .trailing)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Remove this folder from the window")
+        }
+        .padding(.vertical, 3)
+        // Slightly less trailing inset than the rows below so the remove button
+        // sits a touch further right (toward the sidebar edge).
+        .padding(.trailing, 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Counteract the List section's built-in leading content inset so the
+        // root folder name sits flush at the sidebar's left edge instead of
+        // lining up with the folder icons in the rows below.
+        .padding(.leading, -12)
     }
 }
 
@@ -163,8 +222,9 @@ private struct SidebarLabel: View {
     let isSelected: Bool
 
     var body: some View {
-        HStack {
+        HStack(spacing: 0) {
             Label(title, systemImage: systemImage)
+                .labelStyle(.titleAndIcon)
                 .lineLimit(1)
             Spacer(minLength: 4)
             if let count {
@@ -174,7 +234,8 @@ private struct SidebarLabel: View {
             }
         }
         .padding(.vertical, 3)
-        .padding(.horizontal, 6)
+        .padding(.leading, 4)
+        .padding(.trailing, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .foregroundStyle(isSelected ? Color.white : Color.primary)
         .background(
