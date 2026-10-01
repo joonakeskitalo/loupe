@@ -90,6 +90,7 @@ struct ContentView: View {
                 case .list:
                     BrowserListView(model: model, canAutoFocus: !searchFocused)
                 }
+                PathBar(model: model)
             }
         }
         // Hide the window chrome's controls while the full viewer is up so the
@@ -102,8 +103,8 @@ struct ContentView: View {
             prompt: "Search in \(model.searchScopeName)"
         )
         .searchFocused($searchFocused)
-        .navigationTitle(model.rootName)
-        .navigationSubtitle(model.statusText)
+        .navigationTitle(model.isViewerPresented ? "" : model.rootName)
+        .navigationSubtitle(model.isViewerPresented ? "" : model.statusText)
         .background(hotkeys)
     }
 
