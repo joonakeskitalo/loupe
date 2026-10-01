@@ -103,6 +103,12 @@ struct ContentView: View {
             Button("Reveal in Finder") { model.revealInFinder() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.selectedItems.isEmpty || searchFocused)
+            Button("Flag for Later") { model.toggleFlag() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(model.selectedItems.isEmpty || searchFocused)
+            Button("Show Flagged Only") { model.showFlaggedOnly.toggle() }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled((model.flaggedCount == 0 && !model.showFlaggedOnly) || searchFocused)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -130,6 +136,7 @@ struct ContentView: View {
             .disabled(model.root == nil || model.isScanning)
             .help("Rescan the current folder (⌘R)")
         }
+
 
         ToolbarItem {
             Menu {

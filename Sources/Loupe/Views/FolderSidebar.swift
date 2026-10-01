@@ -15,6 +15,7 @@ struct FolderSidebar: View {
         List {
             Section("Library") {
                 Button {
+                    model.showFlaggedOnly = false
                     model.mode = .flattened
                     model.selectedFolder = model.root
                     focused = true
@@ -23,10 +24,24 @@ struct FolderSidebar: View {
                         title: "All Media",
                         systemImage: "square.grid.3x3",
                         count: nil,
-                        isSelected: model.mode == .flattened
+                        isSelected: !model.showFlaggedOnly && model.mode == .flattened
                     )
                 }
                 .buttonStyle(.plain)
+
+                Button {
+                    model.showFlaggedOnly = true
+                    focused = true
+                } label: {
+                    SidebarLabel(
+                        title: "Flagged",
+                        systemImage: model.showFlaggedOnly ? "flag.fill" : "flag",
+                        count: model.flaggedCount > 0 ? model.flaggedCount : nil,
+                        isSelected: model.showFlaggedOnly
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(model.flaggedCount == 0 && !model.showFlaggedOnly)
             }
 
             if let tree = model.tree {
@@ -61,11 +76,12 @@ private struct FolderRow: View {
     @State private var isExpanded: Bool = true
 
     private var isSelected: Bool {
-        model.mode == .folders && model.selectedFolder == node.url
+        !model.showFlaggedOnly && model.mode == .folders && model.selectedFolder == node.url
     }
 
     private var rowLabel: some View {
         Button {
+            model.showFlaggedOnly = false
             model.mode = .folders
             model.selectedFolder = node.url
             focused.wrappedValue = true

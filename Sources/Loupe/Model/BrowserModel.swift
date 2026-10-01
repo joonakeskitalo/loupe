@@ -31,7 +31,16 @@ final class BrowserModel {
     private(set) var isScanning = false
 
     var mode: BrowseMode = .flattened {
-        didSet { clampSelection() }
+        didSet {
+            // When entering per-folder view with an image selected, jump the
+            // sidebar to that image's parent folder so the selection stays
+            // visible instead of showing an unrelated folder.
+            if mode == .folders, oldValue != .folders,
+               let item = primarySelectedItem {
+                selectedFolder = item.parentDirectory
+            }
+            clampSelection()
+        }
     }
     var sortOrder: SortOrder = .name
     var sortAscending = true
@@ -54,6 +63,15 @@ final class BrowserModel {
 
     /// Free-text filter, scoped to the current browse mode / selected folder.
     var searchText: String = "" {
+        didSet { clampSelection() }
+    }
+
+    /// Files flagged "for later". In-session only: cleared when a new folder is
+    /// opened and gone when the window closes (the model is per-window).
+    var flaggedItems: Set<MediaItem.ID> = []
+
+    /// When true, the grid shows only flagged items.
+    var showFlaggedOnly = false {
         didSet { clampSelection() }
     }
 
@@ -85,6 +103,8 @@ final class BrowserModel {
         rangeAnchor = nil
         selectedItems = []
         searchText = ""
+        flaggedItems = []
+        showFlaggedOnly = false
 
         Task {
             let result = await FolderScanner.scan(root: url)
@@ -136,6 +156,10 @@ final class BrowserModel {
             }
         }
 
+        if showFlaggedOnly {
+            base = base.filter { flaggedItems.contains($0.id) }
+        }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             base = base.filter {
@@ -147,6 +171,9 @@ final class BrowserModel {
 
     /// Human-readable description of where search is scoped right now.
     var searchScopeName: String {
+        if showFlaggedOnly {
+            return "Flagged"
+        }
         if mode == .folders, let folder = selectedFolder {
             return folder.lastPathComponent
         }
@@ -184,6 +211,13 @@ final class BrowserModel {
             selectedItem = selectedItems.first ?? displayedItems.first?.id
             if let selectedItem { selectedItems.insert(selectedItem) }
         }
+    }
+
+    /// The primary selected item, resolved against the full item list so it is
+    /// available regardless of the current browse mode / folder.
+    var primarySelectedItem: MediaItem? {
+        guard let id = selectedItem else { return nil }
+        return allItems.first { $0.id == id }
     }
 
     /// The single primary item (used by the viewer when only one is selected).
@@ -318,6 +352,42 @@ final class BrowserModel {
         }
     }
 
+    // MARK: - Flagging
+
+    func isFlagged(_ id: MediaItem.ID) -> Bool {
+        flaggedItems.contains(id)
+    }
+
+    /// Toggle the flag on the given item, or on the whole current selection.
+    /// If any target is unflagged, flag them all; otherwise unflag them all.
+    func toggleFlag(_ item: MediaItem? = nil) {
+        let targets: [MediaItem.ID]
+        if let item, !selectedItems.contains(item.id) {
+            targets = [item.id]
+        } else if !selectedItems.isEmpty {
+            targets = Array(selectedItems)
+        } else if let item {
+            targets = [item.id]
+        } else {
+            return
+        }
+
+        let anyUnflagged = targets.contains { !flaggedItems.contains($0) }
+        if anyUnflagged {
+            flaggedItems.formUnion(targets)
+        } else {
+            flaggedItems.subtract(targets)
+        }
+        clampSelection()
+    }
+
+    func clearFlags() {
+        flaggedItems = []
+        clampSelection()
+    }
+
+    var flaggedCount: Int { flaggedItems.count }
+
     // MARK: - File actions
 
     /// URLs for the current selection, falling back to a specific item when the
@@ -382,13 +452,19 @@ final class BrowserModel {
         let count = displayedItems.count
         let noun = count == 1 ? "item" : "items"
         var base: String
-        if mode == .folders, let folder = selectedFolder {
+        if showFlaggedOnly {
+            base = "\(count) flagged \(noun)"
+        } else if mode == .folders, let folder = selectedFolder {
             base = "\(count) \(noun) in \(folder.lastPathComponent)"
         } else {
             base = "\(count) \(noun)"
         }
         if selectedItems.count > 1 {
             base += " · \(selectedItems.count) selected"
+        }
+        // Avoid a redundant "flagged" mention when already in the flagged view.
+        if flaggedCount > 0, !showFlaggedOnly {
+            base += " · \(flaggedCount) flagged"
         }
         return base
     }

@@ -33,13 +33,21 @@ struct BrowserGridView: View {
         let items = model.displayedItems
         Group {
             if items.isEmpty {
-                ContentUnavailableView(
-                    "No Media Here",
-                    systemImage: "photo.on.rectangle.angled",
-                    description: Text(model.mode == .folders
-                        ? "This folder has no previewable files."
-                        : "The dropped folder contains no previewable files.")
-                )
+                if model.showFlaggedOnly {
+                    ContentUnavailableView(
+                        "No Flagged Files",
+                        systemImage: "flag",
+                        description: Text("Flag files with F to see them here, or turn off the flagged filter.")
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "No Media Here",
+                        systemImage: "photo.on.rectangle.angled",
+                        description: Text(model.mode == .folders
+                            ? "This folder has no previewable files."
+                            : "The dropped folder contains no previewable files.")
+                    )
+                }
             } else {
                 GeometryReader { geo in
                     ScrollViewReader { proxy in
@@ -49,7 +57,8 @@ struct BrowserGridView: View {
                                     ThumbnailView(
                                         item: item,
                                         size: model.thumbnailSize,
-                                        isSelected: model.selectedItems.contains(item.id)
+                                        isSelected: model.selectedItems.contains(item.id),
+                                        isFlagged: model.isFlagged(item.id)
                                     )
                                     .id(item.id)
                                     .contentShape(Rectangle())
@@ -126,6 +135,12 @@ struct BrowserGridView: View {
             return .handled
         }
 
+        // F (no modifiers) flags/unflags the current selection.
+        if press.modifiers.isEmpty, press.key == KeyEquivalent("f") {
+            model.toggleFlag()
+            return .handled
+        }
+
         let direction: BrowserModel.MoveDirection
         switch press.key {
         case .leftArrow:  direction = .left
@@ -152,11 +167,42 @@ struct BrowserGridView: View {
             if !model.selectedItems.contains(item.id) { model.selectOnly(item.id) }
             model.isViewerPresented = true
         }
+
+        Divider()
+
+        // Flag label reflects whether the acted-on target(s) are flagged.
+        let targetsFlagged = flagStateForMenu(item)
+        Button(flagMenuTitle(targetsFlagged, suffix: suffix),
+               systemImage: targetsFlagged == .allFlagged ? "flag.slash" : "flag") {
+            model.toggleFlag(item)
+        }
+
+        Divider()
+
         Button("Open with Default App\(suffix)") {
             model.openInDefaultApp(item)
         }
         Button("Reveal in Finder\(suffix)") {
             model.revealInFinder(item)
         }
+    }
+
+    private enum FlagState { case allFlagged, someOrNone }
+
+    /// Whether every target of a flag action is already flagged, to choose
+    /// between "Flag" and "Unflag" in the menu.
+    private func flagStateForMenu(_ item: MediaItem) -> FlagState {
+        let targets: [MediaItem.ID]
+        if model.selectedItems.contains(item.id) {
+            targets = Array(model.selectedItems)
+        } else {
+            targets = [item.id]
+        }
+        let allFlagged = !targets.isEmpty && targets.allSatisfy { model.isFlagged($0) }
+        return allFlagged ? .allFlagged : .someOrNone
+    }
+
+    private func flagMenuTitle(_ state: FlagState, suffix: String) -> String {
+        state == .allFlagged ? "Unflag\(suffix)" : "Flag for Later\(suffix)"
     }
 }

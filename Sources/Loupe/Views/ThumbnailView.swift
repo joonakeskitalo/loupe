@@ -5,6 +5,7 @@ struct ThumbnailView: View {
     let item: MediaItem
     let size: Double
     let isSelected: Bool
+    var isFlagged: Bool = false
 
     @State private var image: NSImage?
     @State private var didFail = false
@@ -34,6 +35,17 @@ struct ThumbnailView: View {
                 }
             }
             .frame(width: size, height: size)
+            .overlay(alignment: .topTrailing) {
+                if isFlagged {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: max(11, size * 0.13)))
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .background(Color.orange, in: Circle())
+                        .shadow(radius: 2)
+                        .padding(6)
+                }
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)

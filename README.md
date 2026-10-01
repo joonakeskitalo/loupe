@@ -21,6 +21,12 @@ window and browse all the images, videos, and PDFs inside it.
 - **File actions** — right-click any item (or use the menu shortcuts) to **Open
   with Default App** (⌘↓) or **Reveal in Finder** (⇧⌘R). Both act on the whole
   selection when the clicked item is part of it.
+- **Flag for later** — flag files to triage them within a session. Press **F**
+  (or **⌘K**, or right-click → Flag) to flag/unflag the selection; flagged
+  thumbnails show an orange flag badge. The sidebar's **Flagged** entry (under
+  Library, alongside All Media) scopes the grid to just the flagged files, with
+  a live count; **⇧⌘F** toggles it too. Flags are per-window and reset when you
+  open a new folder or close the window.
 - **Search** — a scoped search field in the toolbar filters by filename within
   the current scope (the selected folder in Folders mode, or All Media when
   flattened).
@@ -83,5 +89,22 @@ Sources/Loupe/
 Resources/
   Info.plist               App bundle metadata
   Loupe.entitlements       App-sandbox + user-selected file access
+  AppIcon.svg              App icon source (vector)
+  AppIcon.icns             Generated multi-resolution app icon
 build-app.sh               Builds and packages Loupe.app
+make-icon.sh               Renders AppIcon.svg -> AppIcon.icns (all sizes)
 ```
+
+## App icon
+
+The icon is authored as a single vector file at `Resources/AppIcon.svg` (a
+magnifying loupe over a photo stack). To regenerate the `.icns` after editing
+the SVG:
+
+```bash
+./make-icon.sh
+```
+
+`build-app.sh` bundles `Resources/AppIcon.icns` into the app and `Info.plist`
+references it via `CFBundleIconFile`. Icon rendering uses `rsvg-convert`
+(install with `brew install librsvg`) plus the built-in `iconutil`.

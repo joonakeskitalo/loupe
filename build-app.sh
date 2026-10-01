@@ -18,6 +18,15 @@ mkdir -p "$BUNDLE/Contents/Resources"
 cp "$BUILD_DIR/$APP_NAME" "$BUNDLE/Contents/MacOS/$APP_NAME"
 cp "Resources/Info.plist" "$BUNDLE/Contents/Info.plist"
 
+# App icon: regenerate the .icns from the SVG if missing, then bundle it.
+if [ ! -f "Resources/AppIcon.icns" ] && [ -f "make-icon.sh" ]; then
+    echo "==> Generating app icon..."
+    ./make-icon.sh
+fi
+if [ -f "Resources/AppIcon.icns" ]; then
+    cp "Resources/AppIcon.icns" "$BUNDLE/Contents/Resources/AppIcon.icns"
+fi
+
 echo "==> Code signing (ad-hoc) with entitlements..."
 codesign --force --deep \
     --sign - \
