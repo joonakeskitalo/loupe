@@ -218,7 +218,11 @@ struct BrowserListView: View {
         Button("Move to Trash\(suffix)", systemImage: "trash", role: .destructive) {
             model.moveToTrash(item)
         }
-        .keyboardShortcut(.deleteBackspace, modifiers: .command)
+        // No .keyboardShortcut here: a shortcut on a context-menu button is
+        // registered globally for every row while the list is visible, so many
+        // buttons would claim ⌘⌫ at once and fight the single global handler in
+        // ContentView — the cause of the key working only sometimes. The global
+        // hotkey covers ⌘⌫; the menu still shows it as a hint.
     }
 
     private enum FlagState { case allFlagged, someOrNone }

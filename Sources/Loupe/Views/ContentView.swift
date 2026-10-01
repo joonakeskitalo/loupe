@@ -153,7 +153,11 @@ struct ContentView: View {
                 // ⌘⌫ — the Mac "delete" key sends backspace (U+0008), not
                 // SwiftUI's `.delete` which is forward-delete (U+007F).
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
-                .disabled(!model.canTrashSelection || searchFocused)
+                // Suspended while the viewer is open: the viewer mounts its own
+                // ⌘⌫ button, and two enabled buttons sharing one shortcut make
+                // SwiftUI's dispatch ambiguous (the keystroke then only works
+                // sometimes). Exactly one ⌘⌫ handler must be live at a time.
+                .disabled(!model.canTrashSelection || model.isViewerPresented || searchFocused)
             Button("Flag for Later") { model.toggleFlag() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(model.selectedItems.isEmpty || searchFocused)
