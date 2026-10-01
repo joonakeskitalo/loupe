@@ -150,6 +150,20 @@ struct ContentView: View {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled((model.flaggedCount == 0 && !model.showFlaggedOnly) || searchFocused)
 
+            // J/L step the selection; I flags the selection. Suspended while the
+            // viewer is open (it carries its own copies so it can navigate/flag
+            // from inside) and while search has focus so the keys type normally.
+            // (K is play/pause inside the viewer, handled there.)
+            Button("Previous Item") { model.moveSelection(by: -1) }
+                .keyboardShortcut("j", modifiers: [])
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused)
+            Button("Next Item") { model.moveSelection(by: 1) }
+                .keyboardShortcut("l", modifiers: [])
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused)
+            Button("Flag Item") { model.toggleFlag() }
+                .keyboardShortcut("i", modifiers: [])
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
+
             // Quick sort presets.
             Button("Sort by Name (A→Z)") { model.sortByNameAscending() }
                 .keyboardShortcut("1", modifiers: .control)

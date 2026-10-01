@@ -82,6 +82,31 @@ final class VideoController: ObservableObject {
         seek(to: duration * clamped)
     }
 
+    /// Skips forward (positive) or backward (negative) by a number of seconds,
+    /// clamped to the valid range. Used by the U/O 15-second skip hotkeys.
+    func skip(by seconds: Double) {
+        let target: Double
+        if duration.isFinite, duration > 0 {
+            target = min(max(currentTime + seconds, 0), duration)
+        } else {
+            target = max(currentTime + seconds, 0)
+        }
+        seek(to: target)
+    }
+
+    /// Steps the video by a number of frames (negative = backward). Pauses
+    /// playback first so stepping is frame-accurate, then uses AVFoundation's
+    /// native frame stepping when the item reports it can step that direction.
+    func stepFrame(by count: Int) {
+        guard count != 0, let item = player.currentItem else { return }
+        pause()
+        let canStep = count > 0 ? item.canStepForward : item.canStepBackward
+        if canStep {
+            item.step(byCount: count)
+            currentTime = player.currentTime().seconds
+        }
+    }
+
     /// Stops playback and removes observers. Call when the view disappears.
     func teardown() {
         player.pause()

@@ -87,6 +87,9 @@ struct MediaViewer: View {
                     percentageSeekHotkeys
                 }
             }
+            // J/L move between items, K exits the viewer, I flags the current
+            // item. U/O skip the video back/forward 15s (single video/audio).
+            .background { navigationHotkeys }
             // Trackpad swipes / horizontal scroll step between items. Sits
             // behind the media so it only catches gestures the content itself
             // doesn't consume (e.g. video, PDF, QuickLook). Images route their
@@ -311,6 +314,29 @@ struct MediaViewer: View {
                 hotkey(KeyEquivalent(Character("\(digit)")), []) {
                     videoController?.seek(toFraction: Double(digit) / 10.0)
                 }
+            }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    /// Viewer-wide letter hotkeys: J/L step between items, I flags the current
+    /// item. For a single video/audio item, K toggles play/pause, U/O skip
+    /// back/forward 15 seconds, and ,/. step one frame back/forward.
+    @ViewBuilder
+    private var navigationHotkeys: some View {
+        ZStack {
+            hotkey("j", []) { model.moveSelection(by: -1) }
+            hotkey("l", []) { model.moveSelection(by: 1) }
+            hotkey("i", []) { model.toggleFlag() }
+
+            if showingSingleVideo {
+                hotkey("k", []) { videoController?.togglePlay() }
+                hotkey("u", []) { videoController?.skip(by: -15) }
+                hotkey("o", []) { videoController?.skip(by: 15) }
+                hotkey(",", []) { videoController?.stepFrame(by: -1) }
+                hotkey(".", []) { videoController?.stepFrame(by: 1) }
             }
         }
         .opacity(0)
