@@ -16,8 +16,8 @@ struct PathBar: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            if let item = model.primarySelectedItem {
-                Text(formattedSize(item.fileSize))
+            if let sizeText {
+                Text(sizeText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -61,6 +61,22 @@ struct PathBar: View {
     /// empty component produced by the root "/".
     private func pathComponents(of url: URL) -> [String] {
         url.standardizedFileURL.pathComponents.filter { $0 != "/" }
+    }
+
+    /// The size readout on the trailing edge. For a multi-selection it shows the
+    /// combined on-disk size of every selected item plus the count (e.g.
+    /// "3 items — 12.4 MB"); for a single selection it shows that file's size.
+    /// `nil` when nothing is selected so the slot stays empty.
+    private var sizeText: String? {
+        let selected = model.selectedMediaItems
+        if selected.count > 1 {
+            let total = selected.reduce(Int64(0)) { $0 + $1.fileSize }
+            return "\(selected.count) items — \(formattedSize(total))"
+        }
+        if let item = model.primarySelectedItem {
+            return formattedSize(item.fileSize)
+        }
+        return nil
     }
 
     /// A human-readable file size (e.g. "4.2 MB") using the system's file
