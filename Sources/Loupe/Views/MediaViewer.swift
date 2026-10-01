@@ -116,6 +116,10 @@ struct MediaViewer: View {
             }
         case .pdf:
             PDFViewerRepresentable(url: item.url)
+        case .markdown:
+            TextDocumentView(url: item.url, renderMarkdown: true)
+        case .text:
+            TextDocumentView(url: item.url, renderMarkdown: false)
         case .other:
             QuickLookView(url: item.url)
         }
@@ -357,6 +361,10 @@ private struct GridPreview: View {
             VideoPlayerView(url: item.url)
         case .pdf:
             PDFViewerRepresentable(url: item.url)
+        case .markdown:
+            TextDocumentView(url: item.url, renderMarkdown: true)
+        case .text:
+            TextDocumentView(url: item.url, renderMarkdown: false)
         case .other:
             QuickLookView(url: item.url)
         }

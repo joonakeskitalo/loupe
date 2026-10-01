@@ -1,7 +1,8 @@
 # Loupe
 
 A native macOS media browser inspired by Fileloupe. Drop a folder onto the
-window and browse all the images, videos, and PDFs inside it.
+window and browse all the images, videos, PDFs, Markdown, and text files
+inside it.
 
 ## Features
 
@@ -48,6 +49,8 @@ window and browse all the images, videos, and PDFs inside it.
     (play/pause, scrubber, time) so controls never cover the picture; Space
     toggles play/pause.
   - PDFs: continuous-scroll PDFKit view.
+  - Markdown: rendered with formatting (headings, lists, emphasis, links).
+  - Text & source files: shown monospaced with selectable text.
   - Everything else: QuickLook preview.
   - Left/Right arrows move between items; Esc or **G** closes the viewer.
   - The filename shows in a caption bar below the media, so it never overlaps

@@ -222,7 +222,7 @@ final class BrowserModel {
     var availableKindChips: [KindChip] {
         var counts: [MediaKind: Int] = [:]
         for item in scopedItems { counts[item.kind, default: 0] += 1 }
-        let order: [MediaKind] = [.image, .video, .pdf, .audio, .other]
+        let order: [MediaKind] = [.image, .video, .pdf, .audio, .markdown, .text, .other]
         return order.compactMap { kind in
             guard let c = counts[kind], c > 0 else { return nil }
             return KindChip(kind: kind, count: c)
