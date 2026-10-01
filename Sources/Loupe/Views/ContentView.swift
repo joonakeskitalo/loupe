@@ -150,6 +150,14 @@ struct ContentView: View {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled((model.flaggedCount == 0 && !model.showFlaggedOnly) || searchFocused)
 
+            // Quick sort presets.
+            Button("Sort by Name (A→Z)") { model.sortByNameAscending() }
+                .keyboardShortcut("1", modifiers: .control)
+                .disabled(searchFocused)
+            Button("Sort by Size (Largest First)") { model.sortBySizeDescending() }
+                .keyboardShortcut("2", modifiers: .control)
+                .disabled(searchFocused)
+
             // Escape clears the selection; if nothing is selected it clears the
             // active type/extension filters instead.
             Button("Clear Selection or Filters") { model.escape() }
@@ -217,6 +225,20 @@ struct ContentView: View {
 
         ToolbarItem(id: "sort") {
             Menu {
+                Section("Quick Sort") {
+                    Button {
+                        model.sortByNameAscending()
+                    } label: {
+                        Label("Name (A→Z)  ⌃1", systemImage: model.isSort(.name, ascending: true) ? "checkmark" : "textformat")
+                    }
+
+                    Button {
+                        model.sortBySizeDescending()
+                    } label: {
+                        Label("Size (Largest First)  ⌃2", systemImage: model.isSort(.size, ascending: false) ? "checkmark" : "arrow.down")
+                    }
+                }
+
                 Picker("Sort By", selection: $model.sortOrder) {
                     ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }

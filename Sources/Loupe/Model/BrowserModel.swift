@@ -599,6 +599,26 @@ final class BrowserModel {
         return "All Media"
     }
 
+    /// Applies a sort field and direction together. Used by the quick-sort
+    /// buttons/hotkeys so one action sets both the field and whether it's
+    /// ascending in a single step.
+    func applySort(_ order: SortOrder, ascending: Bool) {
+        sortOrder = order
+        sortAscending = ascending
+    }
+
+    /// Quick sort: Name, A→Z.
+    func sortByNameAscending() { applySort(.name, ascending: true) }
+
+    /// Quick sort: Size, largest first.
+    func sortBySizeDescending() { applySort(.size, ascending: false) }
+
+    /// Whether the current sort matches a quick-sort preset (for showing a
+    /// checkmark on the matching menu item).
+    func isSort(_ order: SortOrder, ascending: Bool) -> Bool {
+        sortOrder == order && sortAscending == ascending
+    }
+
     private func sorted(_ items: [MediaItem]) -> [MediaItem] {
         let result: [MediaItem]
         switch sortOrder {
