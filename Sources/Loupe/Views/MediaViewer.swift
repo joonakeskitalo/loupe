@@ -91,12 +91,12 @@ struct MediaViewer: View {
                 Text("\(items.count) items selected")
             } else if let item = items.first {
                 Image(systemName: item.kind.fallbackSymbol)
-                Text(item.name).fontWeight(.medium)
+                Text(item.url.path).help(item.url.path)
             }
             Spacer()
         }
-        .font(.callout)
-        .foregroundStyle(.white)
+        .font(.caption)
+        .foregroundStyle(.white.opacity(0.6))
         .lineLimit(1)
         .truncationMode(.middle)
         .padding(.horizontal, 16)
