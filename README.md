@@ -35,8 +35,10 @@ window and browse all the images, videos, and PDFs inside it.
   or Esc returns to the grid.
 - **Full viewer** — double-click, Return, or **G** to open an item:
   - Images: pinch or scroll-wheel to zoom, drag/trackpad to pan. The toolbar
-    shows the live zoom level with zoom in/out, **Fit** (F) and **100%** (1)
-    buttons; double-click toggles between Fit and 100%.
+    shows the live zoom level with zoom in/out, **Fit** and **100%** buttons;
+    double-click toggles between Fit and 100%. Zoom hotkeys: **⌘+** / **⌘−**
+    zoom in and out (bare **+** / **−** also work), **⌘0** or **F** fits, and
+    **⌘1** or **1** shows actual pixel size.
   - Video & audio: inline AVKit player with transport controls.
   - PDFs: continuous-scroll PDFKit view.
   - Everything else: QuickLook preview.

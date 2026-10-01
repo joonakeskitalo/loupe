@@ -53,6 +53,7 @@ struct MediaViewer: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { if showingSingleImage { zoomHotkeys } }
 
             // Caption bar below the media — the filename lives here so it can
             // never cover the image.
@@ -130,25 +131,56 @@ struct MediaViewer: View {
     /// plus Fit and 100% buttons.
     private var zoomControls: some View {
         HStack(spacing: 8) {
-            zoomButton("minus.magnifyingglass", command: .zoomOut, help: "Zoom out (−)")
-                .keyboardShortcut("-", modifiers: [])
+            zoomButton("minus.magnifyingglass", command: .zoomOut, help: "Zoom out (⌘− or −)")
 
             Text("\(Int((zoomFactor * 100).rounded()))%")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.white)
                 .frame(width: 56)
 
-            zoomButton("plus.magnifyingglass", command: .zoomIn, help: "Zoom in (+)")
-                .keyboardShortcut("=", modifiers: [])
+            zoomButton("plus.magnifyingglass", command: .zoomIn, help: "Zoom in (⌘+ or +)")
 
             Divider().frame(height: 16).overlay(Color.white.opacity(0.2))
 
-            pillButton("Fit", help: "Fit image to the view (F)") { zoomCommand = .fit }
-                .keyboardShortcut("f", modifiers: [])
+            pillButton("Fit", help: "Fit image to the view (⌘0 or F)") { zoomCommand = .fit }
 
-            pillButton("100%", help: "Show the image at actual pixel size (1)") { zoomCommand = .actualSize }
-                .keyboardShortcut("1", modifiers: [])
+            pillButton("100%", help: "Actual pixel size (⌘1 or 1)") { zoomCommand = .actualSize }
         }
+    }
+
+    /// Invisible buttons carrying the zoom keyboard shortcuts for the single
+    /// image viewer. Both the macOS-standard ⌘-based shortcuts and the bare
+    /// single-key alternates are provided. Kept out of `zoomControls` so each
+    /// shortcut is registered exactly once even though some keys repeat.
+    @ViewBuilder
+    private var zoomHotkeys: some View {
+        ZStack {
+            // Zoom in: ⌘+, ⌘=, and bare = / +
+            hotkey("=", [.command]) { zoomCommand = .zoomIn }
+            hotkey("+", [.command]) { zoomCommand = .zoomIn }
+            hotkey("=", []) { zoomCommand = .zoomIn }
+            hotkey("+", []) { zoomCommand = .zoomIn }
+
+            // Zoom out: ⌘- and bare -
+            hotkey("-", [.command]) { zoomCommand = .zoomOut }
+            hotkey("-", []) { zoomCommand = .zoomOut }
+
+            // Fit: ⌘0 and bare F
+            hotkey("0", [.command]) { zoomCommand = .fit }
+            hotkey("f", []) { zoomCommand = .fit }
+
+            // Actual size (100%): ⌘1 and bare 1
+            hotkey("1", [.command]) { zoomCommand = .actualSize }
+            hotkey("1", []) { zoomCommand = .actualSize }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private func hotkey(_ key: KeyEquivalent, _ modifiers: EventModifiers, action: @escaping () -> Void) -> some View {
+        Button(action: action) { EmptyView() }
+            .keyboardShortcut(key, modifiers: modifiers)
     }
 
     /// A clearly-tappable pill button for the dark viewer toolbar.
