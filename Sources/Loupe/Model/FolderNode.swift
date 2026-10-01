@@ -10,7 +10,7 @@ final class FolderNode: Identifiable, Hashable, @unchecked Sendable {
     let url: URL
     let name: String
     let children: [FolderNode]
-    /// Number of previewable media files directly in this folder (non-recursive).
+    /// Number of files directly in this folder (non-recursive).
     let directMediaCount: Int
 
     init(url: URL, children: [FolderNode] = [], directMediaCount: Int = 0) {

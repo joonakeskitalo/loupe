@@ -1,8 +1,9 @@
 # Loupe
 
 A native macOS media browser inspired by Fileloupe. Drop a folder onto the
-window and browse all the images, videos, PDFs, Markdown, and text files
-inside it.
+window and browse every file inside it. Images, videos, PDFs, Markdown, and
+text files get a tailored viewer; every other file type is shown too, with a
+QuickLook thumbnail and preview.
 
 ## Features
 
@@ -16,8 +17,11 @@ inside it.
   Folder) on a folder's header to remove it.
 - **Open via the Dock** — drop folders or files onto Loupe's Dock icon (or use
   Finder's "Open With"), and they open in a new window.
-- **Flattened by default** — every previewable file in the folder tree is shown
-  in one grid, no matter how deeply nested.
+- **Every file shown** — all file types appear in the grid, not just media.
+  Known kinds (images, video, audio, PDF, Markdown, text) get a dedicated
+  viewer; anything else falls back to a QuickLook thumbnail and preview.
+- **Flattened by default** — every file in the folder tree is shown in one
+  grid, no matter how deeply nested.
 - **Folder sidebar** — switch to **Folders** mode (or click a folder in the
   sidebar) to browse one directory at a time. The sidebar shows the full folder
   tree with per-folder media counts.
@@ -47,8 +51,8 @@ inside it.
   the current scope (the selected folder in Folders mode, or All Media when
   flattened).
 - **Type & extension chips** — a chip bar above the grid lets you filter by
-  media type (Images, Videos, PDFs, Audio, Markdown, Text) and/or specific file
-  extensions. Clicking a chip filters by just that one; Shift- or ⌘-click adds
+  file type (Images, Videos, PDFs, Audio, Markdown, Text, and Other for
+  anything else) and/or specific file extensions. Clicking a chip filters by just that one; Shift- or ⌘-click adds
   or removes chips to filter by several at once. Chips show live counts, and a
   Clear chip resets them. The bar appears only when there's more than one type
   or extension to distinguish.
@@ -101,7 +105,7 @@ Sources/Loupe/
   LoupeApp.swift            App entry point + menu commands
   Model/
     MediaItem.swift         File model + media-type classification
-    MediaKind                (image / video / pdf / audio / other)
+    MediaKind                (image / video / pdf / audio / markdown / text / other)
     FolderNode.swift        Sidebar folder-tree node
     FolderScanner.swift     Recursive scan -> flat list + folder tree
     ThumbnailProvider.swift QuickLook thumbnail generation + cache

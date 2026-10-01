@@ -1,7 +1,8 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// A classification for the kinds of files Loupe knows how to preview.
+/// A classification for the kinds of files Loupe shows. Known kinds get a
+/// tailored viewer; `.other` covers every remaining file type via QuickLook.
 enum MediaKind: String, Sendable {
     case image
     case video
@@ -86,7 +87,9 @@ struct MediaItem: Identifiable, Hashable, Sendable {
         self.modificationDate = values?.contentModificationDate ?? .distantPast
     }
 
+    /// Every discovered file is shown. Known kinds get a tailored viewer; any
+    /// other file falls back to a QuickLook thumbnail and preview.
     var isPreviewable: Bool {
-        kind != .other
+        true
     }
 }

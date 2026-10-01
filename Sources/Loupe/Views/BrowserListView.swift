@@ -117,11 +117,11 @@ struct BrowserListView: View {
             )
         } else {
             ContentUnavailableView(
-                "No Media Here",
+                "Nothing Here",
                 systemImage: "photo.on.rectangle.angled",
                 description: Text(model.mode == .folders
-                    ? "This folder has no previewable files."
-                    : "The dropped folder contains no previewable files.")
+                    ? "This folder has no files."
+                    : "The dropped folder has no files.")
             )
         }
     }
