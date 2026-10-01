@@ -394,11 +394,11 @@ struct MediaViewer: View {
         ZStack {
             hotkey("j", []) { model.moveSelection(by: -1) }
             hotkey("l", []) { model.moveSelection(by: 1) }
-            // Both F and I flag the current item, matching the grid's F key and
-            // the viewer's existing I key.
+            // F, I and S all flag the current item, matching the grid's flag
+            // keys.
             hotkey("f", []) { model.toggleFlag() }
             hotkey("i", []) { model.toggleFlag() }
-
+            hotkey("s", []) { model.toggleFlag() }
             if showingSingleVideo {
                 hotkey("k", []) { videoController?.togglePlay() }
                 hotkey("u", []) { videoController?.skip(by: -15) }

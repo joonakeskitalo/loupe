@@ -178,6 +178,9 @@ struct ContentView: View {
             Button("Flag Item") { model.toggleFlag() }
                 .keyboardShortcut("i", modifiers: [])
                 .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
+            Button("Flag Item (S)") { model.toggleFlag() }
+                .keyboardShortcut("s", modifiers: [])
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
 
             // Quick sort presets.
             Button("Sort by Name (A→Z)") { model.sortByNameAscending() }
