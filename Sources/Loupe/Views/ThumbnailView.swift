@@ -29,9 +29,9 @@ struct ThumbnailView: View {
 
                 if item.kind == .video {
                     Image(systemName: "play.circle.fill")
-                        .font(.system(size: size * 0.22))
-                        .foregroundStyle(.white, .black.opacity(0.5))
-                        .shadow(radius: 2)
+                        .font(.system(size: size * 0.13))
+                        .foregroundStyle(.white.opacity(0.6), .black.opacity(0.25))
+                        .shadow(radius: 1)
                 }
             }
             .frame(width: size, height: size)
