@@ -14,6 +14,19 @@ enum BrowseMode: String, CaseIterable {
     }
 }
 
+/// Whether files are shown as a thumbnail grid or a detailed list.
+enum ViewLayout: String, CaseIterable {
+    case grid = "Grid"
+    case list = "List"
+
+    var symbol: String {
+        switch self {
+        case .grid: return "square.grid.2x2"
+        case .list: return "list.bullet"
+        }
+    }
+}
+
 enum SortOrder: String, CaseIterable {
     case name = "Name"
     case dateModified = "Date Modified"
@@ -53,6 +66,9 @@ final class BrowserModel {
     var sortOrder: SortOrder = .name
     var sortAscending = true
     var thumbnailSize: Double = 160
+
+    /// Whether files are shown as a thumbnail grid or a detailed list.
+    var viewLayout: ViewLayout = .grid
 
     /// The folder selected in the sidebar (used in `.folders` mode).
     var selectedFolder: URL? {
@@ -653,6 +669,20 @@ final class BrowserModel {
                 isViewerPresented = true
             }
         }
+    }
+
+    /// Opens the full viewer on the current selection (selecting the first item
+    /// if nothing is selected yet). Used by the Space hotkey.
+    func openViewer() {
+        selectFirstIfNeeded()
+        if !selectedItems.isEmpty {
+            isViewerPresented = true
+        }
+    }
+
+    /// Switches between the thumbnail grid and the detailed list.
+    func toggleLayout() {
+        viewLayout = viewLayout == .grid ? .list : .grid
     }
 
     // MARK: - Flagging

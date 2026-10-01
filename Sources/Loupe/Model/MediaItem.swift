@@ -66,6 +66,7 @@ struct MediaItem: Identifiable, Hashable, Sendable {
     let name: String
     let kind: MediaKind
     let fileSize: Int64
+    let creationDate: Date
     let modificationDate: Date
     /// The directory that directly contains this file.
     let parentDirectory: URL
@@ -77,8 +78,11 @@ struct MediaItem: Identifiable, Hashable, Sendable {
         self.kind = MediaKind.classify(url: url)
         self.parentDirectory = url.deletingLastPathComponent()
 
-        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let values = try? url.resourceValues(forKeys: [
+            .fileSizeKey, .creationDateKey, .contentModificationDateKey
+        ])
         self.fileSize = Int64(values?.fileSize ?? 0)
+        self.creationDate = values?.creationDate ?? .distantPast
         self.modificationDate = values?.contentModificationDate ?? .distantPast
     }
 

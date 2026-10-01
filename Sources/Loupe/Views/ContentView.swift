@@ -84,7 +84,12 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 FilterBar(model: model)
-                BrowserGridView(model: model, canAutoFocus: !searchFocused)
+                switch model.viewLayout {
+                case .grid:
+                    BrowserGridView(model: model, canAutoFocus: !searchFocused)
+                case .list:
+                    BrowserListView(model: model, canAutoFocus: !searchFocused)
+                }
             }
         }
         // Hide the window chrome's controls while the full viewer is up so the
@@ -109,15 +114,18 @@ struct ContentView: View {
     /// to the text field for normal typing/editing instead of being hijacked.
     private var hotkeys: some View {
         ZStack {
-            Button("Toggle Viewer") { model.toggleViewer() }
+            // G toggles between the grid and list layouts. Suspended while the
+            // viewer is open so it doesn't swap layouts behind the viewer.
+            Button("Toggle Grid/List") { model.toggleLayout() }
                 .keyboardShortcut("g", modifiers: [])
-                .disabled(searchFocused)
-            Button("Open") {
-                model.selectFirstIfNeeded()
-                if !model.selectedItems.isEmpty { model.isViewerPresented = true }
-            }
-            .keyboardShortcut(.return, modifiers: [])
-            .disabled(model.displayedItems.isEmpty || searchFocused)
+                .disabled(model.isViewerPresented || searchFocused)
+            // Space and Return both open the full viewer on the selection.
+            Button("Open Viewer") { model.openViewer() }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused)
+            Button("Open") { model.openViewer() }
+                .keyboardShortcut(.return, modifiers: [])
+                .disabled(model.displayedItems.isEmpty || searchFocused)
             Button("Refresh") { model.refresh() }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(searchFocused)
@@ -184,7 +192,17 @@ struct ContentView: View {
         }
 
 
-        ToolbarItem {
+        ToolbarItem(id: "layout") {
+            Picker("Layout", selection: $model.viewLayout) {
+                ForEach(ViewLayout.allCases, id: \.self) { layout in
+                    Label(layout.rawValue, systemImage: layout.symbol).tag(layout)
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("Switch between the thumbnail grid and a detailed list (G).")
+        }
+
+        ToolbarItem(id: "sort") {
             Menu {
                 Picker("Sort By", selection: $model.sortOrder) {
                     ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -195,11 +213,11 @@ struct ContentView: View {
             }
         }
 
-        ToolbarItem {
+        ToolbarItem(id: "size") {
             Slider(value: $model.thumbnailSize,
                    in: BrowserModel.minThumbnailSize...BrowserModel.maxThumbnailSize)
                 .frame(width: 120)
-                .help("Thumbnail size")
+                .help(model.viewLayout == .grid ? "Thumbnail size" : "Row size")
         }
 
         ToolbarItem {
@@ -210,7 +228,7 @@ struct ContentView: View {
                 Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
             }
             .disabled(model.displayedItems.isEmpty)
-            .help("Open selected item in viewer (G or Return)")
+            .help("Open selected item in viewer (Space or Return)")
         }
     }
 
