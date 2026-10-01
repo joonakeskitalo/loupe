@@ -128,12 +128,22 @@ struct VideoPlayerView: View {
     let url: URL
     /// Lets the parent reach the controller (e.g. for the spacebar shortcut).
     var onController: ((VideoController) -> Void)? = nil
+    /// J over the video surface — move to the previous item. Handled in the
+    /// player view so AVPlayerView's own J/L transport never intercepts it.
+    var onPrevious: (() -> Void)? = nil
+    /// L over the video surface — move to the next item.
+    var onNext: (() -> Void)? = nil
 
     @StateObject private var controller: VideoController
 
-    init(url: URL, onController: ((VideoController) -> Void)? = nil) {
+    init(url: URL,
+         onController: ((VideoController) -> Void)? = nil,
+         onPrevious: (() -> Void)? = nil,
+         onNext: (() -> Void)? = nil) {
         self.url = url
         self.onController = onController
+        self.onPrevious = onPrevious
+        self.onNext = onNext
         _controller = StateObject(wrappedValue: VideoController(url: url))
     }
 
@@ -141,9 +151,12 @@ struct VideoPlayerView: View {
         VStack(spacing: 0) {
             // Video surface — AVPlayerView with its own controls disabled so
             // nothing is drawn over the frame. It also handles the spacebar.
-            PlayerSurface(player: controller.player) {
-                controller.togglePlay()
-            }
+            PlayerSurface(
+                player: controller.player,
+                onToggle: { controller.togglePlay() },
+                onPrevious: onPrevious,
+                onNext: onNext
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             controlBar
@@ -206,8 +219,12 @@ struct VideoPlayerView: View {
 /// surface so our own control bar below it is the only chrome.
 private struct PlayerSurface: NSViewRepresentable {
     let player: AVPlayer
-    /// Called when the user presses Space over the video surface.
+    /// Called when the user presses Space/K over the video surface.
     let onToggle: () -> Void
+    /// Called on J — move to the previous item.
+    var onPrevious: (() -> Void)? = nil
+    /// Called on L — move to the next item.
+    var onNext: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> KeyablePlayerView {
         let view = KeyablePlayerView()
@@ -215,8 +232,10 @@ private struct PlayerSurface: NSViewRepresentable {
         view.videoGravity = .resizeAspect
         view.player = player
         view.onToggle = onToggle
-        // Take first responder so the Space key is handled here and never
-        // bubbles up to the window's hidden shortcut buttons.
+        view.onPrevious = onPrevious
+        view.onNext = onNext
+        // Take first responder so the transport keys are handled here and never
+        // bubble up to the window's hidden shortcut buttons.
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         return view
     }
@@ -226,26 +245,78 @@ private struct PlayerSurface: NSViewRepresentable {
             nsView.player = player
         }
         nsView.onToggle = onToggle
+        nsView.onPrevious = onPrevious
+        nsView.onNext = onNext
     }
 }
 
-/// AVPlayerView subclass that intercepts the spacebar to toggle play/pause and
-/// consumes the event, so Space never reaches the window-level shortcuts that
-/// would otherwise close the viewer.
+/// AVPlayerView subclass used purely as the video surface.
+///
+/// AVKit's player view (even with `controlsStyle = .none`) installs its own
+/// first-responder machinery that claims the J/K/L and arrow transport keys and
+/// changes playback speed. Overriding `keyDown`/`performKeyEquivalent` on this
+/// subclass isn't reliable because AVKit routes those keys to a private
+/// internal responder, not to us.
+///
+/// To guarantee our shortcuts win, we install a window-scoped local key-down
+/// event monitor while the view is in a window. The monitor sees every key
+/// event BEFORE it reaches AVKit's responder, so it can run our action and
+/// swallow the event (return nil) for the keys we own, and pass everything else
+/// through untouched for the SwiftUI shortcuts.
 final class KeyablePlayerView: AVPlayerView {
     var onToggle: (() -> Void)?
+    /// J — go to the previous item (not AVPlayerView's rewind/slow-mo).
+    var onPrevious: (() -> Void)?
+    /// L — go to the next item (not AVPlayerView's fast-forward/speed-up).
+    var onNext: (() -> Void)?
+
+    private var keyMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
 
-    override func keyDown(with event: NSEvent) {
-        // 49 is the spacebar key code — toggle play/pause and consume it.
-        if event.keyCode == 49 {
-            onToggle?()
-            return
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            installMonitor()
+        } else {
+            removeMonitor()
         }
-        // Let other keys (arrows for item navigation, Esc to close) bubble up
-        // the responder chain to the SwiftUI shortcuts rather than being
-        // swallowed by AVPlayerView's own key handling.
-        nextResponder?.keyDown(with: event)
+    }
+
+    private func installMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // Only act while this view is actually in the key window and on
+            // screen, so a background player window doesn't eat another's keys.
+            guard let window = self.window, window.isKeyWindow else { return event }
+
+            // Ignore modified combos so ⌘-based shortcuts still work.
+            let modified = !event.modifierFlags
+                .intersection([.command, .control, .option])
+                .isEmpty
+            if modified { return event }
+
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "k", " ":
+                self.onToggle?()
+                return nil          // swallow
+            case "j":
+                self.onPrevious?()
+                return nil
+            case "l":
+                self.onNext?()
+                return nil
+            default:
+                return event        // let everything else through
+            }
+        }
+    }
+
+    private func removeMonitor() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
     }
 }

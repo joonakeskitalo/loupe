@@ -163,11 +163,18 @@ struct MediaViewer: View {
         .foregroundStyle(.white.opacity(0.6))
         .lineLimit(1)
         .truncationMode(.middle)
+        // Fix the content row height so the bar stays the same height whether
+        // or not the flag chip is shown (the chip is slightly taller than the
+        // plain caption text).
+        .frame(height: captionContentHeight)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
         .background(Color(white: 0.08))
     }
+
+    /// Fixed height for the caption bar's content row.
+    private let captionContentHeight: CGFloat = 20
 
     /// A small orange flag pill shown in the caption bar when the viewed
     /// item(s) are flagged, matching the grid's orange flag styling.
@@ -195,9 +202,12 @@ struct MediaViewer: View {
                 onSwipeNext: { model.moveSelection(by: 1) }
             )
         case .video, .audio:
-            VideoPlayerView(url: item.url) { controller in
-                videoController = controller
-            }
+            VideoPlayerView(
+                url: item.url,
+                onController: { controller in videoController = controller },
+                onPrevious: { model.moveSelection(by: -1) },
+                onNext: { model.moveSelection(by: 1) }
+            )
         case .pdf:
             PDFViewerRepresentable(url: item.url)
         case .markdown:
@@ -293,7 +303,7 @@ struct MediaViewer: View {
 
             Divider().frame(height: 16).overlay(Color.white.opacity(0.2))
 
-            pillButton("Fit", help: "Fit image to the view (⌘0 or F)") { zoomCommand = .fit }
+            pillButton("Fit", help: "Fit image to the view (⌘0 or Z)") { zoomCommand = .fit }
 
             pillButton("100%", help: "Actual pixel size (⌘1 or 1)") { zoomCommand = .actualSize }
         }
@@ -316,9 +326,9 @@ struct MediaViewer: View {
             hotkey("-", [.command]) { zoomCommand = .zoomOut }
             hotkey("-", []) { zoomCommand = .zoomOut }
 
-            // Fit: ⌘0 and bare F
+            // Fit: ⌘0 and bare Z (bare F now flags, matching the grid).
             hotkey("0", [.command]) { zoomCommand = .fit }
-            hotkey("f", []) { zoomCommand = .fit }
+            hotkey("z", []) { zoomCommand = .fit }
 
             // Actual size (100%): ⌘1 and bare 1
             hotkey("1", [.command]) { zoomCommand = .actualSize }
@@ -346,14 +356,17 @@ struct MediaViewer: View {
         .accessibilityHidden(true)
     }
 
-    /// Viewer-wide letter hotkeys: J/L step between items, I flags the current
-    /// item. For a single video/audio item, K toggles play/pause, U/O skip
-    /// back/forward 15 seconds, and ,/. step one frame back/forward.
+    /// Viewer-wide letter hotkeys: J/L step between items, F or I flags the
+    /// current item. For a single video/audio item, K toggles play/pause, U/O
+    /// skip back/forward 15 seconds, and ,/. step one frame back/forward.
     @ViewBuilder
     private var navigationHotkeys: some View {
         ZStack {
             hotkey("j", []) { model.moveSelection(by: -1) }
             hotkey("l", []) { model.moveSelection(by: 1) }
+            // Both F and I flag the current item, matching the grid's F key and
+            // the viewer's existing I key.
+            hotkey("f", []) { model.toggleFlag() }
             hotkey("i", []) { model.toggleFlag() }
 
             if showingSingleVideo {
