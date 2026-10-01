@@ -17,7 +17,7 @@ struct BrowserGridView: View {
     @State private var marqueeRect: CGRect?
 
     private let gridSpace = "grid"
-    private let spacing: CGFloat = 12
+    private let spacing: CGFloat = 6
     private let padding: CGFloat = 16
 
     private var cellWidth: CGFloat { model.thumbnailSize + 24 }
