@@ -29,6 +29,29 @@ struct BrowserGridView: View {
         [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
     }
 
+    /// How many items past a newly-appeared cell to warm. Roughly a couple of
+    /// rows ahead so a continued downward scroll lands on ready thumbnails
+    /// without warming the whole folder. Prefetch work is low priority, so it
+    /// never delays a cell the user can actually see.
+    private var prefetchWindow: Int { max(8, liveColumnCount * 3) }
+
+    /// Warms thumbnails for the items just after `index` at prefetch priority.
+    /// Driven off each cell's `onAppear`, which LazyVGrid fires slightly ahead
+    /// of the viewport, so neighbors decode before the user scrolls to them.
+    private func prefetchAhead(from index: Int, in items: [MediaItem]) {
+        guard index >= 0, index < items.count else { return }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let target = CGSize(width: model.thumbnailSize, height: model.thumbnailSize)
+        let upper = min(items.count, index + 1 + prefetchWindow)
+        guard index + 1 < upper else { return }
+        let urls = items[(index + 1)..<upper].map(\.url)
+        Task {
+            for url in urls {
+                await ThumbnailProvider.shared.prefetch(url, size: target, scale: scale)
+            }
+        }
+    }
+
     /// Number of columns that fit in a given width, matching the adaptive grid.
     /// Used as a fallback before any cells have reported their frames.
     private func columnCount(for width: CGFloat) -> Int {
@@ -69,7 +92,7 @@ struct BrowserGridView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVGrid(columns: columns, spacing: spacing) {
-                                ForEach(items) { item in
+                                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                                     ThumbnailView(
                                         item: item,
                                         size: model.thumbnailSize,
@@ -79,6 +102,12 @@ struct BrowserGridView: View {
                                         hideFilename: model.hideFilenames
                                     )
                                     .id(item.id)
+                                    // As the grid instantiates this cell (which
+                                    // LazyVGrid does just before it scrolls into
+                                    // view), warm the next few items at low
+                                    // priority so a continued scroll finds them
+                                    // ready. Visible cells still take priority.
+                                    .onAppear { prefetchAhead(from: index, in: items) }
                                     .reportCellFrame(id: item.id, in: gridSpace)
                                     .contentShape(Rectangle())
                                     // AppKit-level click handling: selection fires

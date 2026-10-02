@@ -96,7 +96,15 @@ struct ThumbnailView: View {
     private func loadThumbnail() async {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: size, height: size)
-        let result = await ThumbnailProvider.shared.thumbnail(for: item.url, size: target, scale: scale)
+        // This cell is on (or very near) screen, so it's visible-priority: it
+        // jumps ahead of any prefetch work the grid queued for the viewport
+        // edges. Re-requesting an already-queued prefetch here promotes it.
+        let result = await ThumbnailProvider.shared.thumbnail(
+            for: item.url,
+            size: target,
+            scale: scale,
+            priority: .visible
+        )
         if let result {
             image = result
         } else {

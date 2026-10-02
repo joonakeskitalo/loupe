@@ -1,10 +1,23 @@
 import AppKit
 import AVFoundation
+import ImageIO
 import QuickLookThumbnailing
 
-/// Generates and caches thumbnails for media items using QuickLook, with an
-/// AVFoundation frame-extraction fallback for video containers QuickLook can't
-/// handle (notably .mkv and .webm).
+/// Generates and caches thumbnails for media items, routing each file to the
+/// fastest applicable generator:
+///
+///   * **Images** go through ImageIO (`CGImageSourceCreateThumbnailAtIndex`),
+///     which decodes in-process directly at the target size — it never fully
+///     decodes a large photo just to shrink it — and reuses any embedded EXIF
+///     thumbnail. This is markedly faster than QuickLook for ordinary photos,
+///     which pays an XPC hop to a cross-process agent and general-purpose
+///     representation selection. QuickLook remains the fallback if ImageIO
+///     can't decode a particular image.
+///   * **Video** tries AVFoundation, then the bundled FFmpeg libraries for
+///     containers neither QuickLook nor AVFoundation handle (notably .mkv and
+///     .webm).
+///   * **Everything else** (PDFs, documents, etc.) uses QuickLook, whose
+///     generality is exactly what that long tail needs.
 ///
 /// Memory is bounded two ways: each image is capped at `maxPixelDimension` px
 /// on its longest edge (so a cell at any zoom level decodes a small image), and
@@ -17,11 +30,89 @@ import QuickLookThumbnailing
 /// so many thumbnails generate concurrently. Awaiting inside the actor would
 /// serialize every request behind the previous one — which made the first
 /// folder load appear to freeze as hundreds of cells queued up.
+///
+/// Generation is **bounded and prioritized**. Rather than firing one unbounded
+/// `Task` per cell (which floods QuickLook with hundreds of equal-priority
+/// requests and lets off-screen work compete with what the user is looking at),
+/// requests pass through a small scheduler:
+///
+///   * At most `maxConcurrent` generations run at once (≈ the core count), so
+///     the decoders stay saturated without thrashing or starving the newly
+///     visible cells behind a backlog.
+///   * Each request carries a `Priority`. Visible cells ask at `.visible`;
+///     the grid warms a window around the viewport at `.prefetch`. The
+///     scheduler always starts the highest-priority waiter next, so a fast
+///     scroll immediately serves whatever is now on screen instead of draining
+///     a queue of scrolled-past cells first.
+///   * A waiting request can be *promoted*: if a URL queued at `.prefetch`
+///     becomes visible, re-requesting it at `.visible` bumps it to the front
+///     without starting duplicate work.
 actor ThumbnailProvider {
     static let shared = ThumbnailProvider()
 
+    /// Scheduling priority for a thumbnail request. Higher raw value wins.
+    enum Priority: Int, Comparable {
+        /// Warming a cell near, but not in, the viewport. Yields to visible work.
+        case prefetch = 0
+        /// A cell the user can currently see. Served ahead of prefetch work.
+        case visible = 1
+
+        static func < (lhs: Priority, rhs: Priority) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
     private let cache = NSCache<NSURL, NSImage>()
     private var inFlight: [URL: Task<NSImage?, Never>] = [:]
+
+    // MARK: - Scheduler
+
+    /// Max thumbnail requests in generation at once. This bounds how many tasks
+    /// race (so a 10k-item folder doesn't spawn 10k tasks) and gives the
+    /// priority queue something to order, but it's deliberately generous: the
+    /// primary path is QuickLook, which is XPC/IO-bound rather than CPU-bound
+    /// and runs its own internal parallelism efficiently. A tight core-count
+    /// cap here throttled QuickLook below what it handles comfortably and made
+    /// the first screenful trickle in instead of landing together, so the limit
+    /// scales with cores but stays high.
+    private static let maxConcurrent: Int = {
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        return min(64, max(16, cores * 4))
+    }()
+
+    /// Separate, much tighter cap on the video-frame fallback
+    /// (AVFoundation / FFmpeg). That path is genuinely CPU-heavy — demuxing and
+    /// decoding real frames — so a handful running at once saturates the cores
+    /// without a single slow `.mkv` holding one of the scarce general slots for
+    /// seconds while fast image thumbnails wait behind it.
+    private static let maxConcurrentVideo: Int = {
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        return min(4, max(2, cores / 2))
+    }()
+
+    /// Number of generations currently running (admitted through the gate).
+    private var runningCount = 0
+
+    /// A request parked until a generation slot frees up. Each pending URL has
+    /// exactly one entry; `resume` unblocks the single owner that enqueued it.
+    private struct Waiter {
+        var priority: Priority
+        let resume: CheckedContinuation<Void, Never>
+    }
+
+    /// URLs waiting for a slot, keyed by URL so a repeat request can promote an
+    /// existing waiter instead of adding a duplicate. Insertion order within a
+    /// priority is broken by `sequence` so same-priority work stays FIFO.
+    private var waiters: [URL: Waiter] = [:]
+    /// Monotonic tiebreaker so equal-priority waiters drain in request order.
+    private var waiterOrder: [URL: UInt64] = [:]
+    private var sequence: UInt64 = 0
+
+    /// Running count and FIFO backlog for the tight video-decode gate. Video
+    /// work is CPU-bound and already filtered to the rare container that needs
+    /// it, so a simple first-come queue (no priority) is enough here.
+    private var videoRunningCount = 0
+    private var videoWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Hard cap on a thumbnail's longest edge, in pixels. Grid cells top out at
     /// 320 pt, so capping here (rather than honoring the full point-size ×
@@ -45,7 +136,16 @@ actor ThumbnailProvider {
         cache.totalCostLimit = Self.cacheByteLimit
     }
 
-    func thumbnail(for url: URL, size: CGSize, scale: CGFloat) async -> NSImage? {
+    /// Returns a thumbnail for `url`, generating it if needed. `priority`
+    /// controls scheduling when generation is contended: `.visible` work is
+    /// served ahead of `.prefetch` work, and re-requesting a queued URL at a
+    /// higher priority promotes it. Awaited by the cell that needs the image.
+    func thumbnail(
+        for url: URL,
+        size: CGSize,
+        scale: CGFloat,
+        priority: Priority = .visible
+    ) async -> NSImage? {
         if let cached = cache.object(forKey: url as NSURL) {
             return cached
         }
@@ -58,8 +158,100 @@ actor ThumbnailProvider {
         // Reuse or create the generation task, but DO NOT await it while the
         // actor is isolated — return the task's handle and await it outside, so
         // concurrent requests overlap instead of serializing.
-        let task = taskForThumbnail(url: url, pixelSize: pixelSize)
+        let task = taskForThumbnail(url: url, pixelSize: pixelSize, priority: priority)
         return await task.value
+    }
+
+    /// Warms the cache for `url` at low priority without waiting for the result.
+    /// Used to prefetch cells just outside the viewport so they're ready by the
+    /// time a short scroll brings them in. No-op if already cached or in flight.
+    func prefetch(_ url: URL, size: CGSize, scale: CGFloat) {
+        guard cache.object(forKey: url as NSURL) == nil, inFlight[url] == nil else {
+            return
+        }
+        let pixelSize = Self.clampedPixelSize(pointSize: size, scale: scale)
+        _ = taskForThumbnail(url: url, pixelSize: pixelSize, priority: .prefetch)
+    }
+
+    // MARK: - Gate
+
+    /// Suspends until a generation slot is free, parking the caller in the
+    /// priority-ordered `waiters` map keyed by `url`. There is exactly one
+    /// `acquireSlot` call per URL (callers are deduped in `taskForThumbnail`),
+    /// so each URL owns at most one waiter. A late, higher-priority request for
+    /// the same URL doesn't come through here — it goes through `promote`.
+    private func acquireSlot(url: URL, priority: Priority) async {
+        // Take a free slot immediately only when nobody is waiting; otherwise
+        // queue so a lower-priority request can't jump an earlier high-priority
+        // waiter just because a slot happened to open at that instant.
+        if runningCount < Self.maxConcurrent, waiters.isEmpty {
+            runningCount += 1
+            return
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            sequence += 1
+            waiterOrder[url] = sequence
+            waiters[url] = Waiter(priority: priority, resume: continuation)
+        }
+    }
+
+    /// Raises the scheduling priority of a URL that's still waiting for a slot.
+    /// Called when an in-flight (but not yet started) prefetch becomes visible,
+    /// so it's served ahead of other prefetch work without duplicating it.
+    private func promote(url: URL, to priority: Priority) {
+        guard var waiter = waiters[url], priority > waiter.priority else { return }
+        waiter.priority = priority
+        waiters[url] = waiter
+    }
+
+    /// Frees a generation slot and admits the highest-priority waiter next
+    /// (ties broken by request order). Called once per generation when it ends.
+    private func releaseSlot() {
+        guard let nextURL = highestPriorityWaiter() else {
+            runningCount -= 1
+            return
+        }
+        let waiter = waiters.removeValue(forKey: nextURL)!
+        waiterOrder[nextURL] = nil
+        // runningCount stays the same: we hand this slot straight to the waiter.
+        waiter.resume.resume()
+    }
+
+    /// Suspends until a video-decode slot is free. Separate from the general
+    /// gate so a burst of slow video decodes can't starve fast image
+    /// thumbnails. The caller already holds a general slot while waiting here;
+    /// that's acceptable because `maxConcurrent` is generous and video files are
+    /// a small minority of a typical folder.
+    private func acquireVideoSlot() async {
+        if videoRunningCount < Self.maxConcurrentVideo {
+            videoRunningCount += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            videoWaiters.append(continuation)
+        }
+    }
+
+    /// Frees a video-decode slot and admits the next waiter (FIFO).
+    private func releaseVideoSlot() {
+        if videoWaiters.isEmpty {
+            videoRunningCount -= 1
+        } else {
+            // Hand the slot straight to the next waiter; count is unchanged.
+            videoWaiters.removeFirst().resume()
+        }
+    }
+
+    /// Picks the waiting URL to run next: highest `priority`, then earliest
+    /// request order within that priority.
+    private func highestPriorityWaiter() -> URL? {
+        waiters.min { lhs, rhs in
+            if lhs.value.priority != rhs.value.priority {
+                return lhs.value.priority > rhs.value.priority
+            }
+            return (waiterOrder[lhs.key] ?? 0) < (waiterOrder[rhs.key] ?? 0)
+        }?.key
     }
 
     /// Converts a requested point size + backing scale into a pixel size whose
@@ -81,34 +273,65 @@ actor ThumbnailProvider {
     /// Returns an existing in-flight task or starts a new one, recording it so
     /// duplicate requests for the same URL share one generation. `pixelSize`
     /// is already in pixels (clamped), so QuickLook runs at scale 1.
-    private func taskForThumbnail(url: URL, pixelSize: CGSize) -> Task<NSImage?, Never> {
+    ///
+    /// A repeat request for an already-queued URL doesn't start new work; it
+    /// just `promote`s the existing waiter if the new priority is higher, which
+    /// is how a prefetch becomes visible-priority the moment the cell appears.
+    private func taskForThumbnail(
+        url: URL,
+        pixelSize: CGSize,
+        priority: Priority
+    ) -> Task<NSImage?, Never> {
         if let existing = inFlight[url] {
+            promote(url: url, to: priority)
             return existing
         }
 
+        let kind = MediaKind.classify(url: url)
+
         let task = Task<NSImage?, Never> { [weak self] in
-            let request = QLThumbnailGenerator.Request(
-                fileAt: url,
-                size: pixelSize,
-                scale: 1,
-                representationTypes: .thumbnail
-            )
-            request.iconMode = true
+            // Wait for a generation slot before touching any decoder, so no
+            // more than `maxConcurrent` run at once and visible work is admitted
+            // ahead of prefetch work.
+            await self?.acquireSlot(url: url, priority: priority)
 
             var image: NSImage?
-            do {
-                let rep = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
-                image = rep.nsImage
-            } catch {
-                image = nil
+
+            // Fast path: images decode in-process via ImageIO, straight to the
+            // target size. Much cheaper than QuickLook's cross-process agent.
+            if kind == .image {
+                image = Self.imageIOThumbnail(for: url, pixelSize: pixelSize)
             }
 
-            // QuickLook can't thumbnail some video containers (notably .mkv and
-            // .webm, which neither QuickLook nor AVFoundation decode on macOS).
-            // Fall back to decoding a frame with the embedded FFmpeg libraries
-            // so these still show a preview instead of the generic film icon.
-            if image == nil, MediaKind.classify(url: url) == .video {
+            // General path / image fallback: QuickLook. Covers PDFs, documents,
+            // and anything ImageIO couldn't decode. Skipped for video, which has
+            // its own decode chain below (QuickLook rarely adds value there and
+            // costs an XPC round trip).
+            if image == nil, kind != .video {
+                let request = QLThumbnailGenerator.Request(
+                    fileAt: url,
+                    size: pixelSize,
+                    scale: 1,
+                    representationTypes: .thumbnail
+                )
+                request.iconMode = true
+                do {
+                    let rep = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+                    image = rep.nsImage
+                } catch {
+                    image = nil
+                }
+            }
+
+            // Video: AVFoundation first, then the bundled FFmpeg libraries for
+            // containers neither QuickLook nor AVFoundation decode (notably
+            // .mkv and .webm). This path is CPU-heavy, so it goes through the
+            // tight video gate to keep a cluster of slow decodes from
+            // monopolizing the cores.
+            if image == nil, kind == .video {
+                await self?.acquireVideoSlot()
                 image = await Self.videoFrame(for: url, pixelSize: pixelSize)
+                await self?.releaseVideoSlot()
             }
 
             await self?.finish(url: url, image: image)
@@ -119,11 +342,14 @@ actor ThumbnailProvider {
         return task
     }
 
+    /// Records a finished generation: stores the image, clears the in-flight
+    /// entry, and releases the generation slot so the next waiter can start.
     private func finish(url: URL, image: NSImage?) {
         inFlight[url] = nil
         if let image {
             cache.setObject(image, forKey: url as NSURL, cost: Self.byteCost(of: image))
         }
+        releaseSlot()
     }
 
     /// Estimated decoded size of an image in bytes (RGBA, 4 bytes per pixel),
@@ -141,6 +367,44 @@ actor ThumbnailProvider {
             pixelHeight = Int(image.size.height)
         }
         return max(1, pixelWidth * pixelHeight * 4)
+    }
+
+    /// Decodes a thumbnail for an image file with ImageIO, in-process and
+    /// directly at the requested size. `kCGImageSourceThumbnailMaxPixelSize`
+    /// caps the longest edge (matching our `maxPixelDimension` clamp), so the
+    /// decoder produces a small bitmap without ever fully decoding a large
+    /// photo. Returns nil if the file isn't a decodable image, letting the
+    /// caller fall back to QuickLook.
+    ///
+    /// `nonisolated` so it runs off the actor — it's synchronous CPU/IO work
+    /// and must not serialize other thumbnail requests behind actor isolation.
+    nonisolated private static func imageIOThumbnail(for url: URL, pixelSize: CGSize) -> NSImage? {
+        // Don't let ImageIO consult the slow, cross-process thumbnail cache or
+        // decode the full image up front; we only want its fast thumbnail path.
+        let sourceOptions: [CFString: Any] = [
+            kCGImageSourceShouldCache: false
+        ]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
+              CGImageSourceGetCount(source) > 0 else {
+            return nil
+        }
+
+        let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
+        let options: [CFString: Any] = [
+            // Build a thumbnail even when the file has no embedded one, and
+            // prefer the embedded one when present (cheapest of all).
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,  // honor EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+
+        let size = CGSize(width: cgImage.width, height: cgImage.height)
+        return NSImage(cgImage: cgImage, size: size)
     }
 
     /// Extracts a representative frame from a video. Tries AVFoundation first
