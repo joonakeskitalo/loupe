@@ -32,6 +32,8 @@ enum SortOrder: String, CaseIterable {
     case dateModified = "Date Modified"
     case size = "Size"
     case kind = "Kind"
+    case type = "File Type"
+    case codec = "Video Codec"
 }
 
 @MainActor
@@ -63,8 +65,19 @@ final class BrowserModel {
             clampSelection()
         }
     }
-    var sortOrder: SortOrder = .name
+    var sortOrder: SortOrder = .name {
+        didSet { if sortOrder == .codec { prefetchCodecs() } }
+    }
     var sortAscending = true
+
+    /// Resolved video codec names keyed by file URL, used to sort by codec.
+    /// Populated lazily in the background when a codec sort is active; items
+    /// not yet resolved sort to the end. Observable so the grid/list re-sort as
+    /// codecs arrive.
+    private(set) var codecsByURL: [URL: String] = [:]
+
+    /// Guards against launching more than one codec prefetch pass at a time.
+    private var isPrefetchingCodecs = false
 
     /// Grid and list keep independent zoom levels. Grid starts at a comfortable
     /// mid size; list starts at the minimum so rows are compact by default.
@@ -376,6 +389,8 @@ final class BrowserModel {
         trees = newTrees
         pruneStaleChipFilters()
         clampSelection()
+        // Keep codec data current for a codec sort as folders are added/rescanned.
+        if sortOrder == .codec { prefetchCodecs() }
     }
 
     /// Drops any active type/extension chip filters that no longer have a
@@ -599,6 +614,32 @@ final class BrowserModel {
         return "All Media"
     }
 
+    /// Resolves the video codec for every video item that isn't cached yet,
+    /// storing results in `codecsByURL` as they arrive. Each store mutates the
+    /// observable dictionary, so a `.codec` sort re-runs and the view updates
+    /// incrementally. Safe to call repeatedly; a single pass runs at a time and
+    /// already-cached items are skipped.
+    func prefetchCodecs() {
+        guard !isPrefetchingCodecs else { return }
+        let pending = allItems.filter {
+            $0.kind == .video && codecsByURL[$0.url] == nil
+        }
+        guard !pending.isEmpty else { return }
+
+        isPrefetchingCodecs = true
+        Task {
+            for item in pending {
+                let meta = await VideoMetadataProvider.shared.metadata(
+                    for: item.url, kind: .video
+                )
+                // Store a value for every probed item (empty string when the
+                // codec is unknown) so we never re-probe it on the next pass.
+                self.codecsByURL[item.url] = meta.codec ?? ""
+            }
+            self.isPrefetchingCodecs = false
+        }
+    }
+
     /// Applies a sort field and direction together. Used by the quick-sort
     /// buttons/hotkeys so one action sets both the field and whether it's
     /// ascending in a single step.
@@ -612,6 +653,9 @@ final class BrowserModel {
 
     /// Quick sort: Size, largest first.
     func sortBySizeDescending() { applySort(.size, ascending: false) }
+
+    /// Quick sort: File Type, A→Z.
+    func sortByTypeAscending() { applySort(.type, ascending: true) }
 
     /// Whether the current sort matches a quick-sort preset (for showing a
     /// checkmark on the matching menu item).
@@ -635,8 +679,42 @@ final class BrowserModel {
                 }
                 return $0.kind.rawValue < $1.kind.rawValue
             }
+        case .type:
+            result = items.sorted {
+                let lhs = $0.url.pathExtension.lowercased()
+                let rhs = $1.url.pathExtension.lowercased()
+                if lhs == rhs {
+                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                }
+                return lhs.localizedStandardCompare(rhs) == .orderedAscending
+            }
+        case .codec:
+            // Only videos have a codec. Group videos first, ordered by codec
+            // name (unresolved/unknown codecs sort after named ones), then all
+            // non-videos. Ties fall back to name.
+            result = items.sorted {
+                let lc = codecSortKey($0)
+                let rc = codecSortKey($1)
+                if lc == rc {
+                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                }
+                return lc.localizedStandardCompare(rc) == .orderedAscending
+            }
         }
         return sortAscending ? result : result.reversed()
+    }
+
+    /// Sort key for the `.codec` order. Non-video files have no codec, so they
+    /// sort after every video. Videos use their resolved codec name; a video
+    /// whose codec hasn't resolved yet (or is unknown) sorts after named ones
+    /// but still ahead of non-videos. Prefixes keep the three groups ordered:
+    /// "0<codec>" < "1" (video, unknown) < "2" (non-video).
+    private func codecSortKey(_ item: MediaItem) -> String {
+        guard item.kind == .video else { return "2" }
+        if let codec = codecsByURL[item.url], !codec.isEmpty {
+            return "0" + codec.lowercased()
+        }
+        return "1"
     }
 
     // MARK: - Selection helpers

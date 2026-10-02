@@ -189,6 +189,9 @@ struct ContentView: View {
             Button("Sort by Size (Largest First)") { model.sortBySizeDescending() }
                 .keyboardShortcut("2", modifiers: .control)
                 .disabled(searchFocused)
+            Button("Sort by File Type (A→Z)") { model.sortByTypeAscending() }
+                .keyboardShortcut("3", modifiers: .control)
+                .disabled(searchFocused)
 
             // Escape clears the selection; if nothing is selected it clears the
             // active type/extension filters instead.
@@ -268,6 +271,12 @@ struct ContentView: View {
                         model.sortBySizeDescending()
                     } label: {
                         Label("Size (Largest First)  ⌃2", systemImage: model.isSort(.size, ascending: false) ? "checkmark" : "arrow.down")
+                    }
+
+                    Button {
+                        model.sortByTypeAscending()
+                    } label: {
+                        Label("File Type (A→Z)  ⌃3", systemImage: model.isSort(.type, ascending: true) ? "checkmark" : "doc")
                     }
                 }
 
