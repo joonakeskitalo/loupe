@@ -37,6 +37,23 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(!hasSelection)
 
+            // Color tags. The ⌃1–⌃5 shortcuts are owned by ContentView's hidden
+            // hotkeys (their single owner); the labels only show the key as a
+            // hint so there's no competing menu equivalent. Applying the tag an
+            // item already has clears it (handled by `toggleColorTag`).
+            Menu("Color Tag") {
+                ForEach(Array(ColorTag.allInHotkeyOrder.enumerated()), id: \.element) { index, tag in
+                    Button("\(tag.displayName)  ⌃\(index + 1)") {
+                        model?.toggleColorTag(tag)
+                    }
+                    .disabled(!hasSelection)
+                }
+                Divider()
+                Button("Remove Tag") { model?.clearColorTag() }
+                    .disabled(!hasSelection)
+            }
+            .disabled(!hasSelection)
+
             Button("Move to Trash") { model?.moveToTrash() }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 // A disabled Button releases its shortcut, so gating on

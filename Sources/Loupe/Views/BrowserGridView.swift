@@ -75,6 +75,7 @@ struct BrowserGridView: View {
                                         size: model.thumbnailSize,
                                         isSelected: model.selectedItems.contains(item.id),
                                         isFlagged: model.isFlagged(item.id),
+                                        colorTag: model.colorTag(item.id),
                                         hideFilename: model.hideFilenames
                                     )
                                     .id(item.id)
@@ -186,6 +187,12 @@ struct BrowserGridView: View {
                 systemImage: "flag",
                 description: Text("Flag files with F to see them here, or turn off the flagged filter.")
             )
+        } else if let tag = model.colorTagFilter {
+            ContentUnavailableView(
+                "No \(tag.displayName) Files",
+                systemImage: tag.symbol,
+                description: Text("Tag files with ⌃ and a number to see them here, or pick All Media.")
+            )
         } else {
             ContentUnavailableView(
                 "Nothing Here",
@@ -296,6 +303,8 @@ struct BrowserGridView: View {
             model.toggleFlag(item)
         }
 
+        colorTagMenu(for: item, suffix: suffix)
+
         Divider()
 
         Button("Open with Default App\(suffix)") {
@@ -334,5 +343,21 @@ struct BrowserGridView: View {
 
     private func flagMenuTitle(_ state: FlagState, suffix: String) -> String {
         state == .allFlagged ? "Unflag\(suffix)" : "Flag for Later\(suffix)"
+    }
+
+    /// Right-click "Color Tag" submenu. Mirrors the flag item: acts on the
+    /// whole selection when the clicked item is part of it, else just that
+    /// item. No keyboard shortcuts here (the global ⌃1–⌃5 own those).
+    @ViewBuilder
+    private func colorTagMenu(for item: MediaItem, suffix: String) -> some View {
+        Menu("Color Tag\(suffix)") {
+            ForEach(ColorTag.allInHotkeyOrder, id: \.self) { tag in
+                Button(tag.displayName, systemImage: tag.symbol) {
+                    model.toggleColorTag(tag, item: item)
+                }
+            }
+            Divider()
+            Button("Remove Tag") { model.clearColorTag(item: item) }
+        }
     }
 }

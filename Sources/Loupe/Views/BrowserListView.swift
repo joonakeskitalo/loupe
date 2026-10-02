@@ -65,7 +65,8 @@ struct BrowserListView: View {
                                     showsThumbnail: showsThumbnail,
                                     verticalPadding: rowVerticalPadding,
                                     isSelected: model.selectedItems.contains(item.id),
-                                    isFlagged: model.isFlagged(item.id)
+                                    isFlagged: model.isFlagged(item.id),
+                                    colorTag: model.colorTag(item.id)
                                 )
                                 .id(item.id)
                                 .contentShape(Rectangle())
@@ -130,6 +131,12 @@ struct BrowserListView: View {
                 "No Flagged Files",
                 systemImage: "flag",
                 description: Text("Flag files with F to see them here, or turn off the flagged filter.")
+            )
+        } else if let tag = model.colorTagFilter {
+            ContentUnavailableView(
+                "No \(tag.displayName) Files",
+                systemImage: tag.symbol,
+                description: Text("Tag files with ⌃ and a number to see them here, or pick All Media.")
             )
         } else {
             ContentUnavailableView(
@@ -252,6 +259,8 @@ struct BrowserListView: View {
             model.toggleFlag(item)
         }
 
+        colorTagMenu(for: item, suffix: suffix)
+
         Divider()
 
         Button("Open with Default App\(suffix)") {
@@ -289,6 +298,20 @@ struct BrowserListView: View {
     private func flagMenuTitle(_ state: FlagState, suffix: String) -> String {
         state == .allFlagged ? "Unflag\(suffix)" : "Flag for Later\(suffix)"
     }
+
+    /// Right-click "Color Tag" submenu, mirroring the grid's.
+    @ViewBuilder
+    private func colorTagMenu(for item: MediaItem, suffix: String) -> some View {
+        Menu("Color Tag\(suffix)") {
+            ForEach(ColorTag.allInHotkeyOrder, id: \.self) { tag in
+                Button(tag.displayName, systemImage: tag.symbol) {
+                    model.toggleColorTag(tag, item: item)
+                }
+            }
+            Divider()
+            Button("Remove Tag") { model.clearColorTag(item: item) }
+        }
+    }
 }
 
 /// Fixed metrics shared by the list header and its rows so columns line up.
@@ -310,6 +333,7 @@ private struct ListRowView: View {
     let verticalPadding: Double
     let isSelected: Bool
     var isFlagged: Bool = false
+    var colorTag: ColorTag? = nil
 
     @State private var image: NSImage?
     /// Codec + pixel dimensions, probed lazily for video and image rows.
@@ -344,6 +368,16 @@ private struct ListRowView: View {
                             .foregroundStyle(.white)
                             .padding(2)
                             .background(Color.orange, in: Circle())
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let colorTag {
+                        Circle()
+                            .fill(colorTag.color)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(.white, lineWidth: 1))
+                            .padding(2)
+                            .help("\(colorTag.displayName) tag")
                     }
                 }
 

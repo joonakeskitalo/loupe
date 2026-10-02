@@ -149,6 +149,19 @@ struct MediaViewer: View {
         items.filter { model.isFlagged($0.id) }.count
     }
 
+    /// Number of currently shown items carrying any color tag.
+    private var taggedShownCount: Int {
+        items.filter { model.colorTag($0.id) != nil }.count
+    }
+
+    /// The most common color tag among the shown items, used to color the
+    /// multi-item "N tagged" chip. Falls back to red if (somehow) empty.
+    private var dominantShownTag: ColorTag {
+        let tags = items.compactMap { model.colorTag($0.id) }
+        let counts = Dictionary(grouping: tags, by: { $0 }).mapValues(\.count)
+        return counts.max { $0.value < $1.value }?.key ?? .red
+    }
+
     /// Total on-disk size of all currently shown items, for the multi-item
     /// caption's combined size readout.
     private var combinedSize: Int64 {
@@ -162,6 +175,9 @@ struct MediaViewer: View {
                 Text("\(items.count) items selected")
                 if flaggedShownCount > 0 {
                     flagChip(text: "\(flaggedShownCount) flagged")
+                }
+                if taggedShownCount > 0 {
+                    colorTagChip(tag: dominantShownTag, text: "\(taggedShownCount) tagged")
                 }
                 Spacer(minLength: 8)
                 Text(formattedSize(combinedSize))
@@ -179,6 +195,9 @@ struct MediaViewer: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isFlagged(item.id) {
                     flagChip(text: "Flagged").layoutPriority(1)
+                }
+                if let tag = model.colorTag(item.id) {
+                    colorTagChip(tag: tag, text: tag.displayName).layoutPriority(1)
                 }
                 Text(formattedSize(item.fileSize))
                     .monospacedDigit()
@@ -224,6 +243,20 @@ struct MediaViewer: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Color.orange, in: Capsule())
+    }
+
+    /// A color-tag pill shown in the caption bar, mirroring `flagChip` but
+    /// filled with the tag's own color.
+    private func colorTagChip(tag: ColorTag, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: tag.symbol)
+            Text(text)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(tag.color, in: Capsule())
     }
 
     @ViewBuilder
@@ -410,6 +443,13 @@ struct MediaViewer: View {
             hotkey("f", []) { model.toggleFlag() }
             hotkey("i", []) { model.toggleFlag() }
             hotkey("s", []) { model.toggleFlag() }
+            // ⌃1–⌃5 apply color tags, matching the grid. Carried here so the
+            // keys work from inside the viewer too.
+            ForEach(Array(ColorTag.allInHotkeyOrder.enumerated()), id: \.element) { index, tag in
+                hotkey(KeyEquivalent(Character("\(index + 1)")), .control) {
+                    model.toggleColorTag(tag)
+                }
+            }
             if showingSingleVideo {
                 hotkey("k", []) { videoController?.togglePlay() }
                 hotkey("u", []) { videoController?.skip(by: -15) }

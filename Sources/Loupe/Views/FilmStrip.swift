@@ -39,7 +39,8 @@ struct FilmStrip: View {
                             size: thumbnailSize,
                             isSelected: selectedIDs.contains(item.id),
                             isCurrent: item.id == currentID,
-                            isFlagged: model.isFlagged(item.id)
+                            isFlagged: model.isFlagged(item.id),
+                            colorTag: model.colorTag(item.id)
                         )
                         .id(item.id)
                         // Match the grid's click conventions: plain click
@@ -139,6 +140,8 @@ private struct FilmStripCell: View {
     let isCurrent: Bool
     /// Whether this item is flagged (shows a flag badge, like the grid).
     var isFlagged: Bool = false
+    /// The item's color tag, if any (shown opposite the flag badge).
+    var colorTag: ColorTag? = nil
 
     @State private var image: NSImage?
 
@@ -190,6 +193,16 @@ private struct FilmStripCell: View {
                     .foregroundStyle(.white)
                     .padding(max(2, size * 0.05))
                     .background(Color.orange, in: Circle())
+                    .shadow(radius: 1)
+                    .padding(3)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if let colorTag {
+                Circle()
+                    .fill(colorTag.color)
+                    .frame(width: max(6, size * 0.1), height: max(6, size * 0.1))
+                    .overlay(Circle().stroke(.white, lineWidth: 1))
                     .shadow(radius: 1)
                     .padding(3)
             }

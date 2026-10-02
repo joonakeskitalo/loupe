@@ -24,6 +24,7 @@ struct FolderSidebar: View {
             Section("Library") {
                 Button {
                     model.showFlaggedOnly = false
+                    model.colorTagFilter = nil
                     model.mode = .flattened
                     model.selectedFolder = model.roots.first
                     focused = true
@@ -32,7 +33,7 @@ struct FolderSidebar: View {
                         title: "All Media",
                         systemImage: "square.grid.3x3",
                         count: nil,
-                        isSelected: !model.showFlaggedOnly && model.mode == .flattened
+                        isSelected: !model.showFlaggedOnly && model.colorTagFilter == nil && model.mode == .flattened
                     )
                     // Counteract the List section's leading content inset so
                     // the Library rows sit flush-left like the root headers.
@@ -56,6 +57,30 @@ struct FolderSidebar: View {
                 .buttonStyle(.plain)
                 .disabled(model.flaggedCount == 0 && !model.showFlaggedOnly)
                 .listRowInsets(Self.rowInsets)
+
+                // One row per color tag, directly under Flagged. Each filters
+                // the grid to items carrying that tag; selecting it again (via
+                // All Media) clears the filter. A row is disabled when nothing
+                // carries that tag and it isn't the active filter.
+                ForEach(ColorTag.allInHotkeyOrder, id: \.self) { tag in
+                    let count = model.colorTagCount(tag)
+                    Button {
+                        model.colorTagFilter = tag
+                        focused = true
+                    } label: {
+                        SidebarLabel(
+                            title: tag.displayName,
+                            systemImage: tag.symbol,
+                            iconTint: tag.color,
+                            count: count > 0 ? count : nil,
+                            isSelected: model.colorTagFilter == tag
+                        )
+                        .padding(.leading, -12)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(count == 0 && model.colorTagFilter != tag)
+                    .listRowInsets(Self.rowInsets)
+                }
             }
 
             // One section per root, each with its own tree and a Remove action.
@@ -129,12 +154,14 @@ private struct FolderRow: View {
     @State private var isExpanded: Bool = true
 
     private var isSelected: Bool {
-        !model.showFlaggedOnly && model.mode == .folders && model.selectedFolders.contains(node.url)
+        !model.showFlaggedOnly && model.colorTagFilter == nil
+            && model.mode == .folders && model.selectedFolders.contains(node.url)
     }
 
     private var rowLabel: some View {
         Button {
             model.showFlaggedOnly = false
+            model.colorTagFilter = nil
             model.mode = .folders
             // Cmd-click toggles the folder in/out of a multi-selection;
             // a plain click selects just this folder.
@@ -226,14 +253,22 @@ private struct RootHeaderRow: View {
 private struct SidebarLabel: View {
     let title: String
     let systemImage: String
+    /// When set, tints just the leading icon (used for color-tag swatches) so
+    /// the glyph keeps its color even when the row isn't selected.
+    var iconTint: Color? = nil
     let count: Int?
     let isSelected: Bool
 
     var body: some View {
         HStack(spacing: 0) {
-            Label(title, systemImage: systemImage)
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: systemImage)
+                    .foregroundStyle(iconTint ?? (isSelected ? Color.white : Color.primary))
+            }
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
             Spacer(minLength: 4)
             if let count {
                 Text("\(count)")

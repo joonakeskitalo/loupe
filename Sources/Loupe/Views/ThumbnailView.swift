@@ -6,6 +6,9 @@ struct ThumbnailView: View {
     let size: Double
     let isSelected: Bool
     var isFlagged: Bool = false
+    /// The item's color tag, if any (shows a colored swatch in the top-leading
+    /// corner, opposite the flag badge).
+    var colorTag: ColorTag? = nil
     /// When true, the filename caption under the thumbnail is hidden.
     var hideFilename: Bool = false
 
@@ -53,6 +56,17 @@ struct ThumbnailView: View {
                         .background(Color.orange, in: Circle())
                         .shadow(radius: 2)
                         .padding(6)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if let colorTag {
+                    Circle()
+                        .fill(colorTag.color)
+                        .frame(width: max(8, size * 0.08), height: max(8, size * 0.08))
+                        .overlay(Circle().stroke(.white, lineWidth: 1))
+                        .shadow(radius: 1)
+                        .padding(6)
+                        .help("\(colorTag.displayName) tag")
                 }
             }
             .overlay(

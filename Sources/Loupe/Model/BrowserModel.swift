@@ -183,9 +183,28 @@ final class BrowserModel {
     /// opened and gone when the window closes (the model is per-window).
     var flaggedItems: Set<MediaItem.ID> = []
 
-    /// When true, the grid shows only flagged items.
+    /// When true, the grid shows only flagged items. Mutually exclusive with
+    /// `colorTagFilter` — the Library section shows one view at a time, so
+    /// turning this on clears any active color-tag filter.
     var showFlaggedOnly = false {
-        didSet { clampSelection() }
+        didSet {
+            if showFlaggedOnly, colorTagFilter != nil { colorTagFilter = nil }
+            clampSelection()
+        }
+    }
+
+    /// Color tags attached to files, keyed by item ID. In-session only, exactly
+    /// like `flaggedItems`: cleared when a new folder is opened and gone when
+    /// the window closes (the model is per-window). An item has at most one tag.
+    var colorTags: [MediaItem.ID: ColorTag] = [:]
+
+    /// When set, the grid shows only items carrying this color tag. `nil` means
+    /// no color filter is active. Mutually exclusive with `showFlaggedOnly`.
+    var colorTagFilter: ColorTag? {
+        didSet {
+            if colorTagFilter != nil, showFlaggedOnly { showFlaggedOnly = false }
+            clampSelection()
+        }
     }
 
     /// Active media-type chip filters (empty = all types).
@@ -494,6 +513,10 @@ final class BrowserModel {
             base = base.filter { flaggedItems.contains($0.id) }
         }
 
+        if let colorTagFilter {
+            base = base.filter { colorTags[$0.id] == colorTagFilter }
+        }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             base = base.filter {
@@ -649,6 +672,9 @@ final class BrowserModel {
     var searchScopeName: String {
         if showFlaggedOnly {
             return "Flagged"
+        }
+        if let colorTagFilter {
+            return "\(colorTagFilter.displayName) Tag"
         }
         if mode == .folders, !selectedFolders.isEmpty {
             if selectedFolders.count == 1, let folder = selectedFolders.first {
@@ -1109,6 +1135,71 @@ final class BrowserModel {
 
     var flaggedCount: Int { flaggedItems.count }
 
+    // MARK: - Color tags
+
+    /// The color tag on the given item, or `nil` if untagged.
+    func colorTag(_ id: MediaItem.ID) -> ColorTag? {
+        colorTags[id]
+    }
+
+    /// Apply (or toggle off) a color tag on the given item, or on the whole
+    /// current selection. Mirrors `toggleFlag`'s targeting: a specific unselected
+    /// `item` acts on just that item; otherwise the action covers the selection.
+    ///
+    /// Toggle semantics: if every target already carries `tag`, the tag is
+    /// removed from them all; otherwise `tag` is applied to them all (replacing
+    /// any different tag they had).
+    func toggleColorTag(_ tag: ColorTag, item: MediaItem? = nil) {
+        let targets: [MediaItem.ID]
+        if let item, !selectedItems.contains(item.id) {
+            targets = [item.id]
+        } else if !selectedItems.isEmpty {
+            targets = Array(selectedItems)
+        } else if let item {
+            targets = [item.id]
+        } else {
+            return
+        }
+
+        let allTagged = targets.allSatisfy { colorTags[$0] == tag }
+        if allTagged {
+            for id in targets { colorTags[id] = nil }
+        } else {
+            for id in targets { colorTags[id] = tag }
+        }
+        clampSelection()
+    }
+
+    /// Remove any color tag from the given item(s) or the current selection.
+    func clearColorTag(item: MediaItem? = nil) {
+        let targets: [MediaItem.ID]
+        if let item, !selectedItems.contains(item.id) {
+            targets = [item.id]
+        } else if !selectedItems.isEmpty {
+            targets = Array(selectedItems)
+        } else if let item {
+            targets = [item.id]
+        } else {
+            return
+        }
+        for id in targets { colorTags[id] = nil }
+        clampSelection()
+    }
+
+    /// Remove every color tag in the window.
+    func clearColorTags() {
+        colorTags = [:]
+        clampSelection()
+    }
+
+    /// Number of items carrying the given color tag.
+    func colorTagCount(_ tag: ColorTag) -> Int {
+        colorTags.values.reduce(0) { $0 + ($1 == tag ? 1 : 0) }
+    }
+
+    /// Total number of tagged items (any color).
+    var taggedCount: Int { colorTags.count }
+
     // MARK: - File actions
 
     /// URLs for the current selection, falling back to a specific item when the
@@ -1213,6 +1304,7 @@ final class BrowserModel {
             )
         }
         flaggedItems.subtract(trashed)
+        for url in trashed { colorTags[url] = nil }
         rebuildMerged()
     }
 
@@ -1253,6 +1345,8 @@ final class BrowserModel {
         var base: String
         if showFlaggedOnly {
             base = "\(count) flagged \(noun)"
+        } else if let colorTagFilter {
+            base = "\(count) \(colorTagFilter.displayName.lowercased())-tagged \(noun)"
         } else if mode == .folders, !selectedFolders.isEmpty {
             if selectedFolders.count == 1, let folder = selectedFolders.first {
                 base = "\(count) \(noun) in \(folder.lastPathComponent)"

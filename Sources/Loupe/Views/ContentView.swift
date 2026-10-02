@@ -180,16 +180,29 @@ struct ContentView: View {
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
 
-            // Quick sort presets.
+            // Quick sort presets. Moved off ⌃1–⌃3 (now color-tag keys) to the
+            // function row: F2 Name, F3 Size, F4 File Type. (F1 is Reveal in
+            // Finder.) NSFxFunctionKey code points: F2 U+F705, F3 U+F706,
+            // F4 U+F707.
             Button("Sort by Name (A→Z)") { model.sortByNameAscending() }
-                .keyboardShortcut("1", modifiers: .control)
+                .keyboardShortcut(KeyEquivalent("\u{F705}"), modifiers: [])
                 .disabled(searchFocused)
             Button("Sort by Size (Largest First)") { model.sortBySizeDescending() }
-                .keyboardShortcut("2", modifiers: .control)
+                .keyboardShortcut(KeyEquivalent("\u{F706}"), modifiers: [])
                 .disabled(searchFocused)
             Button("Sort by File Type (A→Z)") { model.sortByTypeAscending() }
-                .keyboardShortcut("3", modifiers: .control)
+                .keyboardShortcut(KeyEquivalent("\u{F707}"), modifiers: [])
                 .disabled(searchFocused)
+
+            // Color-tag hotkeys: ⌃1 red, ⌃2 blue, ⌃3 green, ⌃4 orange,
+            // ⌃5 purple. Pressing the same tag again clears it. Gated like the
+            // flag keys: needs a selection, suspended while searching. (The
+            // viewer carries its own copies so it can tag from inside.)
+            ForEach(Array(ColorTag.allInHotkeyOrder.enumerated()), id: \.element) { index, tag in
+                Button("Tag \(tag.displayName)") { model.toggleColorTag(tag) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
+                    .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
+            }
 
             // Escape clears the selection; if nothing is selected it clears the
             // active type/extension filters instead.
@@ -257,19 +270,19 @@ struct ContentView: View {
                     Button {
                         model.sortByNameAscending()
                     } label: {
-                        Label("Name (A→Z)  ⌃1", systemImage: model.isSort(.name, ascending: true) ? "checkmark" : "textformat")
+                        Label("Name (A→Z)  F2", systemImage: model.isSort(.name, ascending: true) ? "checkmark" : "textformat")
                     }
 
                     Button {
                         model.sortBySizeDescending()
                     } label: {
-                        Label("Size (Largest First)  ⌃2", systemImage: model.isSort(.size, ascending: false) ? "checkmark" : "arrow.down")
+                        Label("Size (Largest First)  F3", systemImage: model.isSort(.size, ascending: false) ? "checkmark" : "arrow.down")
                     }
 
                     Button {
                         model.sortByTypeAscending()
                     } label: {
-                        Label("File Type (A→Z)  ⌃3", systemImage: model.isSort(.type, ascending: true) ? "checkmark" : "doc")
+                        Label("File Type (A→Z)  F4", systemImage: model.isSort(.type, ascending: true) ? "checkmark" : "doc")
                     }
                 }
 
