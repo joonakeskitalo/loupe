@@ -30,11 +30,29 @@ struct BrowserGridView: View {
     }
 
     /// Number of columns that fit in a given width, matching the adaptive grid.
+    /// Used as a fallback before any cells have reported their frames.
     private func columnCount(for width: CGFloat) -> Int {
         let usable = width - padding * 2
         guard usable > 0 else { return 1 }
         let count = Int((usable + spacing) / (cellWidth + spacing))
         return max(1, count)
+    }
+
+    /// The number of columns actually on screen, derived from the rendered cell
+    /// frames rather than a width estimate. The adaptive `LazyVGrid` decides the
+    /// real column count internally, and an external window-snapping tool can
+    /// resize the grid without the width-based `onChange` producing a count that
+    /// matches what SwiftUI laid out. Counting cells that share the first row's
+    /// `minY` reads the layout as it truly is, so Up/Down always jump one real
+    /// row. Falls back to the cached estimate until frames are reported.
+    private var liveColumnCount: Int {
+        guard !cellFrames.isEmpty else { return max(1, model.gridColumnCount) }
+        // The top row is the set of cells with the smallest minY; group with a
+        // tolerance so sub-pixel differences don't split a single row.
+        let minY = cellFrames.values.map(\.minY).min() ?? 0
+        let tolerance: CGFloat = 1
+        let topRow = cellFrames.values.filter { abs($0.minY - minY) <= tolerance }
+        return max(1, topRow.count)
     }
 
     var body: some View {
@@ -250,7 +268,10 @@ struct BrowserGridView: View {
 
         model.selectFirstIfNeeded()
         let extend = press.modifiers.contains(.shift)
-        model.moveSelection(direction, columns: model.gridColumnCount, extend: extend)
+        // Use the live, rendered column count so Up/Down jump exactly one row
+        // even if an external resize changed the grid without the width-based
+        // observer catching up.
+        model.moveSelection(direction, columns: liveColumnCount, extend: extend)
         return .handled
     }
 
