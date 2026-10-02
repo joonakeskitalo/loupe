@@ -34,6 +34,13 @@ struct BrowserListView: View {
         2 + zoomFraction * (6 - 2)
     }
 
+    /// At the very smallest row size, rows show a file-type icon instead of a
+    /// generated thumbnail — the thumbnail is too tiny to read there, and
+    /// skipping it avoids the thumbnail work entirely at the most compact zoom.
+    private var showsThumbnail: Bool {
+        zoomFraction > 0.001
+    }
+
     var body: some View {
         let items = model.displayedItems
         Group {
@@ -52,6 +59,7 @@ struct BrowserListView: View {
                                 ListRowView(
                                     item: item,
                                     thumbSize: thumbSize,
+                                    showsThumbnail: showsThumbnail,
                                     verticalPadding: rowVerticalPadding,
                                     isSelected: model.selectedItems.contains(item.id),
                                     isFlagged: model.isFlagged(item.id)
@@ -273,6 +281,9 @@ enum ListRowMetrics {
 private struct ListRowView: View {
     let item: MediaItem
     let thumbSize: Double
+    /// When false (smallest row size), show a file-type icon instead of a
+    /// generated thumbnail and skip thumbnail loading entirely.
+    var showsThumbnail: Bool = true
     let verticalPadding: Double
     let isSelected: Bool
     var isFlagged: Bool = false
@@ -341,7 +352,9 @@ private struct ListRowView: View {
         .background(
             isSelected ? Color.accentColor.opacity(0.15) : Color.clear
         )
-        .task(id: item.id) { await loadThumbnail() }
+        // Only load a thumbnail when the row actually shows one; at the
+        // smallest size we display a file-type icon and skip the work.
+        .task(id: showsThumbnail ? item.id : nil) { await loadThumbnail() }
         // Metadata (codec/dimensions) is only probed for video/image rows, and
         // an already-resolved value is read synchronously from the main-actor
         // cache below — so most rows never spawn a task here while scrolling.
@@ -384,26 +397,33 @@ private struct ListRowView: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.secondary.opacity(0.12))
+        if showsThumbnail {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.secondary.opacity(0.12))
 
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(2)
-            } else {
-                Image(systemName: item.kind.fallbackSymbol)
-                    .font(.system(size: thumbSize * 0.4))
-                    .foregroundStyle(.secondary)
-            }
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .padding(2)
+                } else {
+                    Image(systemName: item.kind.fallbackSymbol)
+                        .font(.system(size: thumbSize * 0.4))
+                        .foregroundStyle(.secondary)
+                }
 
-            if item.kind == .video {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: thumbSize * 0.32))
-                    .foregroundStyle(.white, .black.opacity(0.5))
+                if item.kind == .video {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: thumbSize * 0.32))
+                        .foregroundStyle(.white, .black.opacity(0.5))
+                }
             }
+        } else {
+            // Smallest row size: a plain file-type icon, no thumbnail.
+            Image(systemName: item.kind.fallbackSymbol)
+                .font(.system(size: thumbSize * 0.6))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -413,6 +433,7 @@ private struct ListRowView: View {
     }
 
     private func loadThumbnail() async {
+        guard showsThumbnail else { return }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: thumbSize, height: thumbSize)
         if let result = await ThumbnailProvider.shared.thumbnail(for: item.url, size: target, scale: scale) {
