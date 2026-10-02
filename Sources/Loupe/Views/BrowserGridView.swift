@@ -131,8 +131,17 @@ struct BrowserGridView: View {
                 // focus unconditionally here would steal it from the search
                 // field mid-type.
                 .onAppear { if canAutoFocus { gridFocused = true } }
-                // Single unfiltered handler so we can read modifier keys
-                // (Shift) alongside the arrow key from the KeyPress.
+                // Arrow keys get their own handler, matched on the specific
+                // keys. This is what makes them take precedence over the
+                // enclosing ScrollView's built-in arrow-key scrolling —
+                // ↑/↓ would otherwise scroll the grid instead of moving the
+                // selection (←/→ have no scroll action, which is why only
+                // up/down appeared broken). The KeyPress still carries the
+                // modifiers, so Shift-extend keeps working.
+                .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
+                    handleKey(press)
+                }
+                // Everything else (⌘A, F) via a catch-all handler.
                 .onKeyPress { press in handleKey(press) }
             }
         }
