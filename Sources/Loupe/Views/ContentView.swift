@@ -302,6 +302,36 @@ struct ContentView: View {
                 .help(model.viewLayout == .grid ? "Thumbnail size" : "Row size")
         }
 
+        ToolbarItem(id: "classify") {
+            // On-device AI classification. While a pass runs this shows a
+            // determinate spinner with "done/total"; otherwise it's a sparkles
+            // button that classifies the selection (or the whole scope when
+            // nothing is selected). Hidden entirely when there are no images.
+            if model.isClassifying {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(model.classifyProgress),
+                                 total: Double(max(1, model.classifyTotal)))
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                    Text("\(model.classifyProgress)/\(model.classifyTotal)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .help("Classifying images on-device…")
+            } else if model.hasClassifiableImages {
+                Button {
+                    if model.selectedMediaItems.contains(where: { $0.kind == .image }) {
+                        model.classifySelection()
+                    } else {
+                        model.classifyAllImages()
+                    }
+                } label: {
+                    Label("Classify", systemImage: "sparkles")
+                }
+                .help("Classify images with Apple's on-device models (⇧⌘L)")
+            }
+        }
+
         ToolbarItem {
             Button {
                 model.selectFirstIfNeeded()

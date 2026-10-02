@@ -66,6 +66,25 @@ struct LoupeCommands: Commands {
             }
             .disabled(!hasSelection)
 
+            Divider()
+
+            // On-device AI classification (Apple's Vision classifier, refined
+            // by the Foundation Models LLM when Apple Intelligence is on). Runs
+            // over the current selection's images, or the whole scope when
+            // nothing is selected.
+            Button(classifyTitle) {
+                if hasSelection {
+                    model?.classifySelection()
+                } else {
+                    model?.classifyAllImages()
+                }
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
+            .disabled(!canClassify)
+
+            Button("Clear AI Categories") { model?.clearAICategories() }
+                .disabled((model?.classifiedCount ?? 0) == 0)
+
             Button("Move to Trash") { model?.moveToTrash() }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 // A disabled Button releases its shortcut, so gating on
@@ -124,6 +143,12 @@ struct LoupeCommands: Commands {
             Toggle("Show Flagged Only", isOn: showFlaggedOnlyBinding)
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(model == nil)
+
+            // Break the grid/list into sections, one per AI category. Only
+            // meaningful once something has been classified.
+            Toggle("Group by Category", isOn: groupByCategoryBinding)
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(model == nil || (model?.classifiedCount ?? 0) == 0)
 
             Divider()
 
@@ -187,6 +212,24 @@ struct LoupeCommands: Commands {
         return count > 1 ? "Copy \(count) Files" : "Copy"
     }
 
+    /// Whether a classify action has any image to act on right now: images in
+    /// the selection, or any image in the scope when nothing is selected.
+    private var canClassify: Bool {
+        guard let model, !model.isClassifying else { return false }
+        if hasSelection {
+            return model.selectedMediaItems.contains { $0.kind == .image }
+        }
+        return model.hasClassifiableImages
+    }
+
+    private var classifyTitle: String {
+        if model?.isClassifying == true { return "Classifying…" }
+        let selectedImages = model?.selectedMediaItems.filter { $0.kind == .image }.count ?? 0
+        if selectedImages > 1 { return "Classify \(selectedImages) Images with AI" }
+        if hasSelection && selectedImages == 1 { return "Classify Image with AI" }
+        return "Classify All Images with AI"
+    }
+
     // MARK: - Bindings into the focused model
     //
     // Menu `Picker`/`Toggle` need bindings. The focused model is a reference
@@ -205,6 +248,7 @@ struct LoupeCommands: Commands {
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
+    private var groupByCategoryBinding: Binding<Bool> { binding(\.groupByCategory, default: false) }
     private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
     private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }
 }

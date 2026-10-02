@@ -9,6 +9,9 @@ struct ThumbnailView: View {
     /// The item's color tag, if any (shows a colored swatch in the top-leading
     /// corner, opposite the flag badge).
     var colorTag: ColorTag? = nil
+    /// The AI-assigned category, if the image has been classified. Shown as a
+    /// small caption pill in the bottom-leading corner.
+    var aiCategory: String? = nil
     /// When true, the filename caption under the thumbnail is hidden.
     var hideFilename: Bool = false
 
@@ -67,6 +70,25 @@ struct ThumbnailView: View {
                         .shadow(radius: 1)
                         .padding(6)
                         .help("\(colorTag.displayName) tag")
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let aiCategory, size >= 110 {
+                    // Solid dark fill (not a translucent material) with white
+                    // text and a soft shadow so the label stays legible over
+                    // any image, light or dark — the same high-contrast
+                    // approach as the flag badge.
+                    Label(aiCategory, systemImage: "sparkles")
+                        .font(.system(size: max(9, size * 0.07), weight: .medium))
+                        .lineLimit(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.6), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        .padding(6)
+                        .help("AI category: \(aiCategory)")
                 }
             }
             .overlay(

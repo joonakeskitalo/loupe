@@ -207,6 +207,40 @@ final class BrowserModel {
         }
     }
 
+    // MARK: - AI categories
+
+    /// AI-assigned categories keyed by item ID, produced on-device by
+    /// `ImageClassifier` (Apple's Vision classifier, refined by the Foundation
+    /// Models LLM when Apple Intelligence is available). In-session only, just
+    /// like `flaggedItems`/`colorTags`: cleared when a new folder is opened and
+    /// gone when the window closes. An item has at most one category.
+    private(set) var aiCategories: [MediaItem.ID: String] = [:]
+
+    /// When set, the grid shows only items the classifier placed in this
+    /// category. `nil` means no category filter is active.
+    var aiCategoryFilter: String? {
+        didSet { clampSelection() }
+    }
+
+    /// When true, the grid/list break the displayed items into sections, one
+    /// per AI category (plus an "Unclassified" section for the rest).
+    var groupByCategory = false {
+        didSet { invalidateDisplayCache() }
+    }
+
+    /// True while a classification pass is running, so the UI can show progress
+    /// and disable a second trigger.
+    private(set) var isClassifying = false
+
+    /// Number of images classified so far in the running pass, and the total
+    /// the pass set out to classify. Both reset when a pass starts; the view
+    /// reads them to render a progress indicator.
+    private(set) var classifyProgress = 0
+    private(set) var classifyTotal = 0
+
+    /// Guards against launching more than one classification pass at a time.
+    private var isRunningClassification = false
+
     /// Active media-type chip filters (empty = all types).
     var selectedKinds: Set<MediaKind> = [] {
         didSet { clampSelection() }
@@ -437,6 +471,11 @@ final class BrowserModel {
         let present = Set(allItems.map(\.id))
         flaggedItems.formIntersection(present)
         colorTags = colorTags.filter { present.contains($0.key) }
+        aiCategories = aiCategories.filter { present.contains($0.key) }
+        // Drop a category filter that no longer matches anything.
+        if let filter = aiCategoryFilter, !aiCategories.values.contains(filter) {
+            aiCategoryFilter = nil
+        }
     }
 
     /// Drops any active type/extension chip filters that no longer have a
@@ -528,6 +567,10 @@ final class BrowserModel {
 
         if let colorTagFilter {
             base = base.filter { colorTags[$0.id] == colorTagFilter }
+        }
+
+        if let aiCategoryFilter {
+            base = base.filter { aiCategories[$0.id] == aiCategoryFilter }
         }
 
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -688,6 +731,9 @@ final class BrowserModel {
         }
         if let colorTagFilter {
             return "\(colorTagFilter.displayName) Tag"
+        }
+        if let aiCategoryFilter {
+            return aiCategoryFilter
         }
         if mode == .folders, !selectedFolders.isEmpty {
             if selectedFolders.count == 1, let folder = selectedFolders.first {
@@ -1322,6 +1368,170 @@ final class BrowserModel {
     /// Total number of tagged items (any color).
     var taggedCount: Int { colorTags.count }
 
+    // MARK: - AI classification
+
+    /// The AI category for the given item, or `nil` if it hasn't been
+    /// classified (or was classified with no usable result).
+    func aiCategory(_ id: MediaItem.ID) -> String? {
+        guard let category = aiCategories[id], !category.isEmpty else { return nil }
+        return category
+    }
+
+    /// Distinct categories currently assigned, sorted by descending item count
+    /// then alphabetically. Drives the category filter chips and the sidebar.
+    var aiCategoryList: [String] {
+        var counts: [String: Int] = [:]
+        for category in aiCategories.values where !category.isEmpty {
+            counts[category, default: 0] += 1
+        }
+        return counts.keys.sorted { lhs, rhs in
+            let (l, r) = (counts[lhs] ?? 0, counts[rhs] ?? 0)
+            if l != r { return l > r }
+            return lhs.localizedStandardCompare(rhs) == .orderedAscending
+        }
+    }
+
+    /// Number of items the classifier placed in `category`.
+    func aiCategoryCount(_ category: String) -> Int {
+        aiCategories.values.reduce(0) { $0 + ($1 == category ? 1 : 0) }
+    }
+
+    /// Total number of classified items (across all categories).
+    var classifiedCount: Int {
+        aiCategories.values.reduce(0) { $0 + ($1.isEmpty ? 0 : 1) }
+    }
+
+    /// Whether there are any image items in the current scope that could be
+    /// classified — used to enable/disable the "Classify" action.
+    var hasClassifiableImages: Bool {
+        scopedItems.contains { $0.kind == .image }
+    }
+
+    /// The displayed items split into sections for grouped rendering: one
+    /// section per AI category (ordered like `aiCategoryList`), with everything
+    /// still-unclassified gathered into a trailing "Unclassified" section.
+    /// Items within a section keep the active sort order. Views read this only
+    /// when `groupByCategory` is on.
+    struct CategoryGroup: Identifiable {
+        let category: String        // "" is the Unclassified bucket
+        let items: [MediaItem]
+        var id: String { category.isEmpty ? "\u{0}unclassified" : category }
+        /// Section header title; the empty category becomes "Unclassified".
+        var title: String { category.isEmpty ? "Unclassified" : category }
+    }
+
+    var groupedDisplayedItems: [CategoryGroup] {
+        let items = displayedItems
+        // Preserve display order within each bucket by walking items once and
+        // appending into per-category arrays.
+        var buckets: [String: [MediaItem]] = [:]
+        for item in items {
+            let key = aiCategory(item.id) ?? ""
+            buckets[key, default: []].append(item)
+        }
+        var groups: [CategoryGroup] = []
+        for category in aiCategoryList where buckets[category] != nil {
+            groups.append(CategoryGroup(category: category, items: buckets[category]!))
+        }
+        if let unclassified = buckets[""], !unclassified.isEmpty {
+            groups.append(CategoryGroup(category: "", items: unclassified))
+        }
+        return groups
+    }
+
+    /// Classify the current selection (or a specific right-clicked item) with
+    /// the on-device models. Non-image items are skipped. Results stream into
+    /// `aiCategories` as each image finishes so the UI fills in progressively.
+    func classifySelection(_ item: MediaItem? = nil) {
+        let urls = Set(actionURLs(preferring: item))
+        let targets = (item.map { [$0] } ?? selectedMediaItems)
+            .filter { $0.kind == .image && urls.contains($0.url) }
+        classify(items: targets.isEmpty ? imageTargets(from: urls) : targets)
+    }
+
+    /// Classify every image in the current scope that hasn't been classified
+    /// yet. The common entry point for a "Classify All" / toolbar action.
+    func classifyAllImages() {
+        let pending = scopedItems.filter {
+            $0.kind == .image && aiCategories[$0.id] == nil
+        }
+        classify(items: pending)
+    }
+
+    /// Images matching the given URL set (used when a right-click targets an
+    /// unselected item or a multi-selection).
+    private func imageTargets(from urls: Set<URL>) -> [MediaItem] {
+        allItems.filter { $0.kind == .image && urls.contains($0.url) }
+    }
+
+    /// Runs a bounded, concurrent classification pass over `items`, publishing
+    /// each result to the observable `aiCategories` map as it lands. Mirrors
+    /// `prefetchCodecs`: a single pass runs at a time, work is windowed so we
+    /// don't spawn thousands of tasks at once, and results are written on the
+    /// main actor so the grid re-sorts/re-groups progressively.
+    private func classify(items: [MediaItem]) {
+        guard !isRunningClassification else { return }
+        // Only images, and only ones not already done.
+        let pending = items.filter { $0.kind == .image && aiCategories[$0.id] == nil }
+        guard !pending.isEmpty else { return }
+
+        isRunningClassification = true
+        isClassifying = true
+        classifyProgress = 0
+        classifyTotal = pending.count
+
+        Task { @MainActor in
+            let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+            var iterator = pending.makeIterator()
+
+            await withTaskGroup(of: (MediaItem.ID, String?).self) { group in
+                var inFlight = 0
+
+                func addNext() {
+                    guard let item = iterator.next() else { return }
+                    inFlight += 1
+                    group.addTask {
+                        let category = await ImageClassifier.shared.category(for: item.url)
+                        return (item.id, category)
+                    }
+                }
+
+                // Prime the window.
+                for _ in 0..<maxConcurrent { addNext() }
+
+                while inFlight > 0, let (id, category) = await group.next() {
+                    inFlight -= 1
+                    self.storeCategory(category, for: id)
+                    addNext()
+                }
+            }
+
+            self.isClassifying = false
+            self.isRunningClassification = false
+        }
+    }
+
+    /// Writes one classification result into the observable map and bumps the
+    /// progress counter. Called on the main actor as each image resolves.
+    private func storeCategory(_ category: String?, for id: MediaItem.ID) {
+        aiCategories[id] = category ?? ""
+        classifyProgress += 1
+        // Grouping and the category filter both depend on this map, so the
+        // memoized displayed list may now be stale.
+        if groupByCategory || aiCategoryFilter != nil {
+            invalidateDisplayCache()
+        }
+    }
+
+    /// Clear every AI category in the window and drop any active category
+    /// filter/grouping so the grid returns to a flat, unfiltered view.
+    func clearAICategories() {
+        aiCategories = [:]
+        aiCategoryFilter = nil
+        groupByCategory = false
+        clampSelection()
+    }
+
     // MARK: - File actions
 
     /// URLs for the current selection, falling back to a specific item when the
@@ -1483,6 +1693,7 @@ final class BrowserModel {
         }
         flaggedItems.subtract(trashed)
         for url in trashed { colorTags[url] = nil }
+        for url in trashed { aiCategories[url] = nil }
         rebuildMerged()
     }
 

@@ -57,42 +57,17 @@ struct BrowserListView: View {
                     // headers stay visible while the rows scroll underneath.
                     header
                     ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(items) { item in
-                                ListRowView(
-                                    item: item,
-                                    thumbSize: thumbSize,
-                                    showsThumbnail: showsThumbnail,
-                                    verticalPadding: rowVerticalPadding,
-                                    isSelected: model.selectedItems.contains(item.id),
-                                    isFlagged: model.isFlagged(item.id),
-                                    colorTag: model.colorTag(item.id)
-                                )
-                                .id(item.id)
-                                .contentShape(Rectangle())
-                                .onClick(
-                                    single: { mods in
-                                        suppressNextScroll = true
-                                        if mods.command {
-                                            model.toggleSelection(item.id)
-                                        } else if mods.shift {
-                                            model.extendSelection(to: item.id)
-                                        } else {
-                                            model.selectOnly(item.id)
-                                        }
-                                        listFocused = true
-                                    },
-                                    double: { _ in
-                                        suppressNextScroll = true
-                                        if !model.selectedItems.contains(item.id) {
-                                            model.selectOnly(item.id)
-                                        }
-                                        model.isViewerPresented = true
-                                    },
-                                    dragURLs: { dragURLs(for: item) },
-                                    isSelected: { model.selectedItems.contains(item.id) }
-                                )
-                                .contextMenu { contextMenu(for: item) }
+                        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                            if model.groupByCategory {
+                                ForEach(model.groupedDisplayedItems) { group in
+                                    Section {
+                                        ForEach(group.items) { item in row(for: item) }
+                                    } header: {
+                                        sectionHeader(group)
+                                    }
+                                }
+                            } else {
+                                ForEach(items) { item in row(for: item) }
                             }
                         }
                     }
@@ -251,6 +226,66 @@ struct BrowserListView: View {
         return .handled
     }
 
+    /// A single list row with all its selection, drag, and context-menu wiring.
+    /// Shared by the flat and grouped layouts so both behave identically.
+    @ViewBuilder
+    private func row(for item: MediaItem) -> some View {
+        ListRowView(
+            item: item,
+            thumbSize: thumbSize,
+            showsThumbnail: showsThumbnail,
+            verticalPadding: rowVerticalPadding,
+            isSelected: model.selectedItems.contains(item.id),
+            isFlagged: model.isFlagged(item.id),
+            colorTag: model.colorTag(item.id),
+            aiCategory: model.aiCategory(item.id)
+        )
+        .id(item.id)
+        .contentShape(Rectangle())
+        .onClick(
+            single: { mods in
+                suppressNextScroll = true
+                if mods.command {
+                    model.toggleSelection(item.id)
+                } else if mods.shift {
+                    model.extendSelection(to: item.id)
+                } else {
+                    model.selectOnly(item.id)
+                }
+                listFocused = true
+            },
+            double: { _ in
+                suppressNextScroll = true
+                if !model.selectedItems.contains(item.id) {
+                    model.selectOnly(item.id)
+                }
+                model.isViewerPresented = true
+            },
+            dragURLs: { dragURLs(for: item) },
+            isSelected: { model.selectedItems.contains(item.id) }
+        )
+        .contextMenu { contextMenu(for: item) }
+    }
+
+    /// A pinned category section header for the grouped list layout.
+    @ViewBuilder
+    private func sectionHeader(_ group: BrowserModel.CategoryGroup) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: group.category.isEmpty ? "questionmark.circle" : "sparkles")
+                .foregroundStyle(.secondary)
+            Text(group.title)
+                .font(.headline)
+            Text("\(group.items.count)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+
     @ViewBuilder
     private func contextMenu(for item: MediaItem) -> some View {
         let count = model.actionURLs(preferring: item).count
@@ -270,6 +305,13 @@ struct BrowserListView: View {
         }
 
         colorTagMenu(for: item, suffix: suffix)
+
+        if classifyTargetCount(for: item) > 0 {
+            Button("Classify with AI\(suffix)", systemImage: "sparkles") {
+                model.classifySelection(item)
+            }
+            .disabled(model.isClassifying)
+        }
 
         Divider()
 
@@ -293,6 +335,16 @@ struct BrowserListView: View {
         // buttons would claim ⌘⌫ at once and fight the single global handler in
         // ContentView — the cause of the key working only sometimes. The global
         // hotkey covers ⌘⌫; the menu still shows it as a hint.
+    }
+
+    /// How many image items a classify action would act on for `item`: the
+    /// image(s) in the selection when the clicked row is part of it, else just
+    /// the clicked row if it's an image. Zero hides the menu entry.
+    private func classifyTargetCount(for item: MediaItem) -> Int {
+        if model.selectedItems.contains(item.id) {
+            return model.selectedMediaItems.filter { $0.kind == .image }.count
+        }
+        return item.kind == .image ? 1 : 0
     }
 
     private enum FlagState { case allFlagged, someOrNone }
@@ -347,6 +399,8 @@ private struct ListRowView: View {
     let isSelected: Bool
     var isFlagged: Bool = false
     var colorTag: ColorTag? = nil
+    /// AI-assigned category, if classified. Shown as a small pill after the name.
+    var aiCategory: String? = nil
 
     @State private var image: NSImage?
     /// Codec + pixel dimensions, probed lazily for video and image rows.
@@ -394,10 +448,23 @@ private struct ListRowView: View {
                     }
                 }
 
-            Text(item.name)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Text(item.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if let aiCategory {
+                    Label(aiCategory, systemImage: "sparkles")
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
+                        .help("AI category: \(aiCategory)")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             typeColumn
                 .frame(width: ListRowMetrics.typeWidth, alignment: .leading)

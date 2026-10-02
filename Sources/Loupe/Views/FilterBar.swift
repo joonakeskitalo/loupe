@@ -59,7 +59,8 @@ struct FilterBar: View {
         // but always keep the bar up while a filter is active, otherwise
         // changing to a folder whose scope has just one kind would hide the bar
         // (and its Clear button) with the filter still silently applied.
-        if kinds.count > 1 || exts.count > 1 || model.hasActiveChipFilters {
+        if kinds.count > 1 || exts.count > 1 || model.hasActiveChipFilters
+            || !model.aiCategoryList.isEmpty || model.aiCategoryFilter != nil {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(kinds) { chip in
@@ -87,10 +88,32 @@ struct FilterBar: View {
                         }
                     }
 
-                    if model.hasActiveChipFilters {
+                    // AI category chips, shown once at least one image has been
+                    // classified. A plain click filters to that category;
+                    // clicking the active one clears the filter.
+                    let categories = model.aiCategoryList
+                    if !categories.isEmpty {
+                        if !kinds.isEmpty || !exts.isEmpty {
+                            Divider().frame(height: 20)
+                        }
+                        ForEach(categories, id: \.self) { category in
+                            FilterChip(
+                                title: category,
+                                systemImage: "sparkles",
+                                count: model.aiCategoryCount(category),
+                                isSelected: model.aiCategoryFilter == category
+                            ) { _ in
+                                model.aiCategoryFilter =
+                                    model.aiCategoryFilter == category ? nil : category
+                            }
+                        }
+                    }
+
+                    if model.hasActiveChipFilters || model.aiCategoryFilter != nil {
                         Divider().frame(height: 20)
                         Button {
                             model.clearChipFilters()
+                            model.aiCategoryFilter = nil
                         } label: {
                             Label("Clear", systemImage: "xmark.circle.fill")
                                 .font(.callout)
@@ -98,7 +121,7 @@ struct FilterBar: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
-                        .help("Clear type and extension filters")
+                        .help("Clear type, extension, and category filters")
                     }
                 }
                 .padding(.horizontal, 16)

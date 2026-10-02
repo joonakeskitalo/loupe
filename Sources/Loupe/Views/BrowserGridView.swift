@@ -52,6 +52,86 @@ struct BrowserGridView: View {
         }
     }
 
+    /// Position of each item in the full display order, so a grouped layout can
+    /// still warm neighbors across section boundaries (prefetch is driven by a
+    /// cell's index into the flat `displayedItems`, not its index within a
+    /// section). Rebuilt only when grouping is active.
+    private var globalIndex: [URL: Int] {
+        guard model.groupByCategory else { return [:] }
+        var map: [URL: Int] = [:]
+        for (i, item) in model.displayedItems.enumerated() { map[item.id] = i }
+        return map
+    }
+
+    /// A single grid cell: the thumbnail plus all its selection, drag, prefetch
+    /// and context-menu wiring. Shared by the flat and grouped layouts so both
+    /// behave identically. `index` is the item's position in the full display
+    /// order, used to warm the following thumbnails.
+    @ViewBuilder
+    private func cell(for item: MediaItem, index: Int, in items: [MediaItem]) -> some View {
+        ThumbnailView(
+            item: item,
+            size: model.thumbnailSize,
+            isSelected: model.selectedItems.contains(item.id),
+            isFlagged: model.isFlagged(item.id),
+            colorTag: model.colorTag(item.id),
+            aiCategory: model.aiCategory(item.id),
+            hideFilename: model.hideFilenames
+        )
+        .id(item.id)
+        // As the grid instantiates this cell (which LazyVGrid does just before
+        // it scrolls into view), warm the next few items at low priority so a
+        // continued scroll finds them ready. Visible cells still take priority.
+        .onAppear { prefetchAhead(from: index, in: items) }
+        .reportCellFrame(id: item.id, in: gridSpace)
+        .contentShape(Rectangle())
+        // AppKit-level click handling: selection fires on mouse-down with no
+        // double-click delay. Command toggles, Shift extends a range.
+        .onClick(
+            single: { mods in
+                suppressNextScroll = true
+                if mods.command {
+                    model.toggleSelection(item.id)
+                } else if mods.shift {
+                    model.extendSelection(to: item.id)
+                } else {
+                    model.selectOnly(item.id)
+                }
+                gridFocused = true
+            },
+            double: { _ in
+                suppressNextScroll = true
+                if !model.selectedItems.contains(item.id) {
+                    model.selectOnly(item.id)
+                }
+                model.isViewerPresented = true
+            },
+            dragURLs: { dragURLs(for: item) },
+            isSelected: { model.selectedItems.contains(item.id) }
+        )
+        .contextMenu { contextMenu(for: item) }
+    }
+
+    /// A pinned category section header: the category name, an item count, and
+    /// a tap target that filters the grid to just that category.
+    @ViewBuilder
+    private func sectionHeader(_ group: BrowserModel.CategoryGroup) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: group.category.isEmpty ? "questionmark.circle" : "sparkles")
+                .foregroundStyle(.secondary)
+            Text(group.title)
+                .font(.headline)
+            Text("\(group.items.count)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+
     /// Number of columns that fit in a given width, matching the adaptive grid.
     /// Used as a fallback before any cells have reported their frames.
     private func columnCount(for width: CGFloat) -> Int {
@@ -91,51 +171,27 @@ struct BrowserGridView: View {
                 GeometryReader { geo in
                     ScrollViewReader { proxy in
                         ScrollView {
-                            LazyVGrid(columns: columns, spacing: spacing) {
-                                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                                    ThumbnailView(
-                                        item: item,
-                                        size: model.thumbnailSize,
-                                        isSelected: model.selectedItems.contains(item.id),
-                                        isFlagged: model.isFlagged(item.id),
-                                        colorTag: model.colorTag(item.id),
-                                        hideFilename: model.hideFilenames
-                                    )
-                                    .id(item.id)
-                                    // As the grid instantiates this cell (which
-                                    // LazyVGrid does just before it scrolls into
-                                    // view), warm the next few items at low
-                                    // priority so a continued scroll finds them
-                                    // ready. Visible cells still take priority.
-                                    .onAppear { prefetchAhead(from: index, in: items) }
-                                    .reportCellFrame(id: item.id, in: gridSpace)
-                                    .contentShape(Rectangle())
-                                    // AppKit-level click handling: selection fires
-                                    // on mouse-down with no double-click delay.
-                                    // Command toggles, Shift extends a range.
-                                    .onClick(
-                                        single: { mods in
-                                            suppressNextScroll = true
-                                            if mods.command {
-                                                model.toggleSelection(item.id)
-                                            } else if mods.shift {
-                                                model.extendSelection(to: item.id)
-                                            } else {
-                                                model.selectOnly(item.id)
+                            LazyVGrid(columns: columns, spacing: spacing, pinnedViews: [.sectionHeaders]) {
+                                if model.groupByCategory {
+                                    // Grouped: one section per AI category, with
+                                    // a pinned header. Cells warm themselves by
+                                    // their position in the full display order
+                                    // (globalIndex) so prefetch spans sections.
+                                    ForEach(model.groupedDisplayedItems) { group in
+                                        Section {
+                                            ForEach(group.items) { item in
+                                                cell(for: item,
+                                                     index: globalIndex[item.id] ?? 0,
+                                                     in: items)
                                             }
-                                            gridFocused = true
-                                        },
-                                        double: { _ in
-                                            suppressNextScroll = true
-                                            if !model.selectedItems.contains(item.id) {
-                                                model.selectOnly(item.id)
-                                            }
-                                            model.isViewerPresented = true
-                                        },
-                                        dragURLs: { dragURLs(for: item) },
-                                        isSelected: { model.selectedItems.contains(item.id) }
-                                    )
-                                    .contextMenu { contextMenu(for: item) }
+                                        } header: {
+                                            sectionHeader(group)
+                                        }
+                                    }
+                                } else {
+                                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                        cell(for: item, index: index, in: items)
+                                    }
                                 }
                             }
                             .padding(padding)
@@ -344,6 +400,13 @@ struct BrowserGridView: View {
 
         colorTagMenu(for: item, suffix: suffix)
 
+        if classifyTargetCount(for: item) > 0 {
+            Button("Classify with AI\(suffix)", systemImage: "sparkles") {
+                model.classifySelection(item)
+            }
+            .disabled(model.isClassifying)
+        }
+
         Divider()
 
         Button("Copy\(suffix)", systemImage: "doc.on.doc") {
@@ -366,6 +429,16 @@ struct BrowserGridView: View {
         // dozens of buttons would claim ⌘⌫ at once and fight the single global
         // handler in ContentView — the cause of the key working only sometimes.
         // The global hotkey covers ⌘⌫; the menu still shows it as a hint.
+    }
+
+    /// How many image items a classify action would act on for `item`: the
+    /// image(s) in the selection when the clicked item is part of it, else just
+    /// the clicked item if it's an image. Zero hides the menu entry.
+    private func classifyTargetCount(for item: MediaItem) -> Int {
+        if model.selectedItems.contains(item.id) {
+            return model.selectedMediaItems.filter { $0.kind == .image }.count
+        }
+        return item.kind == .image ? 1 : 0
     }
 
     private enum FlagState { case allFlagged, someOrNone }
