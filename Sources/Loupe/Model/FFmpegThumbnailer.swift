@@ -47,9 +47,20 @@ enum FFmpegThumbnailer {
         var codecCtxOpt: UnsafeMutablePointer<AVCodecContext>? = codecCtx
         defer { avcodec_free_context(&codecCtxOpt) }
 
-        guard avcodec_parameters_to_context(codecCtx, stream.pointee.codecpar) >= 0,
-              avcodec_open2(codecCtx, decoder, nil) >= 0
-        else {
+        guard avcodec_parameters_to_context(codecCtx, stream.pointee.codecpar) >= 0 else {
+            return nil
+        }
+
+        // Let the decoder use multiple threads. `thread_count = 0` asks
+        // libavcodec to pick a sensible count for the host, and allowing both
+        // frame- and slice-level threading lets it use whatever the codec
+        // supports. Decoding the handful of frames we sample is the dominant
+        // cost for .mkv/.webm, so parallelizing it meaningfully cuts the time
+        // for high-resolution clips. Set before avcodec_open2 so it takes hold.
+        codecCtx.pointee.thread_count = 0
+        codecCtx.pointee.thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE
+
+        guard avcodec_open2(codecCtx, decoder, nil) >= 0 else {
             return nil
         }
 

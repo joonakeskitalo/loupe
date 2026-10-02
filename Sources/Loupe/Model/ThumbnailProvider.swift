@@ -337,7 +337,11 @@ actor ThumbnailProvider {
             // monopolizing the cores.
             if image == nil, kind == .video {
                 await self?.acquireVideoSlot()
-                image = await Self.videoFrame(for: url, pixelSize: pixelSize)
+                image = await Self.videoFrame(
+                    for: url,
+                    pixelSize: pixelSize,
+                    priority: priority == .visible ? .userInitiated : .utility
+                )
                 await self?.releaseVideoSlot()
             }
 
@@ -432,7 +436,11 @@ actor ThumbnailProvider {
     ///
     /// `nonisolated` so it runs off the actor and never serializes other
     /// thumbnail work. Returns nil if no decoder can produce a frame.
-    nonisolated private static func videoFrame(for url: URL, pixelSize: CGSize) async -> NSImage? {
+    nonisolated private static func videoFrame(
+        for url: URL,
+        pixelSize: CGSize,
+        priority: TaskPriority
+    ) async -> NSImage? {
         if let image = await avFoundationFrame(for: url, pixelSize: pixelSize) {
             return image
         }
@@ -440,8 +448,10 @@ actor ThumbnailProvider {
         // AVFoundation couldn't decode this container. Decode a frame with the
         // bundled FFmpeg libraries on a background task so the demux/decode work
         // never touches the cooperative pool's forward-progress guarantees.
+        // The detached priority follows the request so a visible video decodes
+        // ahead of a prefetched one at the OS scheduler level.
         let maxPixel = Int(max(pixelSize.width, pixelSize.height).rounded())
-        return await Task.detached(priority: .utility) {
+        return await Task.detached(priority: priority) {
             FFmpegThumbnailer.thumbnail(for: url, maxPixelSize: max(1, maxPixel))
         }.value
     }
@@ -450,7 +460,14 @@ actor ThumbnailProvider {
     /// doesn't support (e.g. Matroska / WebM) so the caller can fall back.
     /// `pixelSize` is already in pixels, so it maps straight to `maximumSize`.
     nonisolated private static func avFoundationFrame(for url: URL, pixelSize: CGSize) async -> NSImage? {
-        let asset = AVURLAsset(url: url)
+        // Skip building a precise duration/timing index: a thumbnail doesn't
+        // need frame-accurate seeking, and for some containers that index
+        // requires scanning the whole file up front. This alone saves the
+        // bulk of the open cost on long videos.
+        let asset = AVURLAsset(
+            url: url,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
 
         // If there's no decodable video track, don't bother — let the caller
         // fall back to FFmpeg.
@@ -461,19 +478,20 @@ actor ThumbnailProvider {
 
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
-        generator.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
+        // Thumbnails don't need the exact requested frame — only something
+        // representative. Infinite tolerance lets AVFoundation return the
+        // nearest already-decodable keyframe instead of decoding forward from
+        // the previous keyframe to hit a precise time, which is the single
+        // biggest speedup here (zero tolerance is what makes thumbnailing slow).
+        generator.requestedTimeToleranceBefore = .positiveInfinity
+        generator.requestedTimeToleranceAfter = .positiveInfinity
         generator.maximumSize = pixelSize
 
-        // Seek a little past the start to avoid black lead-in frames, but clamp
-        // to the asset's duration so very short clips still produce a frame.
-        let time: CMTime
-        if let duration = try? await asset.load(.duration), duration.isNumeric, duration.seconds > 0 {
-            let target = min(1.0, duration.seconds * 0.1)
-            time = CMTime(seconds: target, preferredTimescale: 600)
-        } else {
-            time = CMTime(seconds: 1, preferredTimescale: 600)
-        }
+        // Aim a short way in to skip black lead-in frames. With infinite
+        // tolerance this snaps to whatever keyframe is nearest, so there's no
+        // need to load the duration first (one fewer async round trip) — very
+        // short clips simply resolve to their first keyframe.
+        let time = CMTime(seconds: 1, preferredTimescale: 600)
 
         do {
             let cgImage = try await generator.image(at: time).image
