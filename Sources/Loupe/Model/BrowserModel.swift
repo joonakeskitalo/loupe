@@ -615,10 +615,18 @@ final class BrowserModel {
     }
 
     /// Resolves the video codec for every video item that isn't cached yet,
-    /// storing results in `codecsByURL` as they arrive. Each store mutates the
-    /// observable dictionary, so a `.codec` sort re-runs and the view updates
-    /// incrementally. Safe to call repeatedly; a single pass runs at a time and
-    /// already-cached items are skipped.
+    /// used by the `.codec` sort.
+    ///
+    /// Two things keep this from making the list sluggish:
+    ///  - Probes run concurrently (bounded), so codecs resolve quickly instead
+    ///    of trickling in one `await` at a time.
+    ///  - Results are published to the observable `codecsByURL` in batches, not
+    ///    per item. Each publish re-runs the sort over the whole list, so
+    ///    writing once per item would re-sort N times; batching collapses that
+    ///    into a few re-sorts while still updating the view as data arrives.
+    ///
+    /// Safe to call repeatedly; a single pass runs at a time and already-cached
+    /// items are skipped.
     func prefetchCodecs() {
         guard !isPrefetchingCodecs else { return }
         let pending = allItems.filter {
@@ -627,17 +635,52 @@ final class BrowserModel {
         guard !pending.isEmpty else { return }
 
         isPrefetchingCodecs = true
-        Task {
-            for item in pending {
-                let meta = await VideoMetadataProvider.shared.metadata(
-                    for: item.url, kind: .video
-                )
-                // Store a value for every probed item (empty string when the
-                // codec is unknown) so we never re-probe it on the next pass.
-                self.codecsByURL[item.url] = meta.codec ?? ""
+        Task { @MainActor in
+            // Probe concurrently with a bounded window so we don't open a
+            // thousand files at once, collecting (url, codec) pairs as they
+            // finish and publishing them to the observable map in batches.
+            let maxConcurrent = 6
+            var batch: [(URL, String)] = []
+
+            await withTaskGroup(of: (URL, String).self) { group in
+                var iterator = pending.makeIterator()
+
+                func addNext() {
+                    guard let item = iterator.next() else { return }
+                    group.addTask {
+                        let meta = await VideoMetadataProvider.shared.metadata(
+                            for: item.url, kind: .video
+                        )
+                        // Empty string marks "probed, codec unknown" so the next
+                        // pass skips it.
+                        return (item.url, meta.codec ?? "")
+                    }
+                }
+
+                for _ in 0..<maxConcurrent { addNext() }
+
+                while let result = await group.next() {
+                    batch.append(result)
+                    // Publish a batch at a time so the view updates
+                    // progressively without a full re-sort per probe.
+                    if batch.count >= maxConcurrent {
+                        self.storeCodecs(batch)
+                        batch.removeAll(keepingCapacity: true)
+                    }
+                    addNext()
+                }
             }
+            self.storeCodecs(batch)
             self.isPrefetchingCodecs = false
         }
+    }
+
+    /// Publishes a batch of resolved codecs to the observable map in one go.
+    /// Called on the main actor; a single call triggers at most one re-sort of
+    /// the displayed list rather than one per probed file.
+    private func storeCodecs(_ results: [(URL, String)]) {
+        guard !results.isEmpty else { return }
+        for (url, codec) in results { codecsByURL[url] = codec }
     }
 
     /// Applies a sort field and direction together. Used by the quick-sort

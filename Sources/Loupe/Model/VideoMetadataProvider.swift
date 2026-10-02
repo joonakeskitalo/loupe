@@ -14,6 +14,19 @@ struct MediaMetadata: Sendable, Equatable {
     static let empty = MediaMetadata(codec: nil, pixelSize: nil)
 }
 
+/// A main-actor snapshot of already-resolved metadata, so list rows can render
+/// cached values synchronously on appear — no actor hop, no task, no transient
+/// `.empty` flicker. The provider populates it as probes finish; the view reads
+/// it directly during scrolling and only kicks off an async probe on a miss.
+@MainActor
+enum MediaMetadataCache {
+    private static var store: [URL: MediaMetadata] = [:]
+
+    static func cached(for url: URL) -> MediaMetadata? { store[url] }
+
+    static func set(_ value: MediaMetadata, for url: URL) { store[url] = value }
+}
+
 /// A pixel dimension pair, formatted as "W × H".
 struct PixelSize: Sendable, Equatable {
     let width: Int
@@ -81,6 +94,9 @@ actor VideoMetadataProvider {
     private func store(_ value: MediaMetadata, for url: URL) {
         cache[url] = value
         inFlight[url] = nil
+        // Publish to the synchronous main-actor snapshot so rows that mount
+        // later can read it without hopping back onto this actor.
+        Task { @MainActor in MediaMetadataCache.set(value, for: url) }
     }
 
     // MARK: - Image

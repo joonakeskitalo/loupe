@@ -342,7 +342,20 @@ private struct ListRowView: View {
             isSelected ? Color.accentColor.opacity(0.15) : Color.clear
         )
         .task(id: item.id) { await loadThumbnail() }
-        .task(id: item.id) { await loadMetadata() }
+        // Metadata (codec/dimensions) is only probed for video/image rows, and
+        // an already-resolved value is read synchronously from the main-actor
+        // cache below — so most rows never spawn a task here while scrolling.
+        .task(id: metadataNeedsProbe ? item.id : nil) { await probeMetadata() }
+        .onChange(of: item.id, initial: true) { _, _ in
+            metadata = MediaMetadataCache.cached(for: item.url) ?? .empty
+        }
+    }
+
+    /// True only for video/image rows whose metadata isn't cached yet, so the
+    /// probe task is attached only when there is real work to do.
+    private var metadataNeedsProbe: Bool {
+        guard item.kind == .video || item.kind == .image else { return false }
+        return MediaMetadataCache.cached(for: item.url) == nil
     }
 
     /// The Type column: the uppercased extension plus, for video and image
@@ -407,9 +420,9 @@ private struct ListRowView: View {
         }
     }
 
-    private func loadMetadata() async {
-        metadata = .empty
+    private func probeMetadata() async {
         guard item.kind == .video || item.kind == .image else { return }
-        metadata = await VideoMetadataProvider.shared.metadata(for: item.url, kind: item.kind)
+        let result = await VideoMetadataProvider.shared.metadata(for: item.url, kind: item.kind)
+        metadata = result
     }
 }
