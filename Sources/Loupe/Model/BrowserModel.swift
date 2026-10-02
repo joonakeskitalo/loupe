@@ -55,6 +55,7 @@ final class BrowserModel {
 
     var mode: BrowseMode = .flattened {
         didSet {
+            invalidateDisplayCache()
             // When entering per-folder view with an image selected, jump the
             // sidebar to that image's parent folder so the selection stays
             // visible instead of showing an unrelated folder.
@@ -66,9 +67,14 @@ final class BrowserModel {
         }
     }
     var sortOrder: SortOrder = .name {
-        didSet { if sortOrder == .codec { prefetchCodecs() } }
+        didSet {
+            invalidateDisplayCache()
+            if sortOrder == .codec { prefetchCodecs() }
+        }
     }
-    var sortAscending = true
+    var sortAscending = true {
+        didSet { invalidateDisplayCache() }
+    }
 
     /// Resolved video codec names keyed by file URL, used to sort by codec.
     /// Populated lazily in the background when a codec sort is active; items
@@ -489,10 +495,41 @@ final class BrowserModel {
         return base
     }
 
+    /// Memoized result of `displayedItems`. `displayedItems` is read many times
+    /// per UI update (toolbar enablement, status text, selection helpers, the
+    /// grid/list body), and recomputing it each time means re-filtering and
+    /// re-sorting the whole list on every read. That was cheap for Name/Size
+    /// but expensive for the codec sort — and the codec prefetch invalidates
+    /// repeatedly, so the cost multiplied into a visible freeze. We cache the
+    /// result and rebuild it only when an input actually changes (see
+    /// `invalidateDisplayCache`). Not observed, so filling it during a read
+    /// doesn't itself trigger observation.
+    @ObservationIgnored private var cachedDisplayedItems: [MediaItem]?
+
+    /// Observed revision token. `invalidateDisplayCache` bumps it, and
+    /// `displayedItems` reads it, so SwiftUI registers a dependency on the
+    /// revision rather than on the (ignored) cache storage — views still
+    /// re-render when the displayed list changes, even though the heavy inputs
+    /// aren't read on a cache hit.
+    private var displayRevision = 0
+
     /// Items displayed in the grid: the scoped set with the active type and
-    /// extension chip filters applied, then sorted.
+    /// extension chip filters applied, then sorted. Memoized.
     var displayedItems: [MediaItem] {
-        sorted(scopedItems.filter { passesChipFilters($0) })
+        // Establishes the observation dependency (see `displayRevision`).
+        _ = displayRevision
+        if let cachedDisplayedItems { return cachedDisplayedItems }
+        let result = sorted(scopedItems.filter { passesChipFilters($0) })
+        cachedDisplayedItems = result
+        return result
+    }
+
+    /// Clears the memoized `displayedItems` so the next read rebuilds it, and
+    /// bumps the observed revision so views re-render. Called whenever anything
+    /// the sort/filter/scope depends on changes.
+    private func invalidateDisplayCache() {
+        cachedDisplayedItems = nil
+        displayRevision &+= 1
     }
 
     private func passesChipFilters(_ item: MediaItem) -> Bool {
@@ -681,6 +718,9 @@ final class BrowserModel {
     private func storeCodecs(_ results: [(URL, String)]) {
         guard !results.isEmpty else { return }
         for (url, codec) in results { codecsByURL[url] = codec }
+        // Codec order depends on this map, so the memoized list is now stale.
+        // Only the codec sort cares; skip the churn otherwise.
+        if sortOrder == .codec { invalidateDisplayCache() }
     }
 
     /// Applies a sort field and direction together. Used by the quick-sort
@@ -723,26 +763,14 @@ final class BrowserModel {
                 return $0.kind.rawValue < $1.kind.rawValue
             }
         case .type:
-            result = items.sorted {
-                let lhs = $0.url.pathExtension.lowercased()
-                let rhs = $1.url.pathExtension.lowercased()
-                if lhs == rhs {
-                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-                }
-                return lhs.localizedStandardCompare(rhs) == .orderedAscending
-            }
+            // Decorate-sort-undecorate: build each item's key once (O(n))
+            // rather than re-deriving it inside every comparison (O(n log n)).
+            result = sortedByStringKey(items) { $0.url.pathExtension.lowercased() }
         case .codec:
             // Only videos have a codec. Group videos first, ordered by codec
             // name (unresolved/unknown codecs sort after named ones), then all
-            // non-videos. Ties fall back to name.
-            result = items.sorted {
-                let lc = codecSortKey($0)
-                let rc = codecSortKey($1)
-                if lc == rc {
-                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-                }
-                return lc.localizedStandardCompare(rc) == .orderedAscending
-            }
+            // non-videos. Keys are built once per item.
+            result = sortedByStringKey(items) { self.codecSortKey($0) }
         }
         return sortAscending ? result : result.reversed()
     }
@@ -760,11 +788,36 @@ final class BrowserModel {
         return "1"
     }
 
+    /// Sorts `items` by a precomputed string key (ascending, with the filename
+    /// as a tiebreak). The key closure runs once per item — O(n) — so sorting
+    /// doesn't re-derive keys or allocate strings inside every comparison, which
+    /// is what made a codec/type sort of a large folder stutter.
+    private func sortedByStringKey(
+        _ items: [MediaItem],
+        key: (MediaItem) -> String
+    ) -> [MediaItem] {
+        items
+            .map { (key: key($0), item: $0) }
+            .sorted { lhs, rhs in
+                switch lhs.key.localizedStandardCompare(rhs.key) {
+                case .orderedAscending: return true
+                case .orderedDescending: return false
+                case .orderedSame:
+                    return lhs.item.name.localizedStandardCompare(rhs.item.name) == .orderedAscending
+                }
+            }
+            .map(\.item)
+    }
+
     // MARK: - Selection helpers
 
     /// Drops any selected ids that are no longer in the displayed set (e.g.
     /// after a mode switch, folder change, or search filter).
     private func clampSelection() {
+        // Any change that reclamps the selection (scope, search, flag, chip
+        // filters, mode) also changes what's displayed, so drop the memoized
+        // list first — before the read below rebuilds it.
+        invalidateDisplayCache()
         let valid = Set(displayedItems.map(\.id))
         // Only prune ids that are no longer visible — never force a fallback
         // selection, so an empty selection is a valid state.
