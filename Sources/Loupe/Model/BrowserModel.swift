@@ -1088,14 +1088,22 @@ final class BrowserModel {
     /// in display order. Used by the fullscreen viewer to warm the preloader
     /// cache so forward navigation swaps instantly. Non-image items (video,
     /// PDF, …) are skipped since only images use the preloader.
+    ///
+    /// Scanning starts after the LAST selected item so a multi-selection warms
+    /// the next block (the images Right-arrow will reveal) rather than files
+    /// already on screen. For a single selection this is the item right after
+    /// the current one.
     func upcomingImageURLs(count: Int) -> [URL] {
         let items = displayedItems
-        guard let current = selectedItem,
-              let idx = items.firstIndex(where: { $0.id == current }) else {
+        guard !items.isEmpty, !selectedItems.isEmpty else { return [] }
+
+        // Resume from just past the end of the current selection block.
+        guard let lastSelectedIdx = items.lastIndex(where: { selectedItems.contains($0.id) }) else {
             return []
         }
+
         var out: [URL] = []
-        var i = idx + 1
+        var i = lastSelectedIdx + 1
         while i < items.count && out.count < count {
             if items[i].kind == .image { out.append(items[i].url) }
             i += 1

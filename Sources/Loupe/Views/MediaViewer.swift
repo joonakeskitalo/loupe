@@ -143,14 +143,21 @@ struct MediaViewer: View {
             if !showingSingleVideo { videoController = nil }
             prefetchUpcomingImages()
         }
+        .onChange(of: items.count) { _, _ in prefetchUpcomingImages() }
         .onAppear { prefetchUpcomingImages() }
     }
 
-    /// Warm the preloader with the next two images so forward navigation in the
-    /// single-image viewer swaps instantly instead of decoding on the fly.
+    /// Warm the preloader with the images the next arrow press will reveal so
+    /// forward browsing swaps instantly instead of decoding on the fly.
+    ///
+    /// For a single image that's the next two files; for a side-by-side
+    /// multi-selection of N images it's the next N files (one full block ahead,
+    /// matching how the arrow keys page). Only runs when the current view is
+    /// made of images, since only images use the preloader.
     private func prefetchUpcomingImages() {
-        guard showingSingleImage else { return }
-        let urls = model.upcomingImageURLs(count: 2)
+        guard !items.isEmpty, items.allSatisfy({ $0.kind == .image }) else { return }
+        let count = max(2, items.count)
+        let urls = model.upcomingImageURLs(count: count)
         guard !urls.isEmpty else { return }
         Task.detached(priority: .userInitiated) {
             await ImagePreloader.shared.prefetch(urls)
