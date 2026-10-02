@@ -30,6 +30,15 @@ mkdir -p "$FRAMEWORKS_DIR"
 cp "$BUILD_DIR/$APP_NAME" "$BUNDLE/Contents/MacOS/$APP_NAME"
 cp "Resources/Info.plist" "$BUNDLE/Contents/Info.plist"
 
+# Stamp a unique CFBundleVersion per build. macOS caches app binaries by
+# (bundle id + version); if the version never changes, Launch Services and the
+# code-signing cache can relaunch the *previous* binary image after a rebuild —
+# which is why a fresh build sometimes doesn't take effect until the 2nd launch.
+# A monotonic timestamp forces macOS to treat each build as a new binary.
+BUILD_VERSION="$(date +%Y%m%d%H%M%S)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_VERSION" \
+    "$BUNDLE/Contents/Info.plist" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Bundle the FFmpeg dylibs and their transitive Homebrew dependencies.
 #
@@ -139,7 +148,9 @@ for dylib in "$FRAMEWORKS_DIR"/*.dylib; do
 done
 
 echo "==> Code signing app (ad-hoc) with entitlements..."
-codesign --force --deep \
+# --deep is deprecated/unreliable for nested code; the dylibs are already
+# signed individually above, so sign only the top-level bundle here.
+codesign --force \
     --sign - \
     --entitlements "Resources/Loupe.entitlements" \
     "$BUNDLE"
@@ -154,5 +165,11 @@ if [ -x "$LSREGISTER" ]; then
 fi
 touch "$BUNDLE"
 
-echo "==> Done: $(pwd)/$BUNDLE"
+# Kill any running instance of the old build. Otherwise `open` just reactivates
+# the already-running (stale) process instead of launching the new binary —
+# the other half of the "changes don't apply on the first build" problem.
+echo "==> Terminating any running instance..."
+killall "$APP_NAME" 2>/dev/null || true
+
+echo "==> Done: $(pwd)/$BUNDLE (version $BUILD_VERSION)"
 echo "    Run with: open $BUNDLE"
