@@ -52,9 +52,12 @@ struct BrowserListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
+                  VStack(spacing: 0) {
+                    // Pinned above the scroll view so the sortable column
+                    // headers stay visible while the rows scroll underneath.
+                    header
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            header
                             ForEach(items) { item in
                                 ListRowView(
                                     item: item,
@@ -103,6 +106,7 @@ struct BrowserListView: View {
                             }
                         }
                     }
+                  }
                 }
                 .focusable()
                 .focused($listFocused)
@@ -138,20 +142,22 @@ struct BrowserListView: View {
         }
     }
 
-    /// Column header row, aligned with the row layout in `ListRowView`.
+    /// Column header row, aligned with the row layout in `ListRowView`. Each
+    /// header is a button: clicking sorts by that column, clicking the active
+    /// column again flips the direction.
     private var header: some View {
         HStack(spacing: ListRowMetrics.columnSpacing) {
             // Thumbnail + name share the leading flexible column.
-            Text("Name")
+            columnHeader("Name", sort: .name, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, thumbSize + ListRowMetrics.columnSpacing)
-            Text("Type")
+            columnHeader("Type", sort: .type, alignment: .leading)
                 .frame(width: ListRowMetrics.typeWidth, alignment: .leading)
-            Text("Created")
+            columnHeader("Created", sort: .dateCreated, alignment: .leading)
                 .frame(width: ListRowMetrics.dateWidth, alignment: .leading)
-            Text("Modified")
+            columnHeader("Modified", sort: .dateModified, alignment: .leading)
                 .frame(width: ListRowMetrics.dateWidth, alignment: .leading)
-            Text("Size")
+            columnHeader("Size", sort: .size, alignment: .trailing)
                 .frame(width: ListRowMetrics.sizeWidth, alignment: .trailing)
         }
         .font(.caption.weight(.semibold))
@@ -159,6 +165,33 @@ struct BrowserListView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
+    }
+
+    /// A single clickable column header showing its title and, when it's the
+    /// active sort column, a chevron for the direction.
+    private func columnHeader(
+        _ title: String,
+        sort: SortOrder,
+        alignment: HorizontalAlignment
+    ) -> some View {
+        let isActive = model.sortOrder == sort
+        return Button {
+            model.toggleSort(sort)
+        } label: {
+            HStack(spacing: 3) {
+                if alignment == .trailing { Spacer(minLength: 0) }
+                Text(title)
+                if isActive {
+                    Image(systemName: model.sortAscending ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                if alignment == .leading { Spacer(minLength: 0) }
+            }
+            .contentShape(Rectangle())
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Sort by \(title)")
     }
 
     private func dragURLs(for item: MediaItem) -> [URL] {

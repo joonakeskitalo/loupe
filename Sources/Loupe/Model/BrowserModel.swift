@@ -29,6 +29,7 @@ enum ViewLayout: String, CaseIterable {
 
 enum SortOrder: String, CaseIterable {
     case name = "Name"
+    case dateCreated = "Date Created"
     case dateModified = "Date Modified"
     case size = "Size"
     case kind = "Kind"
@@ -746,11 +747,36 @@ final class BrowserModel {
         sortOrder == order && sortAscending == ascending
     }
 
+    /// Handles a click on a sortable list column header. Clicking the column
+    /// that's already active flips the direction; clicking a different column
+    /// switches to it using a sensible default direction for that field (dates
+    /// and size start descending — newest/largest first — everything else
+    /// ascending).
+    func toggleSort(_ order: SortOrder) {
+        if sortOrder == order {
+            sortAscending.toggle()
+        } else {
+            applySort(order, ascending: Self.defaultAscending(for: order))
+        }
+    }
+
+    /// Default direction when a column is first selected.
+    private static func defaultAscending(for order: SortOrder) -> Bool {
+        switch order {
+        case .dateCreated, .dateModified, .size:
+            return false   // newest / largest first
+        case .name, .kind, .type, .codec:
+            return true    // A→Z
+        }
+    }
+
     private func sorted(_ items: [MediaItem]) -> [MediaItem] {
         let result: [MediaItem]
         switch sortOrder {
         case .name:
             result = items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .dateCreated:
+            result = items.sorted { $0.creationDate < $1.creationDate }
         case .dateModified:
             result = items.sorted { $0.modificationDate < $1.modificationDate }
         case .size:
