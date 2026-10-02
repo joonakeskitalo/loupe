@@ -50,6 +50,15 @@ enum MediaKind: String, Sendable {
         "mkv", "webm"
     ]
 
+    /// Extensions that must never be classified as video, even though the
+    /// system maps them to a movie UTI. `.ts` resolves to the MPEG-2 transport
+    /// stream type (`public.mpeg-2-transport-stream`, which conforms to
+    /// `.movie`), but in practice these are almost always TypeScript source
+    /// files here — so they should fall through to text, not show up as videos.
+    private static let nonVideoExtensions: Set<String> = [
+        "ts"
+    ]
+
     static func classify(url: URL) -> MediaKind {
         let ext = url.pathExtension.lowercased()
         if markdownExtensions.contains(ext) { return .markdown }
@@ -59,7 +68,11 @@ enum MediaKind: String, Sendable {
             return .other
         }
         if type.conforms(to: .image) { return .image }
-        if type.conforms(to: .movie) || type.conforms(to: .video) { return .video }
+        // Skip the video check for extensions we explicitly don't treat as
+        // video (e.g. `.ts` TypeScript, which the system maps to a transport
+        // stream movie type); let them fall through to text/other below.
+        if !nonVideoExtensions.contains(ext),
+           type.conforms(to: .movie) || type.conforms(to: .video) { return .video }
         if type.conforms(to: .pdf) { return .pdf }
         if type.conforms(to: .audio) { return .audio }
         // Plain text and anything conforming to it (source code, config, etc.).
