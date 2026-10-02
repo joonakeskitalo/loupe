@@ -17,7 +17,10 @@ struct BrowserGridView: View {
     @State private var marqueeRect: CGRect?
 
     private let gridSpace = "grid"
-    private let spacing: CGFloat = 2
+    /// Gap between cells. Collapsed to zero when filenames are hidden so the
+    /// image-only grid packs edge to edge (the cell's own padding also drops to
+    /// zero there).
+    private var spacing: CGFloat { model.hideFilenames ? 0 : 2 }
     private let padding: CGFloat = 8
 
     private var cellWidth: CGFloat { model.thumbnailSize + 12 }

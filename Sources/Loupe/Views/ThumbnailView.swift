@@ -15,13 +15,15 @@ struct ThumbnailView: View {
     /// Padding around each cell. Tighter than before for a denser grid, and
     /// tighter still when filenames are hidden (there's no caption to breathe
     /// around).
-    private var gridItemPadding: CGFloat { hideFilename ? 2 : 4 }
+    private var gridItemPadding: CGFloat { hideFilename ? 0 : 4 }
 
     var body: some View {
         VStack(spacing: hideFilename ? 0 : 3) {
             ZStack {
+                // Grey backing fill behind the thumbnail. Dropped when
+                // filenames are hidden so images sit flush with no grey box.
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.secondary.opacity(0.03))
+                    .fill(hideFilename ? Color.clear : Color.secondary.opacity(0.03))
 
                 if let image {
                     Image(nsImage: image)
