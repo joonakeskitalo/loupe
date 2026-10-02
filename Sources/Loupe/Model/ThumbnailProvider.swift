@@ -299,8 +299,15 @@ actor ThumbnailProvider {
 
             // Fast path: images decode in-process via ImageIO, straight to the
             // target size. Much cheaper than QuickLook's cross-process agent.
+            // Run on a detached task (not the cooperative pool) so the
+            // synchronous CG decode runs on a real thread, lets many images
+            // decode truly in parallel, and never blocks the async runtime.
             if kind == .image {
-                image = Self.imageIOThumbnail(for: url, pixelSize: pixelSize)
+                image = await Self.imageIOThumbnail(
+                    for: url,
+                    pixelSize: pixelSize,
+                    priority: priority == .visible ? .userInitiated : .utility
+                )
             }
 
             // General path / image fallback: QuickLook. Covers PDFs, documents,
@@ -376,35 +383,46 @@ actor ThumbnailProvider {
     /// photo. Returns nil if the file isn't a decodable image, letting the
     /// caller fall back to QuickLook.
     ///
-    /// `nonisolated` so it runs off the actor — it's synchronous CPU/IO work
-    /// and must not serialize other thumbnail requests behind actor isolation.
-    nonisolated private static func imageIOThumbnail(for url: URL, pixelSize: CGSize) -> NSImage? {
-        // Don't let ImageIO consult the slow, cross-process thumbnail cache or
-        // decode the full image up front; we only want its fast thumbnail path.
-        let sourceOptions: [CFString: Any] = [
-            kCGImageSourceShouldCache: false
-        ]
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
-              CGImageSourceGetCount(source) > 0 else {
-            return nil
-        }
+    /// `nonisolated` so it never serializes other thumbnail work behind actor
+    /// isolation. The actual decode is synchronous CG work, so it's dispatched
+    /// to a `Task.detached` — a real GCD-backed thread rather than one of the
+    /// scarce cooperative-pool threads — which lets many images decode in
+    /// genuine parallel and keeps a blocking decode from stalling the async
+    /// runtime (the same reason the FFmpeg path is detached).
+    nonisolated private static func imageIOThumbnail(
+        for url: URL,
+        pixelSize: CGSize,
+        priority: TaskPriority
+    ) async -> NSImage? {
+        await Task.detached(priority: priority) {
+            // Don't let ImageIO consult the slow, cross-process thumbnail cache
+            // or decode the full image up front; we only want its fast
+            // thumbnail path.
+            let sourceOptions: [CFString: Any] = [
+                kCGImageSourceShouldCache: false
+            ]
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
+                  CGImageSourceGetCount(source) > 0 else {
+                return nil
+            }
 
-        let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
-        let options: [CFString: Any] = [
-            // Build a thumbnail even when the file has no embedded one, and
-            // prefer the embedded one when present (cheapest of all).
-            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,  // honor EXIF orientation
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-            kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
-        ]
+            let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
+            let options: [CFString: Any] = [
+                // Build a thumbnail even when the file has no embedded one, and
+                // prefer the embedded one when present (cheapest of all).
+                kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,  // honor EXIF orientation
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+                kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
+            ]
 
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
-        }
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                return nil
+            }
 
-        let size = CGSize(width: cgImage.width, height: cgImage.height)
-        return NSImage(cgImage: cgImage, size: size)
+            let size = CGSize(width: cgImage.width, height: cgImage.height)
+            return NSImage(cgImage: cgImage, size: size)
+        }.value
     }
 
     /// Extracts a representative frame from a video. Tries AVFoundation first
