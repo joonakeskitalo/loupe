@@ -218,7 +218,23 @@ final class BrowserModel {
     }
 
     /// Whether the full-screen/detail viewer is presented.
-    var isViewerPresented = false
+    var isViewerPresented = false {
+        didSet {
+            // Capture how many items the viewer opened with so paging and the
+            // post-deletion reflow keep that block size even as files are
+            // trashed from under the selection.
+            if isViewerPresented, !oldValue {
+                viewerPageSize = max(1, selectedItems.count)
+            }
+        }
+    }
+
+    /// How many items the fullscreen viewer pages by. Set to the selection size
+    /// when the viewer opens, and kept current as the user deliberately changes
+    /// the multi-selection. Deleting a file inside the current block must NOT
+    /// shrink this, otherwise arrow-key paging and the next-set reselection
+    /// after a deletion would silently collapse (the reported bug).
+    private(set) var viewerPageSize = 1
 
     /// Whether the film strip of thumbnails is shown in the single-item viewer.
     var isFilmStripVisible = true
@@ -983,6 +999,7 @@ final class BrowserModel {
         if rangeAnchor == nil || !set.contains(rangeAnchor!) {
             rangeAnchor = ordered.first
         }
+        syncViewerPageSize()
     }
 
     /// Select every item currently shown in the grid (Cmd+A).
@@ -992,6 +1009,7 @@ final class BrowserModel {
         selectedItems = Set(items.map(\.id))
         selectedItem = items.last?.id
         rangeAnchor = items.first?.id
+        syncViewerPageSize()
     }
 
     // MARK: Selection mutations (driven by clicks)
@@ -1001,6 +1019,7 @@ final class BrowserModel {
         selectedItem = id
         rangeAnchor = id
         selectedItems = [id]
+        syncViewerPageSize()
     }
 
     /// Toggle an item in/out of the selection (Command-click).
@@ -1015,6 +1034,7 @@ final class BrowserModel {
             selectedItem = id
         }
         rangeAnchor = selectedItem
+        syncViewerPageSize()
     }
 
     /// Select the contiguous range from the anchor to `id` (Shift-click).
@@ -1030,6 +1050,17 @@ final class BrowserModel {
         let range = min(a, b)...max(a, b)
         selectedItems = Set(items[range].map(\.id))
         selectedItem = id
+        syncViewerPageSize()
+    }
+
+    /// Keeps `viewerPageSize` in step with an explicit, user-driven selection
+    /// change while the viewer is open, so paging reflects the latest
+    /// side-by-side count. Not called from navigation/reflow paths
+    /// (`moveSelectionBlock`, `reselectBlock`), which must preserve the page
+    /// size across deletions.
+    private func syncViewerPageSize() {
+        guard isViewerPresented else { return }
+        viewerPageSize = max(1, selectedItems.count)
     }
 
     func moveSelection(by offset: Int) {
@@ -1054,26 +1085,27 @@ final class BrowserModel {
     /// are selected.
     func moveSelectionBlock(by offset: Int) {
         let items = displayedItems
-        let count = selectedItems.count
-        guard count > 1 else {
-            moveSelection(by: offset)
-            return
-        }
         guard !items.isEmpty else { return }
 
-        // Find the current block's span in display order.
-        let order = items.map(\.id)
-        let selectedIndices = order.enumerated()
-            .filter { selectedItems.contains($0.element) }
-            .map(\.offset)
-        guard let first = selectedIndices.min() else {
+        // The viewer pages by its captured block size, which survives deletions
+        // (a trashed file inside the block must not shrink the page). Fall back
+        // to the live selection size when the viewer isn't driving navigation.
+        let pageSize = isViewerPresented ? max(viewerPageSize, selectedItems.count) : selectedItems.count
+        guard pageSize > 1 else {
             moveSelection(by: offset)
             return
         }
 
-        // Page by the block size, then clamp so a full block of `count` stays
-        // on-screen (don't run off either end).
-        let blockSize = min(count, items.count)
+        // Find the current block's leading position in display order.
+        let order = items.map(\.id)
+        guard let first = order.firstIndex(where: { selectedItems.contains($0) }) else {
+            moveSelection(by: offset)
+            return
+        }
+
+        // Page by the block size, then clamp so a full block stays on-screen
+        // (don't run off either end).
+        let blockSize = min(pageSize, items.count)
         let maxStart = items.count - blockSize
         let newStart = (first + offset * blockSize).clamped(to: 0...max(0, maxStart))
         let range = newStart..<(newStart + blockSize)
@@ -1354,12 +1386,38 @@ final class BrowserModel {
             isViewerPresented = false
         } else if let idx = firstTrashedIndex {
             let next = min(idx, survivors.count - 1)
-            selectOnly(survivors[next])
+            // In the fullscreen viewer's multi-item mode, keep showing a full
+            // block of the viewer's page size instead of collapsing to a single
+            // image — so deleting a file and navigating past it still pages by
+            // the original side-by-side count.
+            if isViewerPresented, viewerPageSize > 1 {
+                reselectBlock(startingAt: next, size: viewerPageSize, in: survivors)
+            } else {
+                selectOnly(survivors[next])
+            }
         } else {
             clampSelection()
         }
 
         return trashed.count
+    }
+
+    /// Selects a contiguous block of up to `size` items from `order`, with the
+    /// block positioned so `start` is its leading item where possible and
+    /// clamped to stay fully on-screen near the end of the list. Used to reform
+    /// the viewer's multi-selection after a deletion without shrinking it.
+    private func reselectBlock(startingAt start: Int, size: Int, in order: [MediaItem.ID]) {
+        guard !order.isEmpty else {
+            clearSelection()
+            return
+        }
+        let blockSize = min(size, order.count)
+        let maxStart = order.count - blockSize
+        let clampedStart = min(max(0, start), max(0, maxStart))
+        let ids = Array(order[clampedStart..<(clampedStart + blockSize)])
+        selectedItems = Set(ids)
+        selectedItem = ids.first
+        rangeAnchor = ids.first
     }
 
     /// Removes a set of (standardized) file URLs from every per-root scan
