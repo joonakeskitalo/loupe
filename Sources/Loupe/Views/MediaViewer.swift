@@ -141,6 +141,19 @@ struct MediaViewer: View {
         }
         .onChange(of: items.first?.id) { _, _ in
             if !showingSingleVideo { videoController = nil }
+            prefetchUpcomingImages()
+        }
+        .onAppear { prefetchUpcomingImages() }
+    }
+
+    /// Warm the preloader with the next two images so forward navigation in the
+    /// single-image viewer swaps instantly instead of decoding on the fly.
+    private func prefetchUpcomingImages() {
+        guard showingSingleImage else { return }
+        let urls = model.upcomingImageURLs(count: 2)
+        guard !urls.isEmpty else { return }
+        Task.detached(priority: .userInitiated) {
+            await ImagePreloader.shared.prefetch(urls)
         }
     }
 
@@ -433,11 +446,24 @@ struct MediaViewer: View {
     /// Viewer-wide letter hotkeys: J/L step between items, F or I flags the
     /// current item. For a single video/audio item, K toggles play/pause, U/O
     /// skip back/forward 15 seconds, and ,/. step one frame back/forward.
+    ///
+    /// J/L (and, for a multi-selection, the arrow keys) page by the current
+    /// selection's size: with 3 images open side by side, Right selects the
+    /// next 3 and Left the previous 3. `moveSelectionBlock` falls back to a
+    /// single-item step when one or zero items are selected.
     @ViewBuilder
     private var navigationHotkeys: some View {
         ZStack {
-            hotkey("j", []) { model.moveSelection(by: -1) }
-            hotkey("l", []) { model.moveSelection(by: 1) }
+            hotkey("j", []) { model.moveSelectionBlock(by: -1) }
+            hotkey("l", []) { model.moveSelectionBlock(by: 1) }
+            // Arrow keys page the whole set in multi-selection. The single-item
+            // view already owns ←/→ via its on-screen nav buttons, so these are
+            // only mounted when more than one item is shown to avoid two owners
+            // of the same shortcut.
+            if isMulti {
+                hotkey(.leftArrow, []) { model.moveSelectionBlock(by: -1) }
+                hotkey(.rightArrow, []) { model.moveSelectionBlock(by: 1) }
+            }
             // F, I and S all flag the current item, matching the grid's flag
             // keys.
             hotkey("f", []) { model.toggleFlag() }

@@ -421,9 +421,22 @@ final class BrowserModel {
         itemsByDirectory = byDir
         trees = newTrees
         pruneStaleChipFilters()
+        pruneMissingMarks()
         clampSelection()
         // Keep codec data current for a codec sort as folders are added/rescanned.
         if sortOrder == .codec { prefetchCodecs() }
+    }
+
+    /// Drops flags and color tags whose underlying file is no longer present
+    /// after the merged item list is rebuilt — e.g. the file was deleted on
+    /// disk and the folder refreshed, or the containing root was removed. This
+    /// keeps the Library "Flagged"/tag views and their sidebar counts from
+    /// listing items that have vanished. Flags/tags for files that still exist
+    /// (including in other roots) are preserved.
+    private func pruneMissingMarks() {
+        let present = Set(allItems.map(\.id))
+        flaggedItems.formIntersection(present)
+        colorTags = colorTags.filter { present.contains($0.key) }
     }
 
     /// Drops any active type/extension chip filters that no longer have a
@@ -1029,6 +1042,65 @@ final class BrowserModel {
         }
         let next = (idx + offset).clamped(to: 0...(items.count - 1))
         selectOnly(items[next].id)
+    }
+
+    /// Shifts a multi-item selection by whole blocks of its own size, keeping
+    /// the number of selected items constant. With N items selected, moving by
+    /// +1 selects the next N items in display order and -1 the previous N, so
+    /// the fullscreen viewer's arrow keys page through the folder a screenful
+    /// at a time. The block is clamped to the list bounds (so it never shrinks
+    /// below N when there's room), and the primary/anchor is set to the block's
+    /// leading item. Falls back to a single-step move when fewer than two items
+    /// are selected.
+    func moveSelectionBlock(by offset: Int) {
+        let items = displayedItems
+        let count = selectedItems.count
+        guard count > 1 else {
+            moveSelection(by: offset)
+            return
+        }
+        guard !items.isEmpty else { return }
+
+        // Find the current block's span in display order.
+        let order = items.map(\.id)
+        let selectedIndices = order.enumerated()
+            .filter { selectedItems.contains($0.element) }
+            .map(\.offset)
+        guard let first = selectedIndices.min() else {
+            moveSelection(by: offset)
+            return
+        }
+
+        // Page by the block size, then clamp so a full block of `count` stays
+        // on-screen (don't run off either end).
+        let blockSize = min(count, items.count)
+        let maxStart = items.count - blockSize
+        let newStart = (first + offset * blockSize).clamped(to: 0...max(0, maxStart))
+        let range = newStart..<(newStart + blockSize)
+        let newIDs = Array(order[range])
+
+        selectedItems = Set(newIDs)
+        rangeAnchor = newIDs.first
+        selectedItem = newIDs.first
+    }
+
+    /// URLs of the next `count` image items that follow the current selection
+    /// in display order. Used by the fullscreen viewer to warm the preloader
+    /// cache so forward navigation swaps instantly. Non-image items (video,
+    /// PDF, …) are skipped since only images use the preloader.
+    func upcomingImageURLs(count: Int) -> [URL] {
+        let items = displayedItems
+        guard let current = selectedItem,
+              let idx = items.firstIndex(where: { $0.id == current }) else {
+            return []
+        }
+        var out: [URL] = []
+        var i = idx + 1
+        while i < items.count && out.count < count {
+            if items[i].kind == .image { out.append(items[i].url) }
+            i += 1
+        }
+        return out
     }
 
     /// Direction for grid keyboard navigation.

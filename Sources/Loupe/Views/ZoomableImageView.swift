@@ -48,13 +48,13 @@ struct ZoomableImageView: NSViewRepresentable {
 
         let imageView = NSImageView()
         imageView.imageScaling = .scaleAxesIndependently
-        imageView.image = NSImage(contentsOf: url)
         scrollView.documentView = imageView
         scrollView.imageView = imageView
 
         context.coordinator.scrollView = scrollView
         context.coordinator.url = url
         context.coordinator.observe(scrollView)
+        context.coordinator.loadImage(url, fitWhenReady: true)
 
         scrollView.onDoubleClick = { [weak coordinator = context.coordinator] in
             coordinator?.toggleFitActual()
@@ -66,7 +66,6 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.onSwipePrevious = onSwipePrevious
         scrollView.onSwipeNext = onSwipeNext
 
-        DispatchQueue.main.async { context.coordinator.fit() }
         return scrollView
     }
 
@@ -76,11 +75,11 @@ struct ZoomableImageView: NSViewRepresentable {
 
         if context.coordinator.url != url {
             context.coordinator.url = url
-            nsView.imageView?.image = NSImage(contentsOf: url)
-            // Refit synchronously so the new image never paints at the previous
-            // image's magnification first (which caused a visible flash). The
-            // viewport already has a valid size on an on-screen view.
-            context.coordinator.fit()
+            // Prefer an already-decoded image from the preloader so navigation
+            // swaps instantly and refits in the same pass (no flash of the
+            // previous image's magnification). Falls back to an async decode
+            // when the neighbor wasn't warmed yet.
+            context.coordinator.loadImage(url, fitWhenReady: true)
         }
 
         if let cmd = command {
@@ -111,6 +110,33 @@ struct ZoomableImageView: NSViewRepresentable {
 
         init(zoomFactor: Binding<CGFloat>) {
             self.zoomFactorBinding = zoomFactor
+        }
+
+        /// Loads `url` into the image view, preferring the preloader's cache for
+        /// an instant swap and falling back to a background decode otherwise.
+        /// When `fitWhenReady` is true the image is refit as soon as it's set,
+        /// so the new image never paints at the previous image's magnification.
+        func loadImage(_ url: URL, fitWhenReady: Bool) {
+            // Fast path: already decoded by the preloader — set + fit in one
+            // synchronous pass, exactly like the old synchronous load.
+            if let cached = ImagePreloader.shared.cachedImageSync(for: url) {
+                apply(cached, for: url, fit: fitWhenReady)
+                return
+            }
+
+            // Not warmed yet: decode in the background, then apply only if the
+            // view is still showing this URL (navigation may have moved on).
+            Task { [weak self] in
+                let image = await ImagePreloader.shared.image(for: url)
+                guard let self, self.url == url else { return }
+                self.apply(image, for: url, fit: fitWhenReady)
+            }
+        }
+
+        private func apply(_ image: NSImage?, for url: URL, fit: Bool) {
+            guard let imageView = scrollView?.imageView else { return }
+            imageView.image = image
+            if fit { self.fit() }
         }
 
         func observe(_ scrollView: ZoomScrollView) {
@@ -256,11 +282,87 @@ final class ZoomScrollView: NSScrollView {
     private var lastWheelStep: TimeInterval = 0
     private let wheelCooldown: TimeInterval = 0.15
 
+    /// Hand-tool drag-pan state. When the image is larger than the viewport, a
+    /// click-drag grabs the image and pans it like the hand tool in an image
+    /// editor. `isPanning` is set once the pointer actually moves so a plain
+    /// click (which should still reach the double-click handler) isn't
+    /// mistaken for a pan.
+    private var panLastPoint: NSPoint?
+    private var isPanning = false
+
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
             onDoubleClick?()
+            return
+        }
+        // Begin a potential hand-tool pan when there's something to pan to.
+        if canPan {
+            panLastPoint = convert(event.locationInWindow, from: nil)
+            isPanning = false
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard panLastPoint != nil, canPan else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let current = convert(event.locationInWindow, from: nil)
+        let last = panLastPoint ?? current
+        let dx = current.x - last.x
+        let dy = current.y - last.y
+
+        if !isPanning, abs(dx) + abs(dy) > 0 {
+            isPanning = true
+            NSCursor.closedHand.push()
+        }
+
+        // Move the document the same direction as the drag: dragging right
+        // should reveal content to the left, so the clip's bounds origin moves
+        // opposite to the pointer. In this flipped-free clip the content view's
+        // bounds use the document's (unmagnified) coordinate space, so divide
+        // the view-space delta by the magnification to pan 1:1 on screen.
+        let scale = magnification == 0 ? 1 : magnification
+        let clip = contentView
+        var origin = clip.bounds.origin
+        origin.x -= dx / scale
+        origin.y -= dy / scale
+        clip.setBoundsOrigin(clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
+        reflectScrolledClipView(clip)
+
+        panLastPoint = current
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if panLastPoint == nil {
+            // We never intercepted this gesture for panning (image fitted);
+            // let the scroll view handle the click normally.
+            super.mouseUp(with: event)
+        }
+        // Otherwise this release ends an intercepted press (a pan or a plain
+        // click on a zoomed image). The double-click action already fired from
+        // mouseDown, so there's nothing else to forward — just reset state.
+        if isPanning { NSCursor.pop() }
+        panLastPoint = nil
+        isPanning = false
+    }
+
+    /// True when the image overflows the viewport on either axis, so there's
+    /// somewhere to pan. Mirrors the fitted checks used for navigation.
+    private var canPan: Bool {
+        !(canNavigateHorizontally && canNavigateVertically)
+    }
+
+    override func resetCursorRects() {
+        // Show an open-hand cursor over a pannable (zoomed-in) image to signal
+        // the hand tool; otherwise fall back to the default arrow.
+        if canPan {
+            addCursorRect(bounds, cursor: .openHand)
         } else {
-            super.mouseDown(with: event)
+            super.resetCursorRects()
         }
     }
 
@@ -361,6 +463,9 @@ final class ZoomScrollView: NSScrollView {
         let clip = contentView
         clip.setBoundsOrigin(clip.constrainBoundsRect(clip.bounds).origin)
         reflectScrolledClipView(clip)
+        // The zoom may have crossed the fitted/pannable boundary, so refresh
+        // the hand-vs-arrow cursor over the image.
+        window?.invalidateCursorRects(for: self)
     }
 }
 
