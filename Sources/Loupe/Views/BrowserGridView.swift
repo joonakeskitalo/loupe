@@ -183,6 +183,16 @@ struct BrowserGridView: View {
                 // focus unconditionally here would steal it from the search
                 // field mid-type.
                 .onAppear { if canAutoFocus { gridFocused = true } }
+                // Reclaim keyboard focus when the viewer closes. The grid stays
+                // mounted beneath the viewer overlay, so its `.onAppear` never
+                // fires again on dismiss; without this the arrow keys stay dead
+                // until the user clicks a cell. Deferred a runloop tick so the
+                // viewer has fully relinquished focus first.
+                .onChange(of: model.isViewerPresented) { _, presented in
+                    if !presented && canAutoFocus {
+                        DispatchQueue.main.async { gridFocused = true }
+                    }
+                }
                 // Arrow keys get their own handler, matched on the specific
                 // keys. This is what makes them take precedence over the
                 // enclosing ScrollView's built-in arrow-key scrolling —

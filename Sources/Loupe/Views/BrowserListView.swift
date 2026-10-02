@@ -113,6 +113,16 @@ struct BrowserListView: View {
                 .focused($listFocused)
                 .focusEffectDisabled()
                 .onAppear { if canAutoFocus { listFocused = true } }
+                // Reclaim keyboard focus when the viewer closes. The list stays
+                // mounted beneath the viewer overlay, so its `.onAppear` never
+                // fires again on dismiss; without this the arrow keys stay dead
+                // until the user clicks a row. Deferred a runloop tick so the
+                // viewer has fully relinquished focus first.
+                .onChange(of: model.isViewerPresented) { _, presented in
+                    if !presented && canAutoFocus {
+                        DispatchQueue.main.async { listFocused = true }
+                    }
+                }
                 .onKeyPress { press in handleKey(press) }
             }
         }
