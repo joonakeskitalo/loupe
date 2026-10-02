@@ -17,10 +17,10 @@ struct BrowserGridView: View {
     @State private var marqueeRect: CGRect?
 
     private let gridSpace = "grid"
-    private let spacing: CGFloat = 6
-    private let padding: CGFloat = 16
+    private let spacing: CGFloat = 2
+    private let padding: CGFloat = 8
 
-    private var cellWidth: CGFloat { model.thumbnailSize + 24 }
+    private var cellWidth: CGFloat { model.thumbnailSize + 12 }
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
@@ -53,7 +53,8 @@ struct BrowserGridView: View {
                                         item: item,
                                         size: model.thumbnailSize,
                                         isSelected: model.selectedItems.contains(item.id),
-                                        isFlagged: model.isFlagged(item.id)
+                                        isFlagged: model.isFlagged(item.id),
+                                        hideFilename: model.hideFilenames
                                     )
                                     .id(item.id)
                                     .reportCellFrame(id: item.id, in: gridSpace)

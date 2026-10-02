@@ -1,0 +1,176 @@
+import SwiftUI
+
+/// All of Loupe's menu-bar commands, grouped into standard menus. Each command
+/// acts on the frontmost window's `BrowserModel`, read via `@FocusedValue`
+/// (published by `ContentView`). When no window is key, the focused value is
+/// nil and the commands disable themselves.
+///
+/// Keeping these in the menu bar (rather than only as in-window hotkeys) means
+/// the shortcuts are discoverable, show their key equivalents, and are
+/// dispatched by AppKit through the responder chain to the key window.
+struct LoupeCommands: Commands {
+    @FocusedValue(\.activeBrowserModel) private var model
+    @FocusedValue(\.trashShortcutEligible) private var trashEligible
+
+    var body: some Commands {
+        // MARK: Item actions — placed after the Edit menu's pasteboard group.
+        CommandGroup(after: .pasteboard) {
+            Divider()
+
+            // No key equivalent here: Return/Space already open the viewer as
+            // modifier-less in-window hotkeys (gated by search focus), which
+            // would clash with an always-on menu equivalent.
+            Button("Open in Viewer") { model?.openViewer() }
+                .disabled(!canOpen)
+
+            Button("Open with Default App") { model?.openInDefaultApp() }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(!hasSelection)
+
+            Button("Reveal in Finder") { model?.revealInFinder() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!hasSelection)
+
+            Divider()
+
+            Button(flagTitle) { model?.toggleFlag() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(!hasSelection)
+
+            Button("Move to Trash") { model?.moveToTrash() }
+                .keyboardShortcut(.deleteBackspace, modifiers: .command)
+                // A disabled Button releases its shortcut, so gating on
+                // eligibility means the menu owns ⌘⌫ only when it should (not
+                // while searching or over the viewer, which carries its own
+                // ⌘⌫). That keeps exactly one owner of the key live.
+                .disabled(!canTrash || trashEligible != true)
+        }
+
+        // MARK: Select All — standard text-editing group.
+        CommandGroup(after: .textEditing) {
+            Button("Select All Items") { model?.selectAll() }
+                .keyboardShortcut("a", modifiers: .command)
+                .disabled(!hasItems || viewerOpen)
+        }
+
+        // MARK: View menu — merged into SwiftUI's built-in "View" menu (via
+        // the `.sidebar` placement) rather than a second `CommandMenu("View")`,
+        // which would create a duplicate menu with the same name.
+        CommandGroup(after: .sidebar) {
+            Divider()
+
+            // Layout: Grid / List.
+            Picker("Layout", selection: layoutBinding) {
+                ForEach(ViewLayout.allCases, id: \.self) { layout in
+                    Text(layout.rawValue).tag(layout)
+                }
+            }
+            .pickerStyle(.inline)
+
+            // "G" toggles layout as a modifier-less in-window hotkey; no menu
+            // key equivalent to avoid an always-on global "G".
+            Button("Toggle Grid/List") { model?.toggleLayout() }
+                .disabled(model == nil)
+
+            Divider()
+
+            // Browse mode: Flattened / Folders.
+            Picker("Browse Mode", selection: modeBinding) {
+                ForEach(BrowseMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Toggle("Include Subfolders", isOn: includeSubfoldersBinding)
+                .disabled(model == nil || model?.mode != .folders)
+
+            Divider()
+
+            // Grid display options.
+            Toggle("Hide Filenames", isOn: hideFilenamesBinding)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(model == nil)
+
+            Toggle("Show Flagged Only", isOn: showFlaggedOnlyBinding)
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(model == nil)
+
+            Divider()
+
+            // Sort submenu.
+            Menu("Sort By") {
+                Picker("Sort By", selection: sortOrderBinding) {
+                    ForEach(SortOrder.allCases, id: \.self) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .pickerStyle(.inline)
+
+                Divider()
+
+                Picker("Direction", selection: sortAscendingBinding) {
+                    Text("Ascending").tag(true)
+                    Text("Descending").tag(false)
+                }
+                .pickerStyle(.inline)
+            }
+            .disabled(model == nil)
+
+            Divider()
+
+            // Zoom. Disabled while the viewer is open so its own image-zoom
+            // shortcuts take precedence.
+            Button("Zoom In") { model?.zoomGridIn() }
+                .keyboardShortcut("=", modifiers: .command)
+                .disabled(model == nil || viewerOpen)
+            Button("Zoom Out") { model?.zoomGridOut() }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(model == nil || viewerOpen)
+
+            Divider()
+
+            Button("Refresh") { model?.refresh() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!(model?.hasContent ?? false) || (model?.isScanning ?? false))
+        }
+    }
+
+    // MARK: - Derived enablement
+    //
+    // `viewerOpen` gates the commands whose shortcuts the viewer wants for
+    // itself (zoom, select-all, etc.) so the viewer's own handlers win while
+    // it's open, matching the in-window hotkey behavior.
+
+    private var viewerOpen: Bool { model?.isViewerPresented ?? false }
+    private var hasItems: Bool { !(model?.displayedItems.isEmpty ?? true) }
+    private var hasSelection: Bool { !(model?.selectedItems.isEmpty ?? true) }
+    private var canTrash: Bool { model?.canTrashSelection ?? false }
+    private var canOpen: Bool { hasItems && !viewerOpen }
+
+    private var flagTitle: String {
+        let count = model?.selectedItems.count ?? 0
+        return count > 1 ? "Flag / Unflag Selection" : "Flag / Unflag"
+    }
+
+    // MARK: - Bindings into the focused model
+    //
+    // Menu `Picker`/`Toggle` need bindings. The focused model is a reference
+    // type, so these read/write it directly; a nil model yields harmless
+    // defaults (the controls are disabled in that case anyway).
+
+    private func binding<T>(_ keyPath: ReferenceWritableKeyPath<BrowserModel, T>, default def: T) -> Binding<T> {
+        Binding(
+            get: { model?[keyPath: keyPath] ?? def },
+            set: { if let model { model[keyPath: keyPath] = $0 } }
+        )
+    }
+
+    private var layoutBinding: Binding<ViewLayout> { binding(\.viewLayout, default: .grid) }
+    private var modeBinding: Binding<BrowseMode> { binding(\.mode, default: .flattened) }
+    private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
+    private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
+    private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
+    private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
+    private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }
+}

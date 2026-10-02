@@ -108,6 +108,13 @@ final class BrowserModel {
     /// Whether files are shown as a thumbnail grid or a detailed list.
     var viewLayout: ViewLayout = .grid
 
+    /// When true, the grid hides the filename caption under each thumbnail for
+    /// a denser, image-only layout.
+    var hideFilenames = false
+
+    /// Toggles the grid filename captions on/off.
+    func toggleHideFilenames() { hideFilenames.toggle() }
+
     /// All folders selected in the sidebar (used in `.folders` mode). Supports
     /// multi-selection; the grid shows the union of every selected folder.
     var selectedFolders: Set<URL> = [] {

@@ -15,6 +15,9 @@ struct ContentView: View {
     /// suspend modifier-less window hotkeys so typing isn't hijacked.
     @FocusState private var searchFocused: Bool
 
+    /// Sidebar column visibility, toggled by ⌘S.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+
     init(initialURLs: [URL] = []) {
         self.initialURLs = initialURLs
     }
@@ -24,7 +27,7 @@ struct ContentView: View {
             if !model.hasContent {
                 DropZoneView(model: model)
             } else {
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
                     FolderSidebar(model: model)
                         .frame(minWidth: 220)
                 } detail: {
@@ -93,16 +96,20 @@ struct ContentView: View {
                 PathBar(model: model)
             }
         }
-        // Publish this window's model so the menu-bar ⌘⌫ command can act on
-        // the frontmost window regardless of which subview holds focus.
-        //
-        // Suppressed in two cases so exactly one ⌘⌫ owner is ever live:
-        //  - search focused: ⌘⌫ should edit the search text, not trash;
-        //  - viewer open: the viewer carries its own ⌘⌫ handler (it owns focus
-        //    and the responder chain), so the menu command must step aside.
-        .focusedValue(
-            \.activeBrowserModel,
-            (searchFocused || model.isViewerPresented) ? nil : model
+        // Publish this window's model so the menu-bar commands (which live at
+        // the Scene level) can act on the frontmost window. Uses
+        // `focusedSceneValue` (not `focusedValue`) so it resolves for the key
+        // window regardless of which inner view — grid, list, sidebar, or none
+        // — currently holds focus. With plain `focusedValue` the commands read
+        // nil (and disable) whenever focus wasn't inside this subtree, e.g.
+        // when the sidebar was focused or nothing was.
+        .focusedSceneValue(\.activeBrowserModel, model)
+        // Whether the menu bar may own ⌘⌫ right now. False while search is
+        // focused (⌘⌫ edits text) or the viewer is open (it carries its own
+        // ⌘⌫ handler), so exactly one owner of the shortcut is ever live.
+        .focusedSceneValue(
+            \.trashShortcutEligible,
+            !(searchFocused || model.isViewerPresented)
         )
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.
@@ -131,6 +138,11 @@ struct ContentView: View {
             Button("Toggle Grid/List") { model.toggleLayout() }
                 .keyboardShortcut("g", modifiers: [])
                 .disabled(model.isViewerPresented || searchFocused)
+            // ⌘S toggles the sidebar. Lives here (not in the menu) because the
+            // visibility is view-local state. Suspended while the viewer is up.
+            Button("Toggle Sidebar") { toggleSidebar() }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(model.isViewerPresented || searchFocused)
             // Space and Return both open the full viewer on the selection.
             Button("Open Viewer") { model.openViewer() }
                 .keyboardShortcut(.space, modifiers: [])
@@ -138,28 +150,18 @@ struct ContentView: View {
             Button("Open") { model.openViewer() }
                 .keyboardShortcut(.return, modifiers: [])
                 .disabled(model.displayedItems.isEmpty || searchFocused)
-            Button("Refresh") { model.refresh() }
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(searchFocused)
-            Button("Select All") { model.selectAll() }
-                .keyboardShortcut("a", modifiers: .command)
-                .disabled(model.displayedItems.isEmpty || searchFocused)
-            Button("Open with Default App") { model.openInDefaultApp() }
-                .keyboardShortcut(.downArrow, modifiers: .command)
-                .disabled(model.selectedItems.isEmpty || searchFocused)
-            Button("Reveal in Finder") { model.revealInFinder() }
+            // The ⌘-modified actions (Refresh ⌘R, Select All ⌘A, Open with
+            // Default App ⌘↓, Reveal in Finder ⇧⌘R, Flag ⌘K, Show Flagged Only
+            // ⇧⌘F, zoom ⌘=/⌘−, Move to Trash ⌘⌫) now live in the menu bar (see
+            // LoupeCommands), which is their single owner. Only the modifier-
+            // less / ⌃-digit hotkeys remain here, gated by search/viewer focus.
+
+            // Reveal in Finder also responds to F1 (the menu shows ⇧⌘R). F1
+            // isn't a menu equivalent, so this hidden button is its sole owner.
+            Button("Reveal in Finder (F1)") { model.revealInFinder() }
                 // F1 — NSF1FunctionKey is U+F704.
                 .keyboardShortcut(KeyEquivalent("\u{F704}"), modifiers: [])
                 .disabled(model.selectedItems.isEmpty || searchFocused)
-            // ⌘⌫ "Move to Trash" is a menu-bar command (see LoupeApp), so it
-            // isn't duplicated here — a single menu owner avoids the ambiguous
-            // dispatch that made the key unreliable.
-            Button("Flag for Later") { model.toggleFlag() }
-                .keyboardShortcut("k", modifiers: .command)
-                .disabled(model.selectedItems.isEmpty || searchFocused)
-            Button("Show Flagged Only") { model.showFlaggedOnly.toggle() }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled((model.flaggedCount == 0 && !model.showFlaggedOnly) || searchFocused)
 
             // J/L step the selection; I flags the selection. Suspended while the
             // viewer is open (it carries its own copies so it can navigate/flag
@@ -195,16 +197,11 @@ struct ContentView: View {
                 .keyboardShortcut(.escape, modifiers: [])
                 .disabled(!model.canEscape || model.isViewerPresented || searchFocused)
 
-            // Grid zoom. Suspended while the viewer is open so its image-zoom
-            // shortcuts (⌘+/⌘−/⌘0) take precedence there instead.
-            Button("Zoom Grid In") { model.zoomGridIn() }
-                .keyboardShortcut("=", modifiers: .command)
-                .disabled(model.isViewerPresented || searchFocused)
+            // Grid zoom-in via ⌘+ (the plus-key alias). The menu owns ⌘= and
+            // ⌘−; this extra alias stays in-window, gated so the viewer's own
+            // image-zoom shortcuts take precedence while it's open.
             Button("Zoom Grid In (plus)") { model.zoomGridIn() }
                 .keyboardShortcut("+", modifiers: .command)
-                .disabled(model.isViewerPresented || searchFocused)
-            Button("Zoom Grid Out") { model.zoomGridOut() }
-                .keyboardShortcut("-", modifiers: .command)
                 .disabled(model.isViewerPresented || searchFocused)
         }
         .opacity(0)
@@ -301,6 +298,13 @@ struct ContentView: View {
             }
             .disabled(model.displayedItems.isEmpty)
             .help("Open selected item in viewer (Space or Return)")
+        }
+    }
+
+    /// Toggles the sidebar between hidden and shown (⌘S).
+    private func toggleSidebar() {
+        withAnimation {
+            columnVisibility = (columnVisibility == .detailOnly) ? .all : .detailOnly
         }
     }
 

@@ -8,10 +8,23 @@ struct ActiveBrowserModelKey: FocusedValueKey {
     typealias Value = BrowserModel
 }
 
+/// Whether the menu bar may own the ⌘⌫ "Move to Trash" shortcut right now.
+/// False while the search field is focused (⌘⌫ should edit text) or the viewer
+/// is open (the viewer carries its own ⌘⌫ handler) — keeping exactly one owner
+/// of the shortcut live at a time.
+struct TrashShortcutEligibleKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
 extension FocusedValues {
     var activeBrowserModel: BrowserModel? {
         get { self[ActiveBrowserModelKey.self] }
         set { self[ActiveBrowserModelKey.self] = newValue }
+    }
+
+    var trashShortcutEligible: Bool? {
+        get { self[TrashShortcutEligibleKey.self] }
+        set { self[TrashShortcutEligibleKey.self] = newValue }
     }
 }
 
@@ -49,15 +62,10 @@ struct LoupeApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
-            // ⌘⌫ "Move to Trash" lives in the menu bar so AppKit dispatches it
-            // to the key window through the responder chain, no matter which
-            // subview (grid, list, sidebar, viewer) holds focus. This replaces
-            // the former hidden shortcut button + per-view onKeyPress handlers,
-            // whose focus-dependent arbitration made the key fire only
-            // sometimes.
-            CommandGroup(after: .pasteboard) {
-                TrashCommand()
-            }
+
+            // The full set of File / Item / View menu commands, all acting on
+            // the frontmost window's model via @FocusedValue. See LoupeCommands.
+            LoupeCommands()
         }
     }
 
@@ -67,22 +75,6 @@ struct LoupeApp: App {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         return panel.runModal() == .OK ? panel.urls : []
-    }
-}
-
-/// The menu-bar "Move to Trash" command, bound to ⌘⌫. It acts on the key
-/// window's `BrowserModel` (published via `focusedValue`) and disables itself
-/// when nothing is selected. Being a single menu item means exactly one owner
-/// of ⌘⌫ exists app-wide, so dispatch is never ambiguous.
-private struct TrashCommand: View {
-    @FocusedValue(\.activeBrowserModel) private var model
-
-    var body: some View {
-        Button("Move to Trash") {
-            model?.moveToTrash()
-        }
-        .keyboardShortcut(.deleteBackspace, modifiers: .command)
-        .disabled(!(model?.canTrashSelection ?? false))
     }
 }
 

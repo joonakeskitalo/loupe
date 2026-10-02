@@ -6,12 +6,19 @@ struct ThumbnailView: View {
     let size: Double
     let isSelected: Bool
     var isFlagged: Bool = false
+    /// When true, the filename caption under the thumbnail is hidden.
+    var hideFilename: Bool = false
 
     @State private var image: NSImage?
     @State private var didFail = false
 
+    /// Padding around each cell. Tighter than before for a denser grid, and
+    /// tighter still when filenames are hidden (there's no caption to breathe
+    /// around).
+    private var gridItemPadding: CGFloat { hideFilename ? 2 : 4 }
+
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: hideFilename ? 0 : 3) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.secondary.opacity(0.03))
@@ -51,14 +58,16 @@ struct ThumbnailView: View {
                     .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
             )
 
-            Text(item.name)
-                .font(.caption)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(width: size)
-                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+            if !hideFilename {
+                Text(item.name)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: size)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+            }
         }
-        .padding(6)
+        .padding(gridItemPadding)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
