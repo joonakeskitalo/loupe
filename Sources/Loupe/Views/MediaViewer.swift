@@ -284,6 +284,9 @@ struct MediaViewer: View {
                 // ⌘⌫ itself is owned by the single menu-bar command (see
                 // LoupeApp); this stays a clickable button and shows the key as
                 // a hint. Having one shortcut owner is what makes ⌘⌫ reliable.
+                // Keep it out of the focus ring so a focused trash button can't
+                // be fired by Space (which must stay owned by the viewer).
+                .focusable(false)
                 .help(isMulti ? "Move \(items.count) items to Trash (⌘⌫)" : "Move to Trash (⌘⌫)")
             }
 
@@ -423,6 +426,13 @@ struct MediaViewer: View {
     private func hotkey(_ key: KeyEquivalent, _ modifiers: EventModifiers, action: @escaping () -> Void) -> some View {
         Button(action: action) { EmptyView() }
             .keyboardShortcut(key, modifiers: modifiers)
+            // Keep these invisible shortcut buttons out of the focus ring. If
+            // one of them held keyboard focus, AppKit would let Space activate
+            // the focused button directly — e.g. the trash hotkey below would
+            // fire on Space, deleting the shown item instead of being handled
+            // by the viewer's own `.onKeyPress(.space)`. The key equivalent
+            // still dispatches without focus, so the shortcut keeps working.
+            .focusable(false)
     }
 
     /// Hidden ⌘⌫ shortcut for "Move to Trash" while the viewer is open.
