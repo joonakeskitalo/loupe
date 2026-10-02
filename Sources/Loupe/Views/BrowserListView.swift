@@ -137,6 +137,8 @@ struct BrowserListView: View {
             Text("Name")
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, thumbSize + ListRowMetrics.columnSpacing)
+            Text("Type")
+                .frame(width: ListRowMetrics.typeWidth, alignment: .leading)
             Text("Created")
                 .frame(width: ListRowMetrics.dateWidth, alignment: .leading)
             Text("Modified")
@@ -261,6 +263,7 @@ struct BrowserListView: View {
 /// Fixed metrics shared by the list header and its rows so columns line up.
 enum ListRowMetrics {
     static let columnSpacing: CGFloat = 12
+    static let typeWidth: CGFloat = 180
     static let dateWidth: CGFloat = 140
     static let sizeWidth: CGFloat = 80
 }
@@ -275,6 +278,13 @@ private struct ListRowView: View {
     var isFlagged: Bool = false
 
     @State private var image: NSImage?
+    /// Codec + pixel dimensions, probed lazily for video and image rows.
+    @State private var metadata: MediaMetadata = .empty
+
+    /// Uppercased file extension shown as the file type (e.g. "MP4", "PNG").
+    private var fileType: String {
+        item.url.pathExtension.uppercased()
+    }
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -308,6 +318,9 @@ private struct ListRowView: View {
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            typeColumn
+                .frame(width: ListRowMetrics.typeWidth, alignment: .leading)
+
             Text(dateString(item.creationDate))
                 .frame(width: ListRowMetrics.dateWidth, alignment: .leading)
                 .foregroundStyle(.secondary)
@@ -329,6 +342,31 @@ private struct ListRowView: View {
             isSelected ? Color.accentColor.opacity(0.15) : Color.clear
         )
         .task(id: item.id) { await loadThumbnail() }
+        .task(id: item.id) { await loadMetadata() }
+    }
+
+    /// The Type column: the uppercased extension plus, for video and image
+    /// files, the codec (video only) and pixel dimensions — all on one line so
+    /// every row stays the same height.
+    @ViewBuilder
+    private var typeColumn: some View {
+        Text(typeText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .foregroundStyle(.secondary)
+    }
+
+    /// Single-line type text: the extension, then codec (video only) and
+    /// dimensions as they resolve, joined by " · ".
+    private var typeText: String {
+        var parts: [String] = [fileType.isEmpty ? "—" : fileType]
+        if item.kind == .video, let codec = metadata.codec {
+            parts.append(codec.uppercased())
+        }
+        if let size = metadata.pixelSize {
+            parts.append(size.displayString)
+        }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -367,5 +405,11 @@ private struct ListRowView: View {
         if let result = await ThumbnailProvider.shared.thumbnail(for: item.url, size: target, scale: scale) {
             image = result
         }
+    }
+
+    private func loadMetadata() async {
+        metadata = .empty
+        guard item.kind == .video || item.kind == .image else { return }
+        metadata = await VideoMetadataProvider.shared.metadata(for: item.url, kind: item.kind)
     }
 }
