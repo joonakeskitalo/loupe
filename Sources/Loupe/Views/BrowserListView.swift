@@ -263,6 +263,9 @@ struct BrowserListView: View {
 
         Divider()
 
+        Button("Copy\(suffix)", systemImage: "doc.on.doc") {
+            model.copyToClipboard(item)
+        }
         Button("Open with Default App\(suffix)") {
             model.openInDefaultApp(item)
         }

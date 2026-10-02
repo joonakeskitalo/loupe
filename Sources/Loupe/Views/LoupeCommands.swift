@@ -17,6 +17,18 @@ struct LoupeCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
 
+            // Copy the selected file(s) to the clipboard as file references, so
+            // ⌘C here then ⌘V in Finder copies the actual files. Gated on a
+            // selection; the disabled state releases ⌘C so a focused search
+            // field still copies text normally. Also released while the viewer
+            // is open, where the viewer owns ⌘C via its own hidden button —
+            // keeping exactly one owner of the key live (same pattern as ⌘⌫).
+            Button(copyTitle) { model?.copyToClipboard() }
+                .keyboardShortcut("c", modifiers: .command)
+                .disabled(!hasSelection || viewerOpen)
+
+            Divider()
+
             // No key equivalent here: Return/Space already open the viewer as
             // modifier-less in-window hotkeys (gated by search focus), which
             // would clash with an always-on menu equivalent.
@@ -168,6 +180,11 @@ struct LoupeCommands: Commands {
     private var flagTitle: String {
         let count = model?.selectedItems.count ?? 0
         return count > 1 ? "Flag / Unflag Selection" : "Flag / Unflag"
+    }
+
+    private var copyTitle: String {
+        let count = model?.selectedItems.count ?? 0
+        return count > 1 ? "Copy \(count) Files" : "Copy"
     }
 
     // MARK: - Bindings into the focused model

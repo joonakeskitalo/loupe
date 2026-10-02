@@ -218,23 +218,7 @@ final class BrowserModel {
     }
 
     /// Whether the full-screen/detail viewer is presented.
-    var isViewerPresented = false {
-        didSet {
-            // Capture how many items the viewer opened with so paging and the
-            // post-deletion reflow keep that block size even as files are
-            // trashed from under the selection.
-            if isViewerPresented, !oldValue {
-                viewerPageSize = max(1, selectedItems.count)
-            }
-        }
-    }
-
-    /// How many items the fullscreen viewer pages by. Set to the selection size
-    /// when the viewer opens, and kept current as the user deliberately changes
-    /// the multi-selection. Deleting a file inside the current block must NOT
-    /// shrink this, otherwise arrow-key paging and the next-set reselection
-    /// after a deletion would silently collapse (the reported bug).
-    private(set) var viewerPageSize = 1
+    var isViewerPresented = false
 
     /// Whether the film strip of thumbnails is shown in the single-item viewer.
     var isFilmStripVisible = true
@@ -999,7 +983,6 @@ final class BrowserModel {
         if rangeAnchor == nil || !set.contains(rangeAnchor!) {
             rangeAnchor = ordered.first
         }
-        syncViewerPageSize()
     }
 
     /// Select every item currently shown in the grid (Cmd+A).
@@ -1009,7 +992,6 @@ final class BrowserModel {
         selectedItems = Set(items.map(\.id))
         selectedItem = items.last?.id
         rangeAnchor = items.first?.id
-        syncViewerPageSize()
     }
 
     // MARK: Selection mutations (driven by clicks)
@@ -1019,7 +1001,6 @@ final class BrowserModel {
         selectedItem = id
         rangeAnchor = id
         selectedItems = [id]
-        syncViewerPageSize()
     }
 
     /// Toggle an item in/out of the selection (Command-click).
@@ -1034,7 +1015,6 @@ final class BrowserModel {
             selectedItem = id
         }
         rangeAnchor = selectedItem
-        syncViewerPageSize()
     }
 
     /// Select the contiguous range from the anchor to `id` (Shift-click).
@@ -1050,17 +1030,6 @@ final class BrowserModel {
         let range = min(a, b)...max(a, b)
         selectedItems = Set(items[range].map(\.id))
         selectedItem = id
-        syncViewerPageSize()
-    }
-
-    /// Keeps `viewerPageSize` in step with an explicit, user-driven selection
-    /// change while the viewer is open, so paging reflects the latest
-    /// side-by-side count. Not called from navigation/reflow paths
-    /// (`moveSelectionBlock`, `reselectBlock`), which must preserve the page
-    /// size across deletions.
-    private func syncViewerPageSize() {
-        guard isViewerPresented else { return }
-        viewerPageSize = max(1, selectedItems.count)
     }
 
     func moveSelection(by offset: Int) {
@@ -1087,10 +1056,11 @@ final class BrowserModel {
         let items = displayedItems
         guard !items.isEmpty else { return }
 
-        // The viewer pages by its captured block size, which survives deletions
-        // (a trashed file inside the block must not shrink the page). Fall back
-        // to the live selection size when the viewer isn't driving navigation.
-        let pageSize = isViewerPresented ? max(viewerPageSize, selectedItems.count) : selectedItems.count
+        // Page by exactly the number of items currently shown. Driving this off
+        // the live selection count (rather than a persisted page size) keeps a
+        // plain arrow a pure navigation: it can never grow the selection, even
+        // after a deletion changed how many items are on screen.
+        let pageSize = selectedItems.count
         guard pageSize > 1 else {
             moveSelection(by: offset)
             return
@@ -1114,6 +1084,46 @@ final class BrowserModel {
         selectedItems = Set(newIDs)
         rangeAnchor = newIDs.first
         selectedItem = newIDs.first
+    }
+
+    /// Grows or shrinks the fullscreen viewer's selection from its RIGHT edge.
+    /// The left edge of the current selection stays pinned as the anchor and
+    /// the right edge moves:
+    ///   - Shift+Right (offset +1) extends the right edge outward, adding the
+    ///     next item.
+    ///   - Shift+Left (offset -1) pulls the right edge back in, removing the
+    ///     rightmost item (never shrinking below the single anchor item).
+    /// Used to build up or trim a side-by-side multi-image view from the
+    /// keyboard.
+    func extendViewerSelection(by offset: Int) {
+        let items = displayedItems
+        guard !items.isEmpty else { return }
+
+        let order = items.map(\.id)
+        // Current selection span in display order. With nothing selected yet,
+        // start a single selection at the focused item (or the first item).
+        let selectedIndices = order.enumerated()
+            .filter { selectedItems.contains($0.element) }
+            .map(\.offset)
+        guard let leftEdge = selectedIndices.min(),
+              let rightEdge = selectedIndices.max() else {
+            let startID = selectedItem ?? order.first
+            if let startID { selectOnly(startID) }
+            return
+        }
+
+        // Pin the anchor to the left edge and move only the right edge. Clamp
+        // so the right edge never crosses the left edge (keeps ≥1 item) or runs
+        // off the end of the list.
+        let anchorID = order[leftEdge]
+        rangeAnchor = anchorID
+        let newRight = (rightEdge + offset).clamped(to: leftEdge...(order.count - 1))
+
+        let ids = Array(order[leftEdge...newRight])
+        selectedItems = Set(ids)
+        // Keep the moving right edge as the primary/cursor so paging resumes
+        // from the trailing item.
+        selectedItem = order[newRight]
     }
 
     /// URLs of the next `count` image items that follow the current selection
@@ -1340,6 +1350,30 @@ final class BrowserModel {
         NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
+    /// Whether a copy action currently has any target (used to enable/disable
+    /// the menu item and keyboard shortcut).
+    var canCopySelection: Bool { !selectedItems.isEmpty }
+
+    /// Copies the given items (or the current selection) to the general
+    /// pasteboard as file references, so they can be pasted into Finder or any
+    /// app that accepts files (⌘C → ⌘V copies the actual files). Writing the
+    /// `URL`s as pasteboard objects advertises them as `public.file-url`, which
+    /// Finder reads as a file copy. The absolute-path string is also added so
+    /// plain-text targets (editors, terminals) receive the paths.
+    @discardableResult
+    func copyToClipboard(_ item: MediaItem? = nil) -> Int {
+        let urls = actionURLs(preferring: item)
+        guard !urls.isEmpty else { return 0 }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects(urls as [NSURL])
+        // Tab-separated paths as a plain-text fallback for non-file targets.
+        let paths = urls.map(\.path).joined(separator: "\n")
+        pasteboard.setString(paths, forType: .string)
+        return urls.count
+    }
+
     /// Whether a trash action currently has any target (used to enable/disable
     /// the menu item and keyboard shortcut).
     var canTrashSelection: Bool { !selectedItems.isEmpty }
@@ -1360,6 +1394,9 @@ final class BrowserModel {
         let order = displayedItems.map(\.id)
         let trashedSet = Set(urls)
         let firstTrashedIndex = order.firstIndex { trashedSet.contains($0) }
+        // How many items the viewer was showing before this trash, so a
+        // multi-image view can be re-formed at the same size afterward.
+        let selectedCountBeforeTrash = selectedItems.count
 
         var trashed: Set<URL> = []
         let fm = FileManager.default
@@ -1387,11 +1424,14 @@ final class BrowserModel {
         } else if let idx = firstTrashedIndex {
             let next = min(idx, survivors.count - 1)
             // In the fullscreen viewer's multi-item mode, keep showing a full
-            // block of the viewer's page size instead of collapsing to a single
-            // image — so deleting a file and navigating past it still pages by
-            // the original side-by-side count.
-            if isViewerPresented, viewerPageSize > 1 {
-                reselectBlock(startingAt: next, size: viewerPageSize, in: survivors)
+            // block the same size as what was open instead of collapsing to a
+            // single image — so deleting a file and navigating past it keeps the
+            // side-by-side count. The target size is the number of items still
+            // selected after the deletion plus the ones we just removed, i.e.
+            // how many were shown before the trash.
+            let shownBeforeTrash = selectedCountBeforeTrash
+            if isViewerPresented, shownBeforeTrash > 1 {
+                reselectBlock(startingAt: next, size: shownBeforeTrash, in: survivors)
             } else {
                 selectOnly(survivors[next])
             }

@@ -18,6 +18,12 @@ struct MediaViewer: View {
     /// libmpv) is driven through the `PlaybackController` protocol.
     @State private var videoController: (any PlaybackController)?
 
+    /// Drives keyboard focus for the viewer. Set true on appear so arrow-key
+    /// navigation and the other `onKeyPress` hotkeys work immediately after the
+    /// viewer opens (e.g. from a double-click on a grid item), without the user
+    /// first having to click the image or a film-strip thumbnail.
+    @FocusState private var isFocused: Bool
+
     private var showingSingleVideo: Bool {
         !isMulti && (items.first?.kind == .video || items.first?.kind == .audio)
     }
@@ -123,6 +129,7 @@ struct MediaViewer: View {
         .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
         .focusable()
+        .focused($isFocused)
         .focusEffectDisabled()
         // ⌘⌫ trashes the shown item(s). The viewer carries its own copy of this
         // shortcut (like its other hotkeys) rather than relying on the menu-bar
@@ -130,21 +137,46 @@ struct MediaViewer: View {
         // yields (ContentView stops publishing its model), so exactly one ⌘⌫
         // owner is live at a time.
         .background { trashHotkey }
-        // Consume the spacebar so it never bubbles up to the window's hidden
-        // shortcut buttons (which previously closed the viewer). For a single
-        // video/audio item, Space toggles play/pause.
-        .onKeyPress(.space) {
-            if showingSingleVideo, let videoController {
-                videoController.togglePlay()
-            }
-            return .handled
-        }
+        .background { copyHotkey }
+        // Space + arrow keys are handled through one modifier (see
+        // `ViewerKeyHandling`) so the main view's modifier chain stays small
+        // enough for the type-checker. Arrows go through `onKeyPress` rather
+        // than `keyboardShortcut` so plain and Shift variants disambiguate
+        // reliably: SwiftUI's arrow-key shortcut matching ignores the Shift
+        // modifier, which made a plain ←/→ trigger the Shift (extend) action.
+        .modifier(ViewerKeyHandling(
+            onSpace: {
+                if showingSingleVideo, let videoController {
+                    videoController.togglePlay()
+                }
+            },
+            onArrow: { forward, shift in handleArrow(forward: forward, shift: shift) }
+        ))
         .onChange(of: items.first?.id) { _, _ in
             if !showingSingleVideo { videoController = nil }
             prefetchUpcomingImages()
         }
         .onChange(of: items.count) { _, _ in prefetchUpcomingImages() }
-        .onAppear { prefetchUpcomingImages() }
+        .onAppear {
+            prefetchUpcomingImages()
+            // Grab keyboard focus so arrow-key navigation works right away,
+            // even before the user clicks inside the viewer. Deferred to the
+            // next runloop tick so the focusable view is installed first.
+            DispatchQueue.main.async { isFocused = true }
+        }
+    }
+
+    /// Routes a Left/Right arrow press. Shift grows/shrinks the selection one
+    /// item at a time; without Shift it pages the whole set by its size
+    /// (single-step when one item is shown).
+    private func handleArrow(forward: Bool, shift: Bool) -> KeyPress.Result {
+        let direction = forward ? 1 : -1
+        if shift {
+            model.extendViewerSelection(by: direction)
+        } else {
+            model.moveSelectionBlock(by: direction)
+        }
+        return .handled
     }
 
     /// Warm the preloader with the images the next arrow press will reveal so
@@ -463,14 +495,9 @@ struct MediaViewer: View {
         ZStack {
             hotkey("j", []) { model.moveSelectionBlock(by: -1) }
             hotkey("l", []) { model.moveSelectionBlock(by: 1) }
-            // Arrow keys page the whole set in multi-selection. The single-item
-            // view already owns ←/→ via its on-screen nav buttons, so these are
-            // only mounted when more than one item is shown to avoid two owners
-            // of the same shortcut.
-            if isMulti {
-                hotkey(.leftArrow, []) { model.moveSelectionBlock(by: -1) }
-                hotkey(.rightArrow, []) { model.moveSelectionBlock(by: 1) }
-            }
+            // ←/→ (plain = page the set, Shift = grow/shrink the selection) are
+            // handled centrally via `.onKeyPress` on the viewer so the plain
+            // and Shift variants disambiguate reliably.
             // F, I and S all flag the current item, matching the grid's flag
             // keys.
             hotkey("f", []) { model.toggleFlag() }
@@ -514,6 +541,17 @@ struct MediaViewer: View {
     private var trashHotkey: some View {
         hotkey(.deleteBackspace, .command) { model.moveToTrash() }
             .disabled(!model.canTrashSelection)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+
+    /// Hidden ⌘C shortcut to copy the shown item(s) to the clipboard while the
+    /// viewer owns focus, mirroring how the viewer carries its own ⌘⌫.
+    @ViewBuilder
+    private var copyHotkey: some View {
+        hotkey("c", .command) { model.copyToClipboard() }
+            .disabled(!model.canCopySelection)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -563,7 +601,41 @@ struct MediaViewer: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
-        .keyboardShortcut(offset < 0 ? .leftArrow : .rightArrow, modifiers: [])
+        // Arrow-key navigation is handled centrally via `.onKeyPress` on the
+        // viewer (see `handleArrow`) so plain and Shift arrows disambiguate;
+        // these buttons stay click-only.
+    }
+}
+
+// MARK: - Key handling
+
+/// Bundles the viewer's Space and Left/Right arrow key handling into a single
+/// modifier. Collapsing three `onKeyPress` calls into one keeps `MediaViewer`'s
+/// already-large modifier chain within the Swift type-checker's limit.
+private struct ViewerKeyHandling: ViewModifier {
+    let onSpace: () -> Void
+    let onArrow: (_ forward: Bool, _ shift: Bool) -> KeyPress.Result
+
+    func body(content: Content) -> some View {
+        content
+            .onKeyPress(.space) {
+                onSpace()
+                return .handled
+            }
+            // A single general handler (which receives the full `KeyPress`) is
+            // used for the arrows so we can read the Shift modifier precisely —
+            // the key-specific `onKeyPress(_:action:)` overload takes a
+            // zero-argument action and can't tell plain from Shift.
+            .onKeyPress { keyPress in
+                switch keyPress.key {
+                case .leftArrow:
+                    return onArrow(false, keyPress.modifiers.contains(.shift))
+                case .rightArrow:
+                    return onArrow(true, keyPress.modifiers.contains(.shift))
+                default:
+                    return .ignored
+                }
+            }
     }
 }
 
