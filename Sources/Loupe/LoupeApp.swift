@@ -1,6 +1,20 @@
 import SwiftUI
 import AppKit
 
+/// Publishes the key window's `BrowserModel` so menu commands (which live at
+/// the `Scene` level, outside any window) can act on whichever window is
+/// frontmost. Set by `ContentView` via `.focusedValue`.
+struct ActiveBrowserModelKey: FocusedValueKey {
+    typealias Value = BrowserModel
+}
+
+extension FocusedValues {
+    var activeBrowserModel: BrowserModel? {
+        get { self[ActiveBrowserModelKey.self] }
+        set { self[ActiveBrowserModelKey.self] = newValue }
+    }
+}
+
 @main
 struct LoupeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -35,6 +49,15 @@ struct LoupeApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
+            // ⌘⌫ "Move to Trash" lives in the menu bar so AppKit dispatches it
+            // to the key window through the responder chain, no matter which
+            // subview (grid, list, sidebar, viewer) holds focus. This replaces
+            // the former hidden shortcut button + per-view onKeyPress handlers,
+            // whose focus-dependent arbitration made the key fire only
+            // sometimes.
+            CommandGroup(after: .pasteboard) {
+                TrashCommand()
+            }
         }
     }
 
@@ -45,6 +68,31 @@ struct LoupeApp: App {
         panel.allowsMultipleSelection = true
         return panel.runModal() == .OK ? panel.urls : []
     }
+}
+
+/// The menu-bar "Move to Trash" command, bound to ⌘⌫. It acts on the key
+/// window's `BrowserModel` (published via `focusedValue`) and disables itself
+/// when nothing is selected. Being a single menu item means exactly one owner
+/// of ⌘⌫ exists app-wide, so dispatch is never ambiguous.
+private struct TrashCommand: View {
+    @FocusedValue(\.activeBrowserModel) private var model
+
+    var body: some View {
+        Button("Move to Trash") {
+            model?.moveToTrash()
+        }
+        .keyboardShortcut(.deleteBackspace, modifiers: .command)
+        .disabled(!(model?.canTrashSelection ?? false))
+    }
+}
+
+extension KeyEquivalent {
+    /// The Mac keyboard "delete" key (⌫), which sends backspace (U+0008).
+    ///
+    /// SwiftUI's built-in `.delete` maps to forward-delete (U+007F, the key
+    /// labeled "delete" on full keyboards / fn+⌫ on laptops), so a shortcut
+    /// bound to `.delete` never fires for a plain ⌘⌫ press. Use this instead.
+    static let deleteBackspace = KeyEquivalent("\u{8}")
 }
 
 /// Handles files/folders dropped on the Dock icon (or opened via the system),

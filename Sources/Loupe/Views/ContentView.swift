@@ -1,15 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-extension KeyEquivalent {
-    /// The Mac keyboard "delete" key (⌫), which sends backspace (U+0008).
-    ///
-    /// SwiftUI's built-in `.delete` maps to forward-delete (U+007F, the key
-    /// labeled "delete" on full keyboards / fn+⌫ on laptops), so a shortcut
-    /// bound to `.delete` never fires for a plain ⌘⌫ press. Use this instead.
-    static let deleteBackspace = KeyEquivalent("\u{8}")
-}
-
 struct ContentView: View {
     /// Folders/files to open when this window first appears (empty shows the
     /// drop zone).
@@ -102,6 +93,17 @@ struct ContentView: View {
                 PathBar(model: model)
             }
         }
+        // Publish this window's model so the menu-bar ⌘⌫ command can act on
+        // the frontmost window regardless of which subview holds focus.
+        //
+        // Suppressed in two cases so exactly one ⌘⌫ owner is ever live:
+        //  - search focused: ⌘⌫ should edit the search text, not trash;
+        //  - viewer open: the viewer carries its own ⌘⌫ handler (it owns focus
+        //    and the responder chain), so the menu command must step aside.
+        .focusedValue(
+            \.activeBrowserModel,
+            (searchFocused || model.isViewerPresented) ? nil : model
+        )
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.
         .toolbar(model.isViewerPresented ? .hidden : .automatic, for: .windowToolbar)
@@ -149,15 +151,9 @@ struct ContentView: View {
                 // F1 — NSF1FunctionKey is U+F704.
                 .keyboardShortcut(KeyEquivalent("\u{F704}"), modifiers: [])
                 .disabled(model.selectedItems.isEmpty || searchFocused)
-            Button("Move to Trash") { model.moveToTrash() }
-                // ⌘⌫ — the Mac "delete" key sends backspace (U+0008), not
-                // SwiftUI's `.delete` which is forward-delete (U+007F).
-                .keyboardShortcut(.deleteBackspace, modifiers: .command)
-                // Suspended while the viewer is open: the viewer mounts its own
-                // ⌘⌫ button, and two enabled buttons sharing one shortcut make
-                // SwiftUI's dispatch ambiguous (the keystroke then only works
-                // sometimes). Exactly one ⌘⌫ handler must be live at a time.
-                .disabled(!model.canTrashSelection || model.isViewerPresented || searchFocused)
+            // ⌘⌫ "Move to Trash" is a menu-bar command (see LoupeApp), so it
+            // isn't duplicated here — a single menu owner avoids the ambiguous
+            // dispatch that made the key unreliable.
             Button("Flag for Later") { model.toggleFlag() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(model.selectedItems.isEmpty || searchFocused)

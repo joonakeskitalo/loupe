@@ -124,6 +124,12 @@ struct MediaViewer: View {
         .background(Color.black.ignoresSafeArea())
         .focusable()
         .focusEffectDisabled()
+        // ⌘⌫ trashes the shown item(s). The viewer carries its own copy of this
+        // shortcut (like its other hotkeys) rather than relying on the menu-bar
+        // command: while the viewer is open it owns focus, and the menu command
+        // yields (ContentView stops publishing its model), so exactly one ⌘⌫
+        // owner is live at a time.
+        .background { trashHotkey }
         // Consume the spacebar so it never bubbles up to the window's hidden
         // shortcut buttons (which previously closed the viewer). For a single
         // video/audio item, Space toggles play/pause.
@@ -275,7 +281,9 @@ struct MediaViewer: View {
                         .background(.white.opacity(0.12), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut(.deleteBackspace, modifiers: .command)
+                // ⌘⌫ itself is owned by the single menu-bar command (see
+                // LoupeApp); this stays a clickable button and shows the key as
+                // a hint. Having one shortcut owner is what makes ⌘⌫ reliable.
                 .help(isMulti ? "Move \(items.count) items to Trash (⌘⌫)" : "Move to Trash (⌘⌫)")
             }
 
@@ -415,6 +423,17 @@ struct MediaViewer: View {
     private func hotkey(_ key: KeyEquivalent, _ modifiers: EventModifiers, action: @escaping () -> Void) -> some View {
         Button(action: action) { EmptyView() }
             .keyboardShortcut(key, modifiers: modifiers)
+    }
+
+    /// Hidden ⌘⌫ shortcut for "Move to Trash" while the viewer is open.
+    /// Disabled (releasing the shortcut) when there's nothing to trash.
+    @ViewBuilder
+    private var trashHotkey: some View {
+        hotkey(.deleteBackspace, .command) { model.moveToTrash() }
+            .disabled(!model.canTrashSelection)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 
     /// A clearly-tappable pill button for the dark viewer toolbar.
