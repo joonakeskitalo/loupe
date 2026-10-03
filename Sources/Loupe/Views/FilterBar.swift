@@ -59,9 +59,7 @@ struct FilterBar: View {
         // but always keep the bar up while a filter is active, otherwise
         // changing to a folder whose scope has just one kind would hide the bar
         // (and its Clear button) with the filter still silently applied.
-        if kinds.count > 1 || exts.count > 1 || model.hasActiveChipFilters
-            || !model.aiCategoryList.isEmpty || model.aiCategoryFilter != nil
-            || !model.personList.isEmpty || model.personFilter != nil {
+        if kinds.count > 1 || exts.count > 1 || model.hasActiveChipFilters {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(kinds) { chip in
@@ -89,55 +87,14 @@ struct FilterBar: View {
                         }
                     }
 
-                    // AI category chips, shown once at least one image has been
-                    // classified. A plain click filters to that category;
-                    // clicking the active one clears the filter.
-                    let categories = model.aiCategoryList
-                    if !categories.isEmpty {
-                        if !kinds.isEmpty || !exts.isEmpty {
-                            Divider().frame(height: 20)
-                        }
-                        ForEach(categories, id: \.self) { category in
-                            FilterChip(
-                                title: category,
-                                systemImage: "sparkles",
-                                count: model.aiCategoryCount(category),
-                                isSelected: model.aiCategoryFilter == category
-                            ) { _ in
-                                model.aiCategoryFilter =
-                                    model.aiCategoryFilter == category ? nil : category
-                            }
-                        }
-                    }
+                    // Note: AI category and person filters live in the sidebar
+                    // (as expandable Categories/People lists), not here — those
+                    // lists can grow long, so the sidebar suits them better.
 
-                    // Person chips, shown once faces have been recognized. A
-                    // plain click filters to that person; clicking the active
-                    // one clears the filter.
-                    let persons = model.personList
-                    if !persons.isEmpty {
-                        if !kinds.isEmpty || !exts.isEmpty || !categories.isEmpty {
-                            Divider().frame(height: 20)
-                        }
-                        ForEach(persons, id: \.self) { person in
-                            FilterChip(
-                                title: model.personName(person),
-                                systemImage: "person.crop.circle",
-                                count: model.personCount(person),
-                                isSelected: model.personFilter == person
-                            ) { _ in
-                                model.personFilter =
-                                    model.personFilter == person ? nil : person
-                            }
-                        }
-                    }
-
-                    if model.hasActiveChipFilters || model.aiCategoryFilter != nil
-                        || model.personFilter != nil {
+                    if model.hasActiveChipFilters {
                         Divider().frame(height: 20)
                         Button {
                             model.clearChipFilters()
-                            model.aiCategoryFilter = nil
-                            model.personFilter = nil
                         } label: {
                             Label("Clear", systemImage: "xmark.circle.fill")
                                 .font(.callout)
@@ -145,7 +102,7 @@ struct FilterBar: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
-                        .help("Clear all active filters")
+                        .help("Clear type and extension filters")
                     }
                 }
                 .padding(.horizontal, 16)

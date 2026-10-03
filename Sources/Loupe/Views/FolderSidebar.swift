@@ -25,6 +25,8 @@ struct FolderSidebar: View {
                 Button {
                     model.showFlaggedOnly = false
                     model.colorTagFilter = nil
+                    model.aiCategoryFilter = nil
+                    model.personFilter = nil
                     model.mode = .flattened
                     model.selectedFolder = model.roots.first
                     focused = true
@@ -33,7 +35,9 @@ struct FolderSidebar: View {
                         title: "All Media",
                         systemImage: "square.grid.3x3",
                         count: nil,
-                        isSelected: !model.showFlaggedOnly && model.colorTagFilter == nil && model.mode == .flattened
+                        isSelected: !model.showFlaggedOnly && model.colorTagFilter == nil
+                            && model.aiCategoryFilter == nil && model.personFilter == nil
+                            && model.mode == .flattened
                     )
                     // Counteract the List section's leading content inset so
                     // the Library rows sit flush-left like the root headers.
@@ -80,6 +84,24 @@ struct FolderSidebar: View {
                     .buttonStyle(.plain)
                     .disabled(count == 0 && model.colorTagFilter != tag)
                     .listRowInsets(Self.rowInsets)
+                }
+            }
+
+            // AI scene categories, as an expandable list. Shown only once the
+            // classifier has produced some; the header's trailing button clears
+            // all categories. Each row filters the grid to that category.
+            if !model.aiCategoryList.isEmpty {
+                Section {
+                    AICategorySection(model: model, focused: $focused, rowInsets: Self.rowInsets)
+                }
+            }
+
+            // Recognized people, as an expandable list. Shown only once faces
+            // have been found; the header's trailing button clears all people.
+            // Each row filters the grid to photos containing that person.
+            if !model.personList.isEmpty {
+                Section {
+                    PeopleSection(model: model, focused: $focused, rowInsets: Self.rowInsets)
                 }
             }
 
@@ -155,6 +177,7 @@ private struct FolderRow: View {
 
     private var isSelected: Bool {
         !model.showFlaggedOnly && model.colorTagFilter == nil
+            && model.aiCategoryFilter == nil && model.personFilter == nil
             && model.mode == .folders && model.selectedFolders.contains(node.url)
     }
 
@@ -162,6 +185,8 @@ private struct FolderRow: View {
         Button {
             model.showFlaggedOnly = false
             model.colorTagFilter = nil
+            model.aiCategoryFilter = nil
+            model.personFilter = nil
             model.mode = .folders
             // Cmd-click toggles the folder in/out of a multi-selection;
             // a plain click selects just this folder.
@@ -245,6 +270,115 @@ private struct RootHeaderRow: View {
         // root folder name sits flush at the sidebar's left edge instead of
         // lining up with the folder icons in the rows below.
         .padding(.leading, -12)
+    }
+}
+
+/// Expandable "Categories" list: a header with a clear-all button, disclosing
+/// one row per AI scene category. Each row filters the grid to that category.
+private struct AICategorySection: View {
+    @Bindable var model: BrowserModel
+    var focused: FocusState<Bool>.Binding
+    let rowInsets: EdgeInsets
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(model.aiCategoryList, id: \.self) { category in
+                Button {
+                    model.aiCategoryFilter = category
+                    focused.wrappedValue = true
+                } label: {
+                    SidebarLabel(
+                        title: category,
+                        systemImage: "sparkles",
+                        count: model.aiCategoryCount(category),
+                        isSelected: model.aiCategoryFilter == category
+                    )
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(rowInsets)
+            }
+        } label: {
+            SidebarSectionHeader(
+                title: "Categories",
+                clearHelp: "Clear all AI categories"
+            ) {
+                model.clearAICategories()
+            }
+            .padding(.leading, -3)
+        }
+        .listRowInsets(rowInsets)
+    }
+}
+
+/// Expandable "People" list: a header with a clear-all button, disclosing one
+/// row per recognized person. Each row filters the grid to photos with that
+/// person.
+private struct PeopleSection: View {
+    @Bindable var model: BrowserModel
+    var focused: FocusState<Bool>.Binding
+    let rowInsets: EdgeInsets
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(model.personList, id: \.self) { person in
+                Button {
+                    model.personFilter = person
+                    focused.wrappedValue = true
+                } label: {
+                    SidebarLabel(
+                        title: model.personName(person),
+                        systemImage: "person.crop.circle",
+                        count: model.personCount(person),
+                        isSelected: model.personFilter == person
+                    )
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(rowInsets)
+            }
+        } label: {
+            SidebarSectionHeader(
+                title: "People",
+                clearHelp: "Clear all recognized people"
+            ) {
+                model.clearFaces()
+            }
+            .padding(.leading, -3)
+        }
+        .listRowInsets(rowInsets)
+    }
+}
+
+/// A disclosure-group header for the AI sidebar sections: a title plus a
+/// trailing button that clears that section's classifications. Mirrors
+/// `RootHeaderRow`'s layout so the clear button lines up with the count badges.
+private struct SidebarSectionHeader: View {
+    let title: String
+    let clearHelp: String
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 20, alignment: .trailing)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(clearHelp)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

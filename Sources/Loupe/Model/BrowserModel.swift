@@ -197,7 +197,11 @@ final class BrowserModel {
     /// turning this on clears any active color-tag filter.
     var showFlaggedOnly = false {
         didSet {
-            if showFlaggedOnly, colorTagFilter != nil { colorTagFilter = nil }
+            if showFlaggedOnly {
+                if colorTagFilter != nil { colorTagFilter = nil }
+                if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                if personFilter != nil { personFilter = nil }
+            }
             clampSelection()
         }
     }
@@ -211,7 +215,11 @@ final class BrowserModel {
     /// no color filter is active. Mutually exclusive with `showFlaggedOnly`.
     var colorTagFilter: ColorTag? {
         didSet {
-            if colorTagFilter != nil, showFlaggedOnly { showFlaggedOnly = false }
+            if colorTagFilter != nil {
+                if showFlaggedOnly { showFlaggedOnly = false }
+                if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                if personFilter != nil { personFilter = nil }
+            }
             clampSelection()
         }
     }
@@ -226,9 +234,17 @@ final class BrowserModel {
     private(set) var aiCategories: [MediaItem.ID: String] = [:]
 
     /// When set, the grid shows only items the classifier placed in this
-    /// category. `nil` means no category filter is active.
+    /// category. `nil` means no category filter is active. Mutually exclusive
+    /// with the person filter and the flagged/color-tag Library views.
     var aiCategoryFilter: String? {
-        didSet { clampSelection() }
+        didSet {
+            if aiCategoryFilter != nil {
+                if showFlaggedOnly { showFlaggedOnly = false }
+                if colorTagFilter != nil { colorTagFilter = nil }
+                if personFilter != nil { personFilter = nil }
+            }
+            clampSelection()
+        }
     }
 
     /// How the grid/list are sectioned: flat, by AI category, or by recognized
@@ -253,9 +269,17 @@ final class BrowserModel {
     private(set) var facePersons: [MediaItem.ID: Set<Int>] = [:]
 
     /// When set, the grid shows only items containing this person. `nil` means
-    /// no person filter is active.
+    /// no person filter is active. Mutually exclusive with the category filter
+    /// and the flagged/color-tag Library views.
     var personFilter: Int? {
-        didSet { clampSelection() }
+        didSet {
+            if personFilter != nil {
+                if showFlaggedOnly { showFlaggedOnly = false }
+                if colorTagFilter != nil { colorTagFilter = nil }
+                if aiCategoryFilter != nil { aiCategoryFilter = nil }
+            }
+            clampSelection()
+        }
     }
 
     /// True while a classification OR face-recognition pass is running, so the
