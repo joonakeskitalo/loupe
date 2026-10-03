@@ -298,6 +298,20 @@ private struct AICategorySection: View {
                 }
                 .buttonStyle(.plain)
                 .listRowInsets(rowInsets)
+                .contextMenu {
+                    // Merge this category into another — relabels every item.
+                    let others = model.aiCategoryList.filter { $0 != category }
+                    if !others.isEmpty {
+                        Menu("Merge Into") {
+                            ForEach(others, id: \.self) { other in
+                                Button(other) { model.mergeCategory(category, into: other) }
+                            }
+                        }
+                    }
+                    Button("Remove Category", role: .destructive) {
+                        model.deleteCategory(category)
+                    }
+                }
             }
         } label: {
             SidebarSectionHeader(
@@ -338,6 +352,23 @@ private struct PeopleSection: View {
                 }
                 .buttonStyle(.plain)
                 .listRowInsets(rowInsets)
+                .contextMenu {
+                    // Merge this person into another — the clusterer often
+                    // splits one person across IDs; this stitches them back.
+                    let others = model.personList.filter { $0 != person }
+                    if !others.isEmpty {
+                        Menu("Merge Into") {
+                            ForEach(others, id: \.self) { other in
+                                Button(model.personName(other)) {
+                                    model.mergePerson(person, into: other)
+                                }
+                            }
+                        }
+                    }
+                    Button("Remove Person", role: .destructive) {
+                        model.deletePerson(person)
+                    }
+                }
             }
         } label: {
             SidebarSectionHeader(

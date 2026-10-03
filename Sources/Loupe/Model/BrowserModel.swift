@@ -1656,6 +1656,84 @@ final class BrowserModel {
         clampSelection()
     }
 
+    // MARK: - AI category editing (manual corrections)
+
+    /// The item IDs a category/person edit should act on: the clicked `item`
+    /// when it isn't part of the selection, otherwise the whole selection (or
+    /// just the clicked item when there's no selection). Mirrors how flag/tag
+    /// actions resolve their targets.
+    private func editTargets(for item: MediaItem?) -> [MediaItem.ID] {
+        if let item, !selectedItems.contains(item.id) {
+            return [item.id]
+        }
+        if !selectedItems.isEmpty {
+            return Array(selectedItems)
+        }
+        if let item {
+            return [item.id]
+        }
+        return []
+    }
+
+    /// Merge one category into another: every item labeled `source` is
+    /// relabeled `destination`. Used to fix the classifier splitting one real
+    /// group into two ("Dogs" + "Puppies" → "Dogs"). No-op if they're equal.
+    func mergeCategory(_ source: String, into destination: String) {
+        guard source != destination, !destination.isEmpty else { return }
+        for (id, category) in aiCategories where category == source {
+            aiCategories[id] = destination
+        }
+        if aiCategoryFilter == source { aiCategoryFilter = destination }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
+    /// Rename a category in place (relabels every item carrying it).
+    func renameCategory(_ source: String, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != source else { return }
+        mergeCategory(source, into: trimmed)
+    }
+
+    /// Move the target files (the clicked item or the current selection) into
+    /// `category`, replacing whatever category they had. Creating a brand-new
+    /// category is just passing a name nothing else uses yet.
+    func assignCategory(_ category: String, item: MediaItem? = nil) {
+        let trimmed = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let targets = editTargets(for: item)
+        guard !targets.isEmpty else { return }
+        for id in targets { aiCategories[id] = trimmed }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
+    /// Remove the target files from their category (they become Unclassified).
+    func removeFromCategory(item: MediaItem? = nil) {
+        let targets = editTargets(for: item)
+        guard !targets.isEmpty else { return }
+        for id in targets { aiCategories[id] = "" }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
+    /// Whether any target file currently carries an AI category — used to
+    /// enable "Remove from Category" in menus.
+    func canRemoveFromCategory(item: MediaItem? = nil) -> Bool {
+        editTargets(for: item).contains { aiCategory($0) != nil }
+    }
+
+    /// Delete a whole category: every item carrying it becomes Unclassified.
+    func deleteCategory(_ category: String) {
+        guard !category.isEmpty else { return }
+        for (id, value) in aiCategories where value == category {
+            aiCategories[id] = ""
+        }
+        if aiCategoryFilter == category { aiCategoryFilter = nil }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
     // MARK: - Face recognition
 
     /// The recognized people in the given item, as person IDs. Empty if the
@@ -1791,6 +1869,78 @@ final class BrowserModel {
         facePersons = [:]
         personFilter = nil
         if grouping == .person { grouping = .none }
+        clampSelection()
+    }
+
+    // MARK: - People editing (manual corrections)
+
+    /// Merge one person into another: `source` is replaced by `destination`
+    /// everywhere it appears, so photos of the same person the clusterer split
+    /// across two IDs collapse into one. A photo that had both ends up with
+    /// just `destination` (sets dedupe). No-op if they're equal.
+    func mergePerson(_ source: Int, into destination: Int) {
+        guard source != destination else { return }
+        for (id, people) in facePersons where people.contains(source) {
+            var updated = people
+            updated.remove(source)
+            updated.insert(destination)
+            facePersons[id] = updated
+        }
+        if personFilter == source { personFilter = destination }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
+    /// Move the target files (clicked item or selection) to `person`: the
+    /// person is added, and if `replacing` is given that person is removed from
+    /// those files first — i.e. "move these photos from Person A to Person B".
+    func assignPerson(_ person: Int, replacing: Int? = nil, item: MediaItem? = nil) {
+        let targets = editTargets(for: item)
+        guard !targets.isEmpty else { return }
+        for id in targets {
+            var people = facePersons[id] ?? []
+            if let replacing { people.remove(replacing) }
+            people.insert(person)
+            facePersons[id] = people
+        }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
+    /// Remove `person` from the target files (clicked item or selection). Used
+    /// to correct a false match without deleting the person entirely.
+    func removePerson(_ person: Int, item: MediaItem? = nil) {
+        let targets = editTargets(for: item)
+        guard !targets.isEmpty else { return }
+        for id in targets {
+            guard var people = facePersons[id], people.contains(person) else { continue }
+            people.remove(person)
+            facePersons[id] = people
+        }
+        if let filter = personFilter,
+           !facePersons.values.contains(where: { $0.contains(filter) }) {
+            personFilter = nil
+        }
+        invalidateDisplayCache()
+        clampSelection()
+    }
+
+    /// Whether any target file is currently tagged with `person` — used to
+    /// enable "Remove from Person" in menus.
+    func targetsContainPerson(_ person: Int, item: MediaItem? = nil) -> Bool {
+        let targets = editTargets(for: item)
+        return targets.contains { facePersons[$0]?.contains(person) ?? false }
+    }
+
+    /// Delete a whole person: remove that ID from every photo it appears in.
+    func deletePerson(_ person: Int) {
+        for (id, people) in facePersons where people.contains(person) {
+            var updated = people
+            updated.remove(person)
+            facePersons[id] = updated
+        }
+        if personFilter == person { personFilter = nil }
+        invalidateDisplayCache()
         clampSelection()
     }
 

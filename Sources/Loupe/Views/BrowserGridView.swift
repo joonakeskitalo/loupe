@@ -422,6 +422,9 @@ struct BrowserGridView: View {
                 model.recognizeFacesInSelection(item)
             }
             .disabled(model.isClassifying)
+
+            // Manual corrections: move file(s) between categories/people.
+            ClassificationEditMenu(model: model, item: item)
         }
 
         Divider()
