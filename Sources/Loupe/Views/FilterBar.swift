@@ -60,7 +60,8 @@ struct FilterBar: View {
         // changing to a folder whose scope has just one kind would hide the bar
         // (and its Clear button) with the filter still silently applied.
         if kinds.count > 1 || exts.count > 1 || model.hasActiveChipFilters
-            || !model.aiCategoryList.isEmpty || model.aiCategoryFilter != nil {
+            || !model.aiCategoryList.isEmpty || model.aiCategoryFilter != nil
+            || !model.personList.isEmpty || model.personFilter != nil {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(kinds) { chip in
@@ -109,11 +110,34 @@ struct FilterBar: View {
                         }
                     }
 
-                    if model.hasActiveChipFilters || model.aiCategoryFilter != nil {
+                    // Person chips, shown once faces have been recognized. A
+                    // plain click filters to that person; clicking the active
+                    // one clears the filter.
+                    let persons = model.personList
+                    if !persons.isEmpty {
+                        if !kinds.isEmpty || !exts.isEmpty || !categories.isEmpty {
+                            Divider().frame(height: 20)
+                        }
+                        ForEach(persons, id: \.self) { person in
+                            FilterChip(
+                                title: model.personName(person),
+                                systemImage: "person.crop.circle",
+                                count: model.personCount(person),
+                                isSelected: model.personFilter == person
+                            ) { _ in
+                                model.personFilter =
+                                    model.personFilter == person ? nil : person
+                            }
+                        }
+                    }
+
+                    if model.hasActiveChipFilters || model.aiCategoryFilter != nil
+                        || model.personFilter != nil {
                         Divider().frame(height: 20)
                         Button {
                             model.clearChipFilters()
                             model.aiCategoryFilter = nil
+                            model.personFilter = nil
                         } label: {
                             Label("Clear", systemImage: "xmark.circle.fill")
                                 .font(.callout)
@@ -121,7 +145,7 @@ struct FilterBar: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
-                        .help("Clear type, extension, and category filters")
+                        .help("Clear all active filters")
                     }
                 }
                 .padding(.horizontal, 16)

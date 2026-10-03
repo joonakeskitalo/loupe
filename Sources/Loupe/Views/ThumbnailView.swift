@@ -12,6 +12,9 @@ struct ThumbnailView: View {
     /// The AI-assigned category, if the image has been classified. Shown as a
     /// small caption pill in the bottom-leading corner.
     var aiCategory: String? = nil
+    /// Number of recognized people in the image (0 = none / not processed).
+    /// Shown as a small person badge in the bottom-trailing corner.
+    var personCount: Int = 0
     /// When true, the filename caption under the thumbnail is hidden.
     var hideFilename: Bool = false
 
@@ -89,6 +92,25 @@ struct ThumbnailView: View {
                         .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
                         .padding(6)
                         .help("AI category: \(aiCategory)")
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if personCount > 0, size >= 110 {
+                    // People badge: a person glyph plus a count when more than
+                    // one. Solid dark fill + shadow so it reads over any image.
+                    HStack(spacing: 2) {
+                        Image(systemName: "person.fill")
+                        if personCount > 1 { Text("\(personCount)") }
+                    }
+                    .font(.system(size: max(9, size * 0.07), weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.6), in: Capsule())
+                    .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                    .padding(6)
+                    .help(personCount == 1 ? "1 person" : "\(personCount) people")
                 }
             }
             .overlay(

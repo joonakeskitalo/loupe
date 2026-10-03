@@ -57,7 +57,7 @@ struct BrowserGridView: View {
     /// cell's index into the flat `displayedItems`, not its index within a
     /// section). Rebuilt only when grouping is active.
     private var globalIndex: [URL: Int] {
-        guard model.groupByCategory else { return [:] }
+        guard model.grouping != .none else { return [:] }
         var map: [URL: Int] = [:]
         for (i, item) in model.displayedItems.enumerated() { map[item.id] = i }
         return map
@@ -76,8 +76,12 @@ struct BrowserGridView: View {
             isFlagged: model.isFlagged(item.id),
             colorTag: model.colorTag(item.id),
             aiCategory: model.aiCategory(item.id),
+            personCount: model.persons(item.id).count,
             hideFilename: model.hideFilenames
         )
+        // The ScrollViewReader scrolls to this id; a grouped person view may
+        // show the same item under several people, so scrolling resolves to the
+        // first matching cell, which is fine.
         .id(item.id)
         // As the grid instantiates this cell (which LazyVGrid does just before
         // it scrolls into view), warm the next few items at low priority so a
@@ -117,10 +121,11 @@ struct BrowserGridView: View {
     @ViewBuilder
     private func sectionHeader(_ group: BrowserModel.CategoryGroup) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: group.category.isEmpty ? "questionmark.circle" : "sparkles")
+            Image(systemName: group.symbol)
                 .foregroundStyle(.secondary)
             Text(group.title)
                 .font(.headline)
+                .foregroundStyle(group.isResidual ? .secondary : .primary)
             Text("\(group.items.count)")
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -172,16 +177,24 @@ struct BrowserGridView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVGrid(columns: columns, spacing: spacing, pinnedViews: [.sectionHeaders]) {
-                                if model.groupByCategory {
-                                    // Grouped: one section per AI category, with
-                                    // a pinned header. Cells warm themselves by
-                                    // their position in the full display order
+                                if model.grouping != .none {
+                                    // Grouped: one section per category/person,
+                                    // with a pinned header. Cells warm by their
+                                    // position in the full display order
                                     // (globalIndex) so prefetch spans sections.
+                                    // A person can appear in several sections, so
+                                    // each cell's SwiftUI identity is scoped to
+                                    // its group to avoid duplicate-id collisions.
                                     ForEach(model.groupedDisplayedItems) { group in
                                         Section {
-                                            ForEach(group.items) { item in
-                                                cell(for: item,
-                                                     index: globalIndex[item.id] ?? 0,
+                                            // Composite data identity (group +
+                                            // item) so a person who appears in
+                                            // several sections doesn't produce
+                                            // duplicate ForEach identities within
+                                            // the one LazyVGrid.
+                                            ForEach(group.entries) { entry in
+                                                cell(for: entry.item,
+                                                     index: globalIndex[entry.item.id] ?? 0,
                                                      in: items)
                                             }
                                         } header: {
@@ -403,6 +416,10 @@ struct BrowserGridView: View {
         if classifyTargetCount(for: item) > 0 {
             Button("Classify with AI\(suffix)", systemImage: "sparkles") {
                 model.classifySelection(item)
+            }
+            .disabled(model.isClassifying)
+            Button("Find Faces\(suffix)", systemImage: "person.crop.circle") {
+                model.recognizeFacesInSelection(item)
             }
             .disabled(model.isClassifying)
         }

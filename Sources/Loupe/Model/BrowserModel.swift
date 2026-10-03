@@ -37,6 +37,15 @@ enum SortOrder: String, CaseIterable {
     case codec = "Video Codec"
 }
 
+/// How the grid/list break their items into sections, if at all. The two AI
+/// features each contribute a dimension: the scene classifier groups by
+/// category, face recognition groups by person. `.none` is a flat list.
+enum GroupingDimension: String, CaseIterable {
+    case none = "None"
+    case category = "Category"
+    case person = "Person"
+}
+
 @MainActor
 @Observable
 final class BrowserModel {
@@ -222,23 +231,50 @@ final class BrowserModel {
         didSet { clampSelection() }
     }
 
-    /// When true, the grid/list break the displayed items into sections, one
-    /// per AI category (plus an "Unclassified" section for the rest).
-    var groupByCategory = false {
+    /// How the grid/list are sectioned: flat, by AI category, or by recognized
+    /// person. Changing it only re-sections the already-filtered list.
+    var grouping: GroupingDimension = .none {
         didSet { invalidateDisplayCache() }
     }
 
-    /// True while a classification pass is running, so the UI can show progress
-    /// and disable a second trigger.
+    /// Back-compat shim for the original category-only toggle: reads/writes the
+    /// `.category` dimension so existing menu bindings keep working.
+    var groupByCategory: Bool {
+        get { grouping == .category }
+        set { grouping = newValue ? .category : .none }
+    }
+
+    // MARK: - Face recognition
+
+    /// Recognized people per item, as identity-free cluster IDs produced
+    /// on-device by `FaceRecognizer` + `FaceClusterer`. A photo can contain
+    /// several people, so each item maps to a *set* of person IDs. In-session
+    /// only, like the other annotations.
+    private(set) var facePersons: [MediaItem.ID: Set<Int>] = [:]
+
+    /// When set, the grid shows only items containing this person. `nil` means
+    /// no person filter is active.
+    var personFilter: Int? {
+        didSet { clampSelection() }
+    }
+
+    /// True while a classification OR face-recognition pass is running, so the
+    /// UI can show progress and disable a second trigger. Both passes share one
+    /// progress channel since only one runs at a time.
     private(set) var isClassifying = false
 
-    /// Number of images classified so far in the running pass, and the total
-    /// the pass set out to classify. Both reset when a pass starts; the view
-    /// reads them to render a progress indicator.
+    /// Items processed so far in the running pass, and the total the pass set
+    /// out to process. Both reset when a pass starts; the view reads them to
+    /// render a progress indicator.
     private(set) var classifyProgress = 0
     private(set) var classifyTotal = 0
 
-    /// Guards against launching more than one classification pass at a time.
+    /// A short label for the running pass ("Classifying" / "Finding Faces"),
+    /// shown next to the progress indicator.
+    private(set) var classifyActivity = ""
+
+    /// Guards against launching more than one classification/recognition pass
+    /// at a time.
     private var isRunningClassification = false
 
     /// Active media-type chip filters (empty = all types).
@@ -472,9 +508,14 @@ final class BrowserModel {
         flaggedItems.formIntersection(present)
         colorTags = colorTags.filter { present.contains($0.key) }
         aiCategories = aiCategories.filter { present.contains($0.key) }
+        facePersons = facePersons.filter { present.contains($0.key) }
         // Drop a category filter that no longer matches anything.
         if let filter = aiCategoryFilter, !aiCategories.values.contains(filter) {
             aiCategoryFilter = nil
+        }
+        // Drop a person filter whose person no longer appears anywhere.
+        if let person = personFilter, !facePersons.values.contains(where: { $0.contains(person) }) {
+            personFilter = nil
         }
     }
 
@@ -571,6 +612,10 @@ final class BrowserModel {
 
         if let aiCategoryFilter {
             base = base.filter { aiCategories[$0.id] == aiCategoryFilter }
+        }
+
+        if let personFilter {
+            base = base.filter { facePersons[$0.id]?.contains(personFilter) ?? false }
         }
 
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -734,6 +779,9 @@ final class BrowserModel {
         }
         if let aiCategoryFilter {
             return aiCategoryFilter
+        }
+        if let personFilter {
+            return personName(personFilter)
         }
         if mode == .folders, !selectedFolders.isEmpty {
             if selectedFolders.count == 1, let folder = selectedFolders.first {
@@ -1407,23 +1455,43 @@ final class BrowserModel {
         scopedItems.contains { $0.kind == .image }
     }
 
-    /// The displayed items split into sections for grouped rendering: one
-    /// section per AI category (ordered like `aiCategoryList`), with everything
-    /// still-unclassified gathered into a trailing "Unclassified" section.
-    /// Items within a section keep the active sort order. Views read this only
-    /// when `groupByCategory` is on.
+    /// A section for grouped rendering: a header title plus the items in it.
+    /// Used for both the category and person grouping dimensions. `symbol`
+    /// drives the header icon; `isResidual` marks the trailing catch-all bucket
+    /// ("Unclassified" / "No People") so the header can read differently.
     struct CategoryGroup: Identifiable {
-        let category: String        // "" is the Unclassified bucket
+        let id: String
+        let title: String
+        let symbol: String
         let items: [MediaItem]
-        var id: String { category.isEmpty ? "\u{0}unclassified" : category }
-        /// Section header title; the empty category becomes "Unclassified".
-        var title: String { category.isEmpty ? "Unclassified" : category }
+        var isResidual: Bool = false
+
+        /// An item scoped to this group, so a photo that appears under several
+        /// people has a distinct SwiftUI identity in each section (the same
+        /// URL would otherwise collide within one lazy container).
+        struct Entry: Identifiable {
+            let groupID: String
+            let item: MediaItem
+            var id: String { "\(groupID)\u{1}\(item.id.absoluteString)" }
+        }
+
+        var entries: [Entry] { items.map { Entry(groupID: id, item: $0) } }
     }
 
+    /// The displayed items split into sections per the active `grouping`
+    /// dimension. Items within a section keep the active sort order. Views read
+    /// this only when `grouping != .none`. A `.person` grouping can list the
+    /// same photo under several people (it may contain several); the other
+    /// dimensions place each item in exactly one bucket.
     var groupedDisplayedItems: [CategoryGroup] {
+        switch grouping {
+        case .person:   return groupedByPerson
+        case .category, .none: return groupedByCategoryGroups
+        }
+    }
+
+    private var groupedByCategoryGroups: [CategoryGroup] {
         let items = displayedItems
-        // Preserve display order within each bucket by walking items once and
-        // appending into per-category arrays.
         var buckets: [String: [MediaItem]] = [:]
         for item in items {
             let key = aiCategory(item.id) ?? ""
@@ -1431,10 +1499,41 @@ final class BrowserModel {
         }
         var groups: [CategoryGroup] = []
         for category in aiCategoryList where buckets[category] != nil {
-            groups.append(CategoryGroup(category: category, items: buckets[category]!))
+            groups.append(CategoryGroup(
+                id: category, title: category, symbol: "sparkles",
+                items: buckets[category]!))
         }
         if let unclassified = buckets[""], !unclassified.isEmpty {
-            groups.append(CategoryGroup(category: "", items: unclassified))
+            groups.append(CategoryGroup(
+                id: "\u{0}unclassified", title: "Unclassified",
+                symbol: "questionmark.circle", items: unclassified, isResidual: true))
+        }
+        return groups
+    }
+
+    private var groupedByPerson: [CategoryGroup] {
+        let items = displayedItems
+        var buckets: [Int: [MediaItem]] = [:]
+        var noPeople: [MediaItem] = []
+        for item in items {
+            let persons = facePersons[item.id] ?? []
+            if persons.isEmpty {
+                noPeople.append(item)
+            } else {
+                // A photo with several people appears under each of them.
+                for person in persons { buckets[person, default: []].append(item) }
+            }
+        }
+        var groups: [CategoryGroup] = []
+        for person in personList where buckets[person] != nil {
+            groups.append(CategoryGroup(
+                id: "person-\(person)", title: personName(person),
+                symbol: "person.crop.circle", items: buckets[person]!))
+        }
+        if !noPeople.isEmpty {
+            groups.append(CategoryGroup(
+                id: "\u{0}nopeople", title: "No People",
+                symbol: "person.slash", items: noPeople, isResidual: true))
         }
         return groups
     }
@@ -1477,6 +1576,7 @@ final class BrowserModel {
 
         isRunningClassification = true
         isClassifying = true
+        classifyActivity = "Classifying"
         classifyProgress = 0
         classifyTotal = pending.count
 
@@ -1518,7 +1618,7 @@ final class BrowserModel {
         classifyProgress += 1
         // Grouping and the category filter both depend on this map, so the
         // memoized displayed list may now be stale.
-        if groupByCategory || aiCategoryFilter != nil {
+        if grouping == .category || aiCategoryFilter != nil {
             invalidateDisplayCache()
         }
     }
@@ -1528,7 +1628,145 @@ final class BrowserModel {
     func clearAICategories() {
         aiCategories = [:]
         aiCategoryFilter = nil
-        groupByCategory = false
+        if grouping == .category { grouping = .none }
+        clampSelection()
+    }
+
+    // MARK: - Face recognition
+
+    /// The recognized people in the given item, as person IDs. Empty if the
+    /// item hasn't been processed or no face was found.
+    func persons(_ id: MediaItem.ID) -> Set<Int> {
+        facePersons[id] ?? []
+    }
+
+    /// Distinct person IDs found so far, sorted by descending photo count then
+    /// by ID (so the most-photographed person is "Person 1"-ish at the front).
+    var personList: [Int] {
+        var counts: [Int: Int] = [:]
+        for persons in facePersons.values {
+            for person in persons { counts[person, default: 0] += 1 }
+        }
+        return counts.keys.sorted { lhs, rhs in
+            let (l, r) = (counts[lhs] ?? 0, counts[rhs] ?? 0)
+            if l != r { return l > r }
+            return lhs < rhs
+        }
+    }
+
+    /// Display name for a person cluster. Identity-free, so it's just the
+    /// cluster number ("Person 3").
+    func personName(_ id: Int) -> String { "Person \(id)" }
+
+    /// Number of photos containing the given person.
+    func personCount(_ id: Int) -> Int {
+        facePersons.values.reduce(0) { $0 + ($1.contains(id) ? 1 : 0) }
+    }
+
+    /// Number of items in which at least one face was recognized.
+    var withFacesCount: Int {
+        facePersons.values.reduce(0) { $0 + ($1.isEmpty ? 0 : 1) }
+    }
+
+    /// Recognize faces in the current selection (or a specific right-clicked
+    /// item). Non-image items are skipped.
+    func recognizeFacesInSelection(_ item: MediaItem? = nil) {
+        let urls = Set(actionURLs(preferring: item))
+        let targets = (item.map { [$0] } ?? selectedMediaItems)
+            .filter { $0.kind == .image && urls.contains($0.url) }
+        recognizeFaces(items: targets.isEmpty ? imageTargets(from: urls) : targets)
+    }
+
+    /// Recognize faces across every image in the current scope not yet
+    /// processed. The common entry point for a "Find Faces" toolbar action.
+    func recognizeAllFaces() {
+        let pending = scopedItems.filter {
+            $0.kind == .image && facePersons[$0.id] == nil
+        }
+        recognizeFaces(items: pending)
+    }
+
+    /// Runs a face-detection + feature-print pass over `items`, then clusters
+    /// the faces into people. Detection/feature-print extraction is concurrent
+    /// (bounded, off the main actor); clustering is applied on the main actor
+    /// in a stable item order so person IDs are deterministic.
+    ///
+    /// To keep person IDs stable when re-running after adding photos, the
+    /// clusterer is primed with the faces already assigned, so new faces extend
+    /// the existing people rather than renumbering them.
+    private func recognizeFaces(items: [MediaItem]) {
+        guard !isRunningClassification else { return }
+        let pending = items.filter { $0.kind == .image && facePersons[$0.id] == nil }
+        guard !pending.isEmpty else { return }
+
+        isRunningClassification = true
+        isClassifying = true
+        classifyActivity = "Finding Faces"
+        classifyProgress = 0
+        classifyTotal = pending.count
+
+        // Continue person numbering past any people already found so a second
+        // pass doesn't reuse IDs. (Representatives from the prior pass aren't
+        // retained, so this is a fresh clusterer seeded only with the next ID.)
+        let startID = (personList.max() ?? 0) + 1
+
+        Task { @MainActor in
+            var clusterer = FaceClusterer()
+            clusterer.seedNextID(startID)
+
+            let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+
+            // Extract face prints concurrently, but cluster in the fixed
+            // `pending` order (not completion order) so IDs are deterministic.
+            // We gather results into a dictionary keyed by item, then walk
+            // `pending` sequentially to assign clusters.
+            var printsByItem: [MediaItem.ID: [FaceFeaturePrint]] = [:]
+            var iterator = pending.makeIterator()
+
+            await withTaskGroup(of: (MediaItem.ID, [FaceFeaturePrint]).self) { group in
+                var inFlight = 0
+                func addNext() {
+                    guard let item = iterator.next() else { return }
+                    inFlight += 1
+                    group.addTask {
+                        let faces = await FaceRecognizer.shared.faces(for: item.url)
+                        return (item.id, faces)
+                    }
+                }
+                for _ in 0..<maxConcurrent { addNext() }
+                while inFlight > 0, let (id, faces) = await group.next() {
+                    inFlight -= 1
+                    printsByItem[id] = faces
+                    // Progress tracks extraction (the slow part); clustering
+                    // below is near-instant.
+                    self.classifyProgress += 1
+                    addNext()
+                }
+            }
+
+            // Deterministic clustering pass in display order.
+            for item in pending {
+                let faces = printsByItem[item.id] ?? []
+                var people = Set<Int>()
+                for face in faces {
+                    if let person = clusterer.assign(face) { people.insert(person) }
+                }
+                self.facePersons[item.id] = people
+            }
+
+            if self.grouping == .person || self.personFilter != nil {
+                self.invalidateDisplayCache()
+            }
+            self.isClassifying = false
+            self.isRunningClassification = false
+        }
+    }
+
+    /// Clear all recognized people and drop any person filter/grouping.
+    func clearFaces() {
+        facePersons = [:]
+        personFilter = nil
+        if grouping == .person { grouping = .none }
         clampSelection()
     }
 
@@ -1694,6 +1932,7 @@ final class BrowserModel {
         flaggedItems.subtract(trashed)
         for url in trashed { colorTags[url] = nil }
         for url in trashed { aiCategories[url] = nil }
+        for url in trashed { facePersons[url] = nil }
         rebuildMerged()
     }
 

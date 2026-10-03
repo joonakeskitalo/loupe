@@ -303,32 +303,46 @@ struct ContentView: View {
         }
 
         ToolbarItem(id: "classify") {
-            // On-device AI classification. While a pass runs this shows a
-            // determinate spinner with "done/total"; otherwise it's a sparkles
-            // button that classifies the selection (or the whole scope when
-            // nothing is selected). Hidden entirely when there are no images.
+            // On-device AI: scene classification and face recognition. While a
+            // pass runs this shows a determinate spinner labeled with the
+            // activity and "done/total"; otherwise it offers a sparkles button
+            // (classify) and a person button (find faces), acting on the
+            // selection or the whole scope. Hidden when there are no images.
             if model.isClassifying {
                 HStack(spacing: 6) {
                     ProgressView(value: Double(model.classifyProgress),
                                  total: Double(max(1, model.classifyTotal)))
                         .progressViewStyle(.circular)
                         .controlSize(.small)
-                    Text("\(model.classifyProgress)/\(model.classifyTotal)")
+                    Text("\(model.classifyActivity) \(model.classifyProgress)/\(model.classifyTotal)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                .help("Classifying images on-device…")
+                .help("Working on-device…")
             } else if model.hasClassifiableImages {
-                Button {
-                    if model.selectedMediaItems.contains(where: { $0.kind == .image }) {
-                        model.classifySelection()
-                    } else {
-                        model.classifyAllImages()
+                HStack(spacing: 2) {
+                    Button {
+                        if model.selectedMediaItems.contains(where: { $0.kind == .image }) {
+                            model.classifySelection()
+                        } else {
+                            model.classifyAllImages()
+                        }
+                    } label: {
+                        Label("Classify", systemImage: "sparkles")
                     }
-                } label: {
-                    Label("Classify", systemImage: "sparkles")
+                    .help("Classify images into categories with Apple's on-device models (⇧⌘L)")
+
+                    Button {
+                        if model.selectedMediaItems.contains(where: { $0.kind == .image }) {
+                            model.recognizeFacesInSelection()
+                        } else {
+                            model.recognizeAllFaces()
+                        }
+                    } label: {
+                        Label("Find Faces", systemImage: "person.crop.circle")
+                    }
+                    .help("Group photos by person using on-device face recognition (⌥⌘F)")
                 }
-                .help("Classify images with Apple's on-device models (⇧⌘L)")
             }
         }
 

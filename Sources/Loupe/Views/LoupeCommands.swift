@@ -85,6 +85,22 @@ struct LoupeCommands: Commands {
             Button("Clear AI Categories") { model?.clearAICategories() }
                 .disabled((model?.classifiedCount ?? 0) == 0)
 
+            // Identity-free face recognition: cluster same-person photos into
+            // "Person N" groups, on-device. Acts on the selection's images, or
+            // the whole scope when nothing is selected.
+            Button(faceTitle) {
+                if hasSelection {
+                    model?.recognizeFacesInSelection()
+                } else {
+                    model?.recognizeAllFaces()
+                }
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(!canClassify)
+
+            Button("Clear People") { model?.clearFaces() }
+                .disabled((model?.withFacesCount ?? 0) == 0)
+
             Button("Move to Trash") { model?.moveToTrash() }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 // A disabled Button releases its shortcut, so gating on
@@ -144,11 +160,27 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(model == nil)
 
-            // Break the grid/list into sections, one per AI category. Only
-            // meaningful once something has been classified.
-            Toggle("Group by Category", isOn: groupByCategoryBinding)
-                .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(model == nil || (model?.classifiedCount ?? 0) == 0)
+            // Section the grid/list by an AI dimension: none, scene category,
+            // or recognized person. Each option disables itself until the
+            // matching pass has produced something to group by.
+            Menu("Group By") {
+                Picker("Group By", selection: groupingBinding) {
+                    Text("None").tag(GroupingDimension.none)
+                    Text("Category").tag(GroupingDimension.category)
+                    Text("Person").tag(GroupingDimension.person)
+                }
+                .pickerStyle(.inline)
+            }
+            .disabled(model == nil
+                      || ((model?.classifiedCount ?? 0) == 0 && (model?.withFacesCount ?? 0) == 0))
+
+            // Quick toggle for the most common case (⇧⌘G flips category
+            // grouping on/off), kept for muscle memory.
+            Button(groupByCategoryToggleTitle) {
+                model?.groupByCategory.toggle()
+            }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
+            .disabled(model == nil || (model?.classifiedCount ?? 0) == 0)
 
             Divider()
 
@@ -223,11 +255,23 @@ struct LoupeCommands: Commands {
     }
 
     private var classifyTitle: String {
-        if model?.isClassifying == true { return "Classifying…" }
+        if model?.isClassifying == true { return "Working…" }
         let selectedImages = model?.selectedMediaItems.filter { $0.kind == .image }.count ?? 0
         if selectedImages > 1 { return "Classify \(selectedImages) Images with AI" }
         if hasSelection && selectedImages == 1 { return "Classify Image with AI" }
         return "Classify All Images with AI"
+    }
+
+    private var faceTitle: String {
+        if model?.isClassifying == true { return "Working…" }
+        let selectedImages = model?.selectedMediaItems.filter { $0.kind == .image }.count ?? 0
+        if selectedImages > 1 { return "Find Faces in \(selectedImages) Images" }
+        if hasSelection && selectedImages == 1 { return "Find Faces in Image" }
+        return "Find Faces in All Images"
+    }
+
+    private var groupByCategoryToggleTitle: String {
+        model?.grouping == .category ? "Ungroup" : "Group by Category"
     }
 
     // MARK: - Bindings into the focused model
@@ -248,7 +292,7 @@ struct LoupeCommands: Commands {
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
-    private var groupByCategoryBinding: Binding<Bool> { binding(\.groupByCategory, default: false) }
+    private var groupingBinding: Binding<GroupingDimension> { binding(\.grouping, default: .none) }
     private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
     private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }
 }

@@ -58,10 +58,10 @@ struct BrowserListView: View {
                     header
                     ScrollView {
                         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                            if model.groupByCategory {
+                            if model.grouping != .none {
                                 ForEach(model.groupedDisplayedItems) { group in
                                     Section {
-                                        ForEach(group.items) { item in row(for: item) }
+                                        ForEach(group.entries) { entry in row(for: entry.item) }
                                     } header: {
                                         sectionHeader(group)
                                     }
@@ -267,14 +267,15 @@ struct BrowserListView: View {
         .contextMenu { contextMenu(for: item) }
     }
 
-    /// A pinned category section header for the grouped list layout.
+    /// A pinned section header for the grouped list layout.
     @ViewBuilder
     private func sectionHeader(_ group: BrowserModel.CategoryGroup) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: group.category.isEmpty ? "questionmark.circle" : "sparkles")
+            Image(systemName: group.symbol)
                 .foregroundStyle(.secondary)
             Text(group.title)
                 .font(.headline)
+                .foregroundStyle(group.isResidual ? .secondary : .primary)
             Text("\(group.items.count)")
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -309,6 +310,10 @@ struct BrowserListView: View {
         if classifyTargetCount(for: item) > 0 {
             Button("Classify with AI\(suffix)", systemImage: "sparkles") {
                 model.classifySelection(item)
+            }
+            .disabled(model.isClassifying)
+            Button("Find Faces\(suffix)", systemImage: "person.crop.circle") {
+                model.recognizeFacesInSelection(item)
             }
             .disabled(model.isClassifying)
         }
