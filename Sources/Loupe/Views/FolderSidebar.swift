@@ -338,6 +338,10 @@ private struct PeopleSection: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
+            // Engine + threshold controls for face clustering.
+            FaceControls(model: model)
+                .listRowInsets(rowInsets)
+
             ForEach(model.personList, id: \.self) { person in
                 Button {
                     model.personFilter = person
@@ -380,6 +384,75 @@ private struct PeopleSection: View {
             .padding(.leading, -3)
         }
         .listRowInsets(rowInsets)
+    }
+}
+
+/// Face-clustering controls shown at the top of the People section: which
+/// embedding engine to use, and the clustering sensitivity. The threshold
+/// slider re-groups the already-extracted faces live (cheap); switching engines
+/// requires a fresh "Find Faces" run, which the hint explains.
+private struct FaceControls: View {
+    @Bindable var model: BrowserModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Engine picker. Core ML is disabled until a model is installed.
+            Picker("Engine", selection: $model.faceEngine) {
+                ForEach(FaceRecognitionEngine.allCases, id: \.self) { engine in
+                    Text(engine.displayName)
+                        .tag(engine)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .disabled(model.isClassifying)
+
+            if model.faceEngine == .coreMLEmbedding && !model.coreMLFaceModelAvailable {
+                Text("No Core ML face model installed. Add one to use this engine.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Clustering sensitivity. Re-groups the existing faces as it moves.
+            HStack(spacing: 6) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: $model.faceClusterThreshold,
+                    in: model.faceEngine.thresholdRange
+                ) { editing in
+                    // Re-cluster when the drag ends (not on every tick).
+                    if !editing { model.reclusterFaces() }
+                }
+                .controlSize(.mini)
+                .disabled(model.isClassifying || model.personList.isEmpty)
+            }
+            Text("Grouping: \(thresholdLabel)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .padding(.leading, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { model.refreshCoreMLFaceAvailability() }
+        .onChange(of: model.faceEngine) { _, _ in
+            model.refreshCoreMLFaceAvailability()
+        }
+    }
+
+    /// A plain-language read of the threshold: lower is stricter (splits more),
+    /// higher is looser (merges more).
+    private var thresholdLabel: String {
+        let range = model.faceEngine.thresholdRange
+        let span = range.upperBound - range.lowerBound
+        let t = (model.faceClusterThreshold - range.lowerBound) / span
+        switch t {
+        case ..<0.33: return "stricter"
+        case ..<0.66: return "balanced"
+        default: return "looser"
+        }
     }
 }
 

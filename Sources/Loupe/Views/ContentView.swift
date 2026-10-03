@@ -253,6 +253,27 @@ struct ContentView: View {
             .help("Rescan all folders (⌘R)")
         }
 
+        // Consolidated on-device AI controls (scene classification + face
+        // recognition), kept away from the zoom slider. While a pass runs it
+        // shows progress; otherwise it's a menu where the user picks the face
+        // engine and sensitivity *before* running, then triggers either pass.
+        ToolbarItem(id: "ai") {
+            if model.isClassifying {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(model.classifyProgress),
+                                 total: Double(max(1, model.classifyTotal)))
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                    Text("\(model.classifyActivity) \(model.classifyProgress)/\(model.classifyTotal)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .help("Working on-device…")
+            } else if model.hasClassifiableImages {
+                AIMenu(model: model)
+            }
+        }
+
 
         ToolbarItem(id: "layout") {
             Picker("Layout", selection: $model.viewLayout) {
@@ -300,50 +321,6 @@ struct ContentView: View {
                    in: BrowserModel.minThumbnailSize...BrowserModel.maxThumbnailSize)
                 .frame(width: 120)
                 .help(model.viewLayout == .grid ? "Thumbnail size" : "Row size")
-        }
-
-        ToolbarItem(id: "classify") {
-            // On-device AI: scene classification and face recognition. While a
-            // pass runs this shows a determinate spinner labeled with the
-            // activity and "done/total"; otherwise it offers a sparkles button
-            // (classify) and a person button (find faces), acting on the
-            // selection or the whole scope. Hidden when there are no images.
-            if model.isClassifying {
-                HStack(spacing: 6) {
-                    ProgressView(value: Double(model.classifyProgress),
-                                 total: Double(max(1, model.classifyTotal)))
-                        .progressViewStyle(.circular)
-                        .controlSize(.small)
-                    Text("\(model.classifyActivity) \(model.classifyProgress)/\(model.classifyTotal)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .help("Working on-device…")
-            } else if model.hasClassifiableImages {
-                HStack(spacing: 2) {
-                    Button {
-                        if model.selectedMediaItems.contains(where: { $0.kind == .image }) {
-                            model.classifySelection()
-                        } else {
-                            model.classifyAllImages()
-                        }
-                    } label: {
-                        Label("Classify", systemImage: "sparkles")
-                    }
-                    .help("Classify images into categories with Apple's on-device models (⇧⌘L)")
-
-                    Button {
-                        if model.selectedMediaItems.contains(where: { $0.kind == .image }) {
-                            model.recognizeFacesInSelection()
-                        } else {
-                            model.recognizeAllFaces()
-                        }
-                    } label: {
-                        Label("Find Faces", systemImage: "person.crop.circle")
-                    }
-                    .help("Group photos by person using on-device face recognition (⌥⌘F)")
-                }
-            }
         }
 
         ToolbarItem {

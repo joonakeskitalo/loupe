@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftUI
 import AppKit
 
 /// Shared context-menu content for manually correcting the AI classifications
@@ -89,5 +90,134 @@ struct ClassificationEditMenu: View {
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+/// The consolidated on-device AI control in the toolbar: a single "AI" menu
+/// (sparkles) holding scene-classification actions and the face-recognition
+/// controls. Crucially, the face **engine** and **sensitivity** are chosen
+/// here, *before* running "Find Faces", so the user isn't forced to run first
+/// and adjust afterward.
+struct AIMenu: View {
+    @Bindable var model: BrowserModel
+
+    private var hasSelectedImages: Bool {
+        model.selectedMediaItems.contains { $0.kind == .image }
+    }
+
+    var body: some View {
+        Menu {
+            // MARK: Scene classification
+            Section("Categories") {
+                Button(classifyTitle, systemImage: "sparkles") {
+                    if hasSelectedImages { model.classifySelection() }
+                    else { model.classifyAllImages() }
+                }
+                if model.classifiedCount > 0 {
+                    Button("Clear Categories", role: .destructive) {
+                        model.clearAICategories()
+                    }
+                }
+            }
+
+            // MARK: Face recognition — settings first, then the action.
+            Section("People") {
+                Picker("Engine", selection: $model.faceEngine) {
+                    ForEach(FaceRecognitionEngine.allCases, id: \.self) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+
+                if model.faceEngine == .coreMLEmbedding && !model.coreMLFaceModelAvailable {
+                    Text("No Core ML face model installed")
+                }
+
+                // Sensitivity slider lives in the menu so it's set before a run.
+                // Re-clusters live if people already exist.
+                Menu("Sensitivity: \(sensitivityLabel)") {
+                    // A compact set of presets keeps this usable inside a menu,
+                    // where a free Slider is awkward. The sidebar still offers a
+                    // continuous slider for fine tuning after a run.
+                    ForEach(sensitivityPresets, id: \.label) { preset in
+                        Button {
+                            model.faceClusterThreshold = preset.value
+                            model.reclusterFaces()
+                        } label: {
+                            if isCurrent(preset.value) {
+                                Label(preset.label, systemImage: "checkmark")
+                            } else {
+                                Text(preset.label)
+                            }
+                        }
+                    }
+                }
+
+                Button(faceTitle, systemImage: "person.crop.circle") {
+                    if hasSelectedImages { model.recognizeFacesInSelection() }
+                    else { model.recognizeAllFaces() }
+                }
+                .disabled(faceDisabled)
+
+                if model.withFacesCount > 0 {
+                    Button("Clear People", role: .destructive) {
+                        model.clearFaces()
+                    }
+                }
+            }
+        } label: {
+            Label("AI", systemImage: "sparkles")
+        }
+        .menuIndicator(.visible)
+        .help("On-device image classification and face recognition")
+        // Resolve whether a Core ML model is installed so the engine options
+        // reflect reality the first time the menu is shown.
+        .task { model.refreshCoreMLFaceAvailability() }
+    }
+
+    // MARK: - Titles / state
+
+    private var classifyTitle: String {
+        hasSelectedImages ? "Classify Selected Images" : "Classify All Images"
+    }
+
+    private var faceTitle: String {
+        hasSelectedImages ? "Find Faces in Selected" : "Find Faces in All Images"
+    }
+
+    /// Disable the run button when the chosen engine can't produce embeddings
+    /// (Core ML selected but no model installed).
+    private var faceDisabled: Bool {
+        model.faceEngine == .coreMLEmbedding && !model.coreMLFaceModelAvailable
+    }
+
+    // MARK: - Sensitivity presets
+
+    private struct Preset { let label: String; let value: Double }
+
+    /// Three presets spanning the current engine's threshold range: stricter
+    /// (more, purer people) → looser (fewer, risk of merging).
+    private var sensitivityPresets: [Preset] {
+        let range = model.faceEngine.thresholdRange
+        let lo = range.lowerBound, hi = range.upperBound
+        return [
+            Preset(label: "Stricter", value: lo + (hi - lo) * 0.25),
+            Preset(label: "Balanced", value: lo + (hi - lo) * 0.5),
+            Preset(label: "Looser", value: lo + (hi - lo) * 0.75)
+        ]
+    }
+
+    private func isCurrent(_ value: Double) -> Bool {
+        abs(model.faceClusterThreshold - value) < 0.001
+    }
+
+    private var sensitivityLabel: String {
+        let range = model.faceEngine.thresholdRange
+        let span = range.upperBound - range.lowerBound
+        let t = (model.faceClusterThreshold - range.lowerBound) / span
+        switch t {
+        case ..<0.33: return "Stricter"
+        case ..<0.66: return "Balanced"
+        default: return "Looser"
+        }
     }
 }

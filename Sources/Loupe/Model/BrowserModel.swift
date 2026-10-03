@@ -268,6 +268,48 @@ final class BrowserModel {
     /// only, like the other annotations.
     private(set) var facePersons: [MediaItem.ID: Set<Int>] = [:]
 
+    /// The engine used to embed faces for clustering. Persisted across windows
+    /// and launches (a preference, not per-folder data). Changing it invalidates
+    /// any existing people, since embeddings from different engines aren't
+    /// comparable — the user must re-run "Find Faces".
+    var faceEngine: FaceRecognitionEngine = {
+        let raw = UserDefaults.standard.string(forKey: faceEngineKey)
+        return raw.flatMap(FaceRecognitionEngine.init(rawValue:)) ?? .visionFeaturePrint
+    }() {
+        didSet {
+            guard faceEngine != oldValue else { return }
+            UserDefaults.standard.set(faceEngine.rawValue, forKey: Self.faceEngineKey)
+            // Reset the clustering threshold to the new engine's default scale.
+            faceClusterThreshold = faceEngine.defaultThreshold
+            // Embeddings from the two engines aren't comparable, so any existing
+            // people are meaningless under the new engine. Clear them; the user
+            // re-runs "Find Faces" to recompute with the new engine.
+            if !facePersons.isEmpty { clearFaces() }
+        }
+    }
+
+    /// Clustering distance threshold for the current engine. Persisted. Lower =
+    /// stricter (more, purer people); higher = looser (fewer, risk of merging).
+    var faceClusterThreshold: Double = {
+        if UserDefaults.standard.object(forKey: faceThresholdKey) != nil {
+            return UserDefaults.standard.double(forKey: faceThresholdKey)
+        }
+        let raw = UserDefaults.standard.string(forKey: faceEngineKey)
+        let engine = raw.flatMap(FaceRecognitionEngine.init(rawValue:)) ?? .visionFeaturePrint
+        return engine.defaultThreshold
+    }() {
+        didSet {
+            UserDefaults.standard.set(faceClusterThreshold, forKey: Self.faceThresholdKey)
+        }
+    }
+
+    /// Whether a Core ML face model is installed (so the UI can offer that
+    /// engine). Resolved once on the first query and cached.
+    private(set) var coreMLFaceModelAvailable = false
+
+    private static let faceEngineKey = "faceRecognitionEngine"
+    private static let faceThresholdKey = "faceClusterThreshold"
+
     /// When set, the grid shows only items containing this person. `nil` means
     /// no person filter is active. Mutually exclusive with the category filter
     /// and the flagged/color-tag Library views.
@@ -1812,8 +1854,11 @@ final class BrowserModel {
         // retained, so this is a fresh clusterer seeded only with the next ID.)
         let startID = (personList.max() ?? 0) + 1
 
+        let engine = faceEngine
+        let threshold = faceClusterThreshold
+
         Task { @MainActor in
-            var clusterer = FaceClusterer()
+            var clusterer = FaceClusterer(threshold: threshold)
             clusterer.seedNextID(startID)
 
             let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
@@ -1831,7 +1876,7 @@ final class BrowserModel {
                     guard let item = iterator.next() else { return }
                     inFlight += 1
                     group.addTask {
-                        let faces = await FaceRecognizer.shared.faces(for: item.url)
+                        let faces = await FaceRecognizer.shared.faces(for: item.url, engine: engine)
                         return (item.id, faces)
                     }
                 }
@@ -1846,21 +1891,77 @@ final class BrowserModel {
                 }
             }
 
-            // Deterministic clustering pass in display order.
-            for item in pending {
-                let faces = printsByItem[item.id] ?? []
-                var people = Set<Int>()
-                for face in faces {
-                    if let person = clusterer.assign(face) { people.insert(person) }
-                }
-                self.facePersons[item.id] = people
-            }
+            // Order the gathered prints by display order so clustering (and
+            // thus person IDs) is deterministic, then run the shared pass.
+            let ordered = pending.map { (id: $0.id, faces: printsByItem[$0.id] ?? []) }
+            self.applyClustering(ordered, into: &clusterer)
 
             if self.grouping == .person || self.personFilter != nil {
                 self.invalidateDisplayCache()
             }
             self.isClassifying = false
             self.isRunningClassification = false
+        }
+    }
+
+    /// Runs the online clustering pass over `ordered` prints, then the
+    /// agglomerative merge pass, and writes the resulting per-item person sets
+    /// into `facePersons`. Shared by the initial recognition and re-clustering
+    /// (threshold change) so both produce identical grouping logic.
+    private func applyClustering(
+        _ ordered: [(id: MediaItem.ID, faces: [FaceFeaturePrint])],
+        into clusterer: inout FaceClusterer
+    ) {
+        var assigned: [MediaItem.ID: Set<Int>] = [:]
+        for entry in ordered {
+            var people = Set<Int>()
+            for face in entry.faces {
+                if let person = clusterer.assign(face) { people.insert(person) }
+            }
+            assigned[entry.id] = people
+        }
+        let remap = clusterer.finalizeMerges()
+        for (id, people) in assigned {
+            facePersons[id] = Set(people.map { remap[$0] ?? $0 })
+        }
+    }
+
+    /// Re-cluster the faces already extracted — at the current threshold —
+    /// without re-detecting or re-embedding. Fast (the embeddings are cached in
+    /// `FaceRecognizer`), so the threshold slider can re-group live. No-op if
+    /// nothing has been recognized yet.
+    func reclusterFaces() {
+        guard !isRunningClassification, !facePersons.isEmpty else { return }
+        let targets = allItems.filter { $0.kind == .image && facePersons[$0.id] != nil }
+        guard !targets.isEmpty else { return }
+
+        let engine = faceEngine
+        let threshold = faceClusterThreshold
+
+        isRunningClassification = true
+        Task { @MainActor in
+            // Pull cached embeddings back (cache hits — no detection work).
+            var byItem: [MediaItem.ID: [FaceFeaturePrint]] = [:]
+            for item in targets {
+                byItem[item.id] = await FaceRecognizer.shared.faces(for: item.url, engine: engine)
+            }
+            let ordered = targets.map { (id: $0.id, faces: byItem[$0.id] ?? []) }
+
+            var clusterer = FaceClusterer(threshold: threshold)
+            self.applyClustering(ordered, into: &clusterer)
+
+            if self.grouping == .person || self.personFilter != nil {
+                self.invalidateDisplayCache()
+            }
+            self.isRunningClassification = false
+        }
+    }
+
+    /// Resolve whether a Core ML face model is installed, updating the
+    /// observable flag the UI reads. Call once when the People controls appear.
+    func refreshCoreMLFaceAvailability() {
+        Task { @MainActor in
+            self.coreMLFaceModelAvailable = await FaceRecognizer.shared.coreMLAvailable()
         }
     }
 
