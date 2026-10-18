@@ -321,25 +321,29 @@ final class ZoomScrollView: NSScrollView {
             NSCursor.closedHand.push()
         }
 
-        // Hand-tool pan: the image is "grabbed" and follows the pointer, like
-        // dragging a sheet of paper. We move the clip's bounds origin so the
-        // content tracks the pointer 1:1 on screen; divide the view-space delta
-        // by the magnification to convert it into the document's (unmagnified)
-        // coordinate space that the clip bounds use.
+        // Hand-tool pan: grab the image so the document point under the pointer
+        // stays under the pointer as it moves (like dragging a sheet of paper).
         //
-        // The clip view is NOT flipped, so bounds.origin.y increases UPWARD:
-        // raising the origin reveals content higher in the image. To "grab the
-        // paper" — drag the pointer up and have the content move up with it —
-        // the viewport must move DOWN relative to the content, i.e. origin.y
-        // must DECREASE as the pointer's y increases. So X follows the pointer
-        // (`+= dx`) while Y is inverted (`-= dy`). The earlier `+= dy` inverted
-        // the vertical drag, which fought the pointer and — once a Y scroll
-        // limit was hit — made vertical panning appear stuck whenever the image
-        // overflowed on both axes.
+        // Derivation. A document point `p` appears on screen (relative to the
+        // clip's origin) at `(p - origin) * magnification`, because the clip's
+        // bounds origin is the document coordinate shown at the clip's corner
+        // and the view/event space shares the clip's non-flipped, y-up frame.
+        // To keep `p` under the pointer as the pointer moves by (dx, dy):
+        //
+        //     (p - origin_new) * mag = (p - origin_old) * mag + (dx, dy)
+        //  ⇒  origin_new = origin_old - (dx, dy) / mag
+        //
+        // So BOTH axes subtract the view-space delta divided by magnification —
+        // uniformly, with no per-axis sign flip, since the clip bounds and the
+        // event coordinates are in the same orientation. Dividing by `mag` makes
+        // the tracking exactly 1:1 on screen at any zoom. (Earlier versions used
+        // `+= dx` / mixed signs, which moved the content the OPPOSITE way from
+        // the pointer on X and made the drag feel both backwards and off by the
+        // zoom factor.)
         let scale = magnification == 0 ? 1 : magnification
         let clip = contentView
         var origin = clip.bounds.origin
-        origin.x += dx / scale
+        origin.x -= dx / scale
         origin.y -= dy / scale
         clip.setBoundsOrigin(clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
         reflectScrolledClipView(clip)
