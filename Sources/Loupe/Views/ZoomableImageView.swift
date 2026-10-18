@@ -297,8 +297,11 @@ final class ZoomScrollView: NSScrollView {
             return
         }
         // Begin a potential hand-tool pan when there's something to pan to.
+        // Track the pointer in WINDOW coordinates — a fixed reference frame
+        // that doesn't move as we scroll the clip — and convert into document
+        // space per event (see mouseDragged).
         if canPan {
-            panLastPoint = convert(event.locationInWindow, from: nil)
+            panLastPoint = event.locationInWindow
             isPanning = false
             return
         }
@@ -306,49 +309,44 @@ final class ZoomScrollView: NSScrollView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard panLastPoint != nil, canPan else {
+        guard let last = panLastPoint, canPan,
+              let doc = documentView else {
             super.mouseDragged(with: event)
             return
         }
 
-        let current = convert(event.locationInWindow, from: nil)
-        let last = panLastPoint ?? current
-        let dx = current.x - last.x
-        let dy = current.y - last.y
+        let currentWindow = event.locationInWindow
 
-        if !isPanning, abs(dx) + abs(dy) > 0 {
+        if !isPanning,
+           abs(currentWindow.x - last.x) + abs(currentWindow.y - last.y) > 0 {
             isPanning = true
             NSCursor.closedHand.push()
         }
 
         // Hand-tool pan: grab the image so the document point under the pointer
-        // stays under the pointer as it moves (like dragging a sheet of paper).
+        // stays pinned under the pointer (like dragging a sheet of paper).
         //
-        // Derivation. A document point `p` appears on screen (relative to the
-        // clip's origin) at `(p - origin) * magnification`, because the clip's
-        // bounds origin is the document coordinate shown at the clip's corner
-        // and the view/event space shares the clip's non-flipped, y-up frame.
-        // To keep `p` under the pointer as the pointer moves by (dx, dy):
-        //
-        //     (p - origin_new) * mag = (p - origin_old) * mag + (dx, dy)
-        //  ⇒  origin_new = origin_old - (dx, dy) / mag
-        //
-        // So BOTH axes subtract the view-space delta divided by magnification —
-        // uniformly, with no per-axis sign flip, since the clip bounds and the
-        // event coordinates are in the same orientation. Dividing by `mag` makes
-        // the tracking exactly 1:1 on screen at any zoom. (Earlier versions used
-        // `+= dx` / mixed signs, which moved the content the OPPOSITE way from
-        // the pointer on X and made the drag feel both backwards and off by the
-        // zoom factor.)
-        let scale = magnification == 0 ? 1 : magnification
+        // Rather than reason about magnification manually (the source of the
+        // earlier not-1:1 bugs), convert both the previous and current pointer
+        // positions into the DOCUMENT VIEW's coordinate space. That conversion
+        // already folds in the current magnification and scroll origin, so the
+        // difference between the two is exactly how far — in document units —
+        // the content under the pointer would otherwise have slid. Shifting the
+        // clip's bounds origin by the negative of that delta cancels the slide,
+        // pinning the grabbed point to the pointer 1:1 at any zoom.
+        let lastDoc = doc.convert(last, from: nil)
+        let currentDoc = doc.convert(currentWindow, from: nil)
+        let dx = currentDoc.x - lastDoc.x
+        let dy = currentDoc.y - lastDoc.y
+
         let clip = contentView
         var origin = clip.bounds.origin
-        origin.x -= dx / scale
-        origin.y -= dy / scale
+        origin.x -= dx
+        origin.y -= dy
         clip.setBoundsOrigin(clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
         reflectScrolledClipView(clip)
 
-        panLastPoint = current
+        panLastPoint = currentWindow
     }
 
     override func mouseUp(with event: NSEvent) {
