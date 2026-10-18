@@ -358,5 +358,5 @@ struct LoupeCommands: Commands {
     private var videoThumbnailPositionBinding: Binding<VideoThumbnailPosition> {
         binding(\.videoThumbnailPosition, default: .defaultPosition)
     }
-    private var stripMetadataBinding: Binding<Bool> { binding(\.imageCopyStripsMetadata, default: false) }
+    private var stripMetadataBinding: Binding<Bool> { binding(\.imageCopyStripsMetadata, default: true) }
 }

@@ -163,9 +163,11 @@ final class BrowserModel {
 
     /// Whether the "Copy Image" actions strip EXIF/metadata from the copied
     /// pixels. A persisted preference so the choice sticks across the per-scale
-    /// copy commands and across launches.
+    /// copy commands and across launches. Defaults to `true` (strip metadata)
+    /// so a copied image doesn't carry camera/GPS data unless the user opts in;
+    /// a stored value (set once the user toggles it) always wins.
     var imageCopyStripsMetadata: Bool = {
-        UserDefaults.standard.bool(forKey: imageCopyStripsMetadataKey)
+        UserDefaults.standard.object(forKey: imageCopyStripsMetadataKey) as? Bool ?? true
     }() {
         didSet {
             guard imageCopyStripsMetadata != oldValue else { return }
