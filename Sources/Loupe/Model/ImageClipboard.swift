@@ -36,6 +36,40 @@ enum ImageCopyScale: String, CaseIterable, Sendable {
     }
 }
 
+/// Encoding format for a copied image. Independent of the metadata toggle:
+/// JPEG can carry or omit EXIF, and PNG never has an EXIF container, so the
+/// two choices compose.
+enum ImageCopyFormat: String, CaseIterable, Sendable {
+    case jpeg = "JPEG"
+    case png = "PNG"
+
+    var displayName: String { rawValue }
+
+    /// The uniform type the bytes are encoded as.
+    var utType: UTType {
+        switch self {
+        case .jpeg: return .jpeg
+        case .png: return .png
+        }
+    }
+
+    /// File extension for the temp files used in the multi-image copy path.
+    var fileExtension: String {
+        switch self {
+        case .jpeg: return "jpg"
+        case .png: return "png"
+        }
+    }
+
+    /// Whether this format can embed EXIF/GPS metadata at all. PNG cannot, so a
+    /// PNG copy is always metadata-free regardless of the strip toggle.
+    var canCarryMetadata: Bool { self == .jpeg }
+
+    /// The default: JPEG — compact, universally pasteable, and able to carry
+    /// metadata when the user wants it.
+    static let defaultFormat: ImageCopyFormat = .jpeg
+}
+
 /// Renders image files to pixel data on the pasteboard — as opposed to copying
 /// the file reference (which `BrowserModel.copyToClipboard` does). Pasting the
 /// result into an image editor, document, or chat drops in the actual pixels.
@@ -72,8 +106,15 @@ enum ImageClipboard {
     ///     single-image targets take the first.
     @discardableResult
     @MainActor
-    static func copy(urls: [URL], scale: ImageCopyScale, stripMetadata: Bool) -> Int {
-        let rendered = renderAllSync(urls: urls, scale: scale, stripMetadata: stripMetadata)
+    static func copy(
+        urls: [URL],
+        scale: ImageCopyScale,
+        format: ImageCopyFormat,
+        stripMetadata: Bool
+    ) -> Int {
+        let rendered = renderAllSync(
+            urls: urls, scale: scale, format: format, stripMetadata: stripMetadata
+        )
         return write(rendered)
     }
 
@@ -91,6 +132,7 @@ enum ImageClipboard {
     static func copy(
         urls: [URL],
         scale: ImageCopyScale,
+        format: ImageCopyFormat,
         stripMetadata: Bool,
         progress: @escaping @MainActor (_ completed: Int, _ total: Int) -> Void
     ) async -> Int {
@@ -101,7 +143,7 @@ enum ImageClipboard {
             var out: [RenderedData] = []
             out.reserveCapacity(urls.count)
             for (index, url) in urls.enumerated() {
-                if let r = renderedData(url: url, scale: scale, stripMetadata: stripMetadata) {
+                if let r = renderedData(url: url, scale: scale, format: format, stripMetadata: stripMetadata) {
                     out.append(r)
                 }
                 let completed = index + 1
@@ -119,9 +161,10 @@ enum ImageClipboard {
     private static func renderAllSync(
         urls: [URL],
         scale: ImageCopyScale,
+        format: ImageCopyFormat,
         stripMetadata: Bool
     ) -> [RenderedData] {
-        urls.compactMap { renderedData(url: $0, scale: scale, stripMetadata: stripMetadata) }
+        urls.compactMap { renderedData(url: $0, scale: scale, format: format, stripMetadata: stripMetadata) }
     }
 
     /// Writes already-rendered image data to the pasteboard. Returns the number
@@ -212,14 +255,19 @@ enum ImageClipboard {
         let baseName: String
     }
 
-    /// Decodes `url`, applies `scale`, and encodes to pasteboard data — PNG
-    /// (metadata-free) when stripping, else JPEG carrying the source metadata.
-    /// EXIF orientation is baked into the pixels by the decoder, so the result
-    /// is always upright regardless of the metadata choice.
+    /// Decodes `url`, applies `scale`, and encodes to pasteboard data in
+    /// `format`, keeping the source metadata only when the format can carry it
+    /// and the caller didn't ask to strip it. EXIF orientation is baked into
+    /// the pixels by the decoder, so the result is upright either way.
     /// `nonisolated` so the heavy decode/encode can run off the main actor
     /// (driven from a detached task in the progress-reporting `copy`). It only
     /// touches read-only image APIs and produces `Data`, which is `Sendable`.
-    nonisolated private static func renderedData(url: URL, scale: ImageCopyScale, stripMetadata: Bool) -> RenderedData? {
+    nonisolated private static func renderedData(
+        url: URL,
+        scale: ImageCopyScale,
+        format: ImageCopyFormat,
+        stripMetadata: Bool
+    ) -> RenderedData? {
         // Find the source's pixel dimensions so percentage scales are relative
         // to the real image and "Fit N" never upscales.
         guard let sourceLongest = longestEdge(of: url) else { return nil }
@@ -241,24 +289,26 @@ enum ImageClipboard {
         // safe to produce off the main actor.
         let tiff = NSBitmapImageRep(cgImage: cg).tiffRepresentation
         let baseName = url.deletingPathExtension().lastPathComponent
+        let type = format.utType
 
-        if stripMetadata {
-            guard let data = encode(cg, as: UTType.png, properties: nil) else { return nil }
-            return RenderedData(data: data, imageType: .png, tiff: tiff, baseName: baseName)
+        // Keep metadata only when the user didn't ask to strip it AND the chosen
+        // format can actually hold it (PNG has no EXIF container, so a PNG copy
+        // is always metadata-free regardless of the toggle).
+        let keepMetadata = !stripMetadata && format.canCarryMetadata
+        if keepMetadata {
+            // Attach the source's EXIF/GPS/TIFF properties. The orientation was
+            // baked into the pixels during decode, so reset the stored tag so a
+            // viewer doesn't rotate the already-upright image a second time.
+            var properties = sourceProperties(of: url) ?? [:]
+            properties[kCGImagePropertyOrientation] = 1
+            if let data = encode(cg, as: type, properties: properties) {
+                return RenderedData(data: data, imageType: type, tiff: tiff, baseName: baseName)
+            }
+            // Attaching properties failed — fall through to a plain encode.
         }
 
-        // Keep metadata: pull the source's EXIF/GPS/TIFF properties and attach
-        // them to a JPEG re-encode. If the orientation was baked into the
-        // pixels above, drop the stored orientation tag so it isn't applied a
-        // second time by a viewer.
-        var properties = sourceProperties(of: url) ?? [:]
-        properties[kCGImagePropertyOrientation] = 1  // already upright
-        guard let data = encode(cg, as: .jpeg, properties: properties) else {
-            // Fall back to a plain JPEG if attaching properties failed.
-            guard let plain = encode(cg, as: .jpeg, properties: nil) else { return nil }
-            return RenderedData(data: plain, imageType: .jpeg, tiff: tiff, baseName: baseName)
-        }
-        return RenderedData(data: data, imageType: .jpeg, tiff: tiff, baseName: baseName)
+        guard let data = encode(cg, as: type, properties: nil) else { return nil }
+        return RenderedData(data: data, imageType: type, tiff: tiff, baseName: baseName)
     }
 
     /// Encodes a `CGImage` to the given type, optionally attaching metadata

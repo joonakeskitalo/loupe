@@ -33,10 +33,19 @@ struct LoupeCommands: Commands {
                 .disabled(!hasSelection || viewerOpen)
 
             // Copy the actual picture (pixels), not the file reference, at a
-            // chosen size and optionally without EXIF/metadata. The toggle
-            // controls whether metadata is stripped for every scale below.
+            // chosen size, in a chosen format, and optionally without EXIF. The
+            // format + metadata pickers apply to every scale below.
             Menu("Copy Image As") {
+                Picker("Format", selection: formatBinding) {
+                    ForEach(ImageCopyFormat.allCases, id: \.self) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+                .pickerStyle(.inline)
+
+                // PNG has no EXIF container, so stripping is moot for it.
                 Toggle("Remove EXIF / Metadata", isOn: stripMetadataBinding)
+                    .disabled(!(model?.imageCopyFormat.canCarryMetadata ?? true))
 
                 Divider()
 
@@ -44,7 +53,8 @@ struct LoupeCommands: Commands {
                     Button(scale.displayName) {
                         model?.copyImageToClipboard(
                             scale: scale,
-                            stripMetadata: model?.imageCopyStripsMetadata ?? false
+                            format: model?.imageCopyFormat,
+                            stripMetadata: model?.imageCopyStripsMetadata
                         )
                     }
                 }
@@ -359,4 +369,5 @@ struct LoupeCommands: Commands {
         binding(\.videoThumbnailPosition, default: .defaultPosition)
     }
     private var stripMetadataBinding: Binding<Bool> { binding(\.imageCopyStripsMetadata, default: true) }
+    private var formatBinding: Binding<ImageCopyFormat> { binding(\.imageCopyFormat, default: .defaultFormat) }
 }

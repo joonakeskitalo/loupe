@@ -442,12 +442,22 @@ struct BrowserGridView: View {
         // metadata stripped. Only offered when the target(s) include an image.
         if model.imageURLs(preferring: item).isEmpty == false {
             Menu("Copy Image As") {
+                Picker("Format", selection: $model.imageCopyFormat) {
+                    ForEach(ImageCopyFormat.allCases, id: \.self) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+                .pickerStyle(.inline)
                 Toggle("Remove EXIF / Metadata", isOn: $model.imageCopyStripsMetadata)
+                    .disabled(!model.imageCopyFormat.canCarryMetadata)
                 Divider()
                 ForEach(ImageCopyScale.allCases, id: \.self) { scale in
                     Button(scale.displayName) {
                         model.copyImageToClipboard(
-                            item, scale: scale, stripMetadata: model.imageCopyStripsMetadata
+                            item,
+                            scale: scale,
+                            format: model.imageCopyFormat,
+                            stripMetadata: model.imageCopyStripsMetadata
                         )
                     }
                 }

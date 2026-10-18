@@ -162,20 +162,17 @@ final class BrowserModel {
     private static let videoThumbnailPositionKey = "videoThumbnailPosition"
 
     /// Whether the "Copy Image" actions strip EXIF/metadata from the copied
-    /// pixels. A persisted preference so the choice sticks across the per-scale
-    /// copy commands and across launches. Defaults to `true` (strip metadata)
-    /// so a copied image doesn't carry camera/GPS data unless the user opts in;
-    /// a stored value (set once the user toggles it) always wins.
-    var imageCopyStripsMetadata: Bool = {
-        UserDefaults.standard.object(forKey: imageCopyStripsMetadataKey) as? Bool ?? true
-    }() {
-        didSet {
-            guard imageCopyStripsMetadata != oldValue else { return }
-            UserDefaults.standard.set(imageCopyStripsMetadata, forKey: Self.imageCopyStripsMetadataKey)
-        }
-    }
+    /// pixels. Window-scoped and in-session only — NOT persisted, so each new
+    /// window and each launch starts from the default. Defaults to `true`
+    /// (strip metadata) so a copied image doesn't carry camera/GPS data unless
+    /// the user opts in within that window.
+    var imageCopyStripsMetadata = true
 
-    private static let imageCopyStripsMetadataKey = "imageCopyStripsMetadata"
+    /// The encoding format for "Copy Image" (JPEG or PNG). Window-scoped and
+    /// in-session only — NOT persisted. Independent of the metadata toggle: PNG
+    /// is always metadata-free, while JPEG carries metadata unless stripping is
+    /// on. Defaults to JPEG.
+    var imageCopyFormat: ImageCopyFormat = .defaultFormat
 
     /// All folders selected in the sidebar (used in `.folders` mode). Supports
     /// multi-selection; the grid shows the union of every selected folder.
@@ -2378,15 +2375,22 @@ final class BrowserModel {
     func copyImageToClipboard(
         _ item: MediaItem? = nil,
         scale: ImageCopyScale = .original,
-        stripMetadata: Bool = false
+        format: ImageCopyFormat? = nil,
+        stripMetadata: Bool? = nil
     ) -> Int {
         let urls = imageURLs(preferring: item)
         guard !urls.isEmpty else { return 0 }
 
+        // Fall back to the persisted preferences when the caller doesn't
+        // override them (menus pass explicit values; some call sites rely on
+        // the current settings).
+        let fmt = format ?? imageCopyFormat
+        let strip = stripMetadata ?? imageCopyStripsMetadata
+
         // A single small image copies effectively instantly, so skip the async
         // progress machinery and copy synchronously.
         if urls.count == 1 {
-            return ImageClipboard.copy(urls: urls, scale: scale, stripMetadata: stripMetadata)
+            return ImageClipboard.copy(urls: urls, scale: scale, format: fmt, stripMetadata: strip)
         }
 
         // Multiple images: render in the background with a progress indicator,
@@ -2401,7 +2405,8 @@ final class BrowserModel {
             await ImageClipboard.copy(
                 urls: urls,
                 scale: scale,
-                stripMetadata: stripMetadata
+                format: fmt,
+                stripMetadata: strip
             ) { [weak self] completed, total in
                 self?.copyProgress = completed
                 self?.copyTotal = total
