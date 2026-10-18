@@ -235,8 +235,12 @@ private struct RootHeaderRow: View {
     let entry: BrowserModel.RootEntry
     let onRemove: () -> Void
 
+    // Both normal roots and grouped file-drop roots name their header after the
+    // folder the sidebar node represents (`tree.name`). For grouped roots that
+    // node is the dropped files' shared parent directory, so sibling files land
+    // under one folder header instead of a per-file entry.
     private var title: String {
-        entry.isSingleFile ? entry.key.lastPathComponent : entry.tree.name
+        entry.tree.name
     }
 
     var body: some View {

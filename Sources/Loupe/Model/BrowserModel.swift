@@ -391,8 +391,10 @@ final class BrowserModel {
     // Security-scoped access is kept alive per root for the lifetime of the
     // window; stopped when a root is removed. The OS reclaims the rest on exit.
     private var scopedURLs: Set<URL> = []
-    /// Single-file roots (dropped files whose folder couldn't be enumerated),
-    /// so refresh/merge treats them specially.
+    /// Roots assembled from individually dropped files rather than a folder
+    /// scan, keyed by the files' shared parent directory. Their item list is
+    /// built by hand and must not be rescanned (that would turn them into the
+    /// full folder), so refresh/merge treat them specially.
     private var singleFileRoots: Set<URL> = []
 
     /// Window title: the folder name for a single root, else a folder count.
@@ -424,55 +426,99 @@ final class BrowserModel {
         }
     }
 
-    /// Adds a dropped single file. If its folder can't be enumerated (sandbox),
-    /// the file is added as a single-file root.
+    /// Adds a single dropped file. Shows just that file — not the folder it
+    /// came from — under a sidebar entry for its parent directory, and selects
+    /// it. A second file dropped from the same folder merges into that entry.
     func openFile(_ fileURL: URL) {
         let file = fileURL.standardizedFileURL
-        let parent = file.deletingLastPathComponent()
-
+        // Finder grants per-file sandbox access on a drop.
         if scopeAccess(file) { scopedURLs.insert(file) }
-        isScanning = true
+        addSingleFileRoot(file)
+    }
 
-        Task {
-            await Task.yield()
-            let result = await FolderScanner.scan(root: parent)
-            if result.allItems.contains(where: { $0.id == file }),
-               !self.roots.contains(parent) {
-                // Folder is readable: add it as a normal root, select the file.
-                self.roots.append(parent)
-                self.resultsByRoot[parent] = result
-                self.rebuildMerged()
-                self.selectOnly(file)
-            } else {
-                // Add just the file as a single-file root.
-                self.addSingleFileRoot(file)
-            }
-            self.isScanning = false
+    /// Adds a batch of dropped files. The dropped files themselves are shown —
+    /// never the whole folder they came from. Files sharing a parent directory
+    /// are grouped under a single sidebar entry for that directory (rather than
+    /// one duplicate entry per file), and all of them end up selected. Files
+    /// from different directories each get their own grouped entry. Order is
+    /// preserved for a stable selection anchor.
+    func openFiles(_ fileURLs: [URL]) {
+        guard !fileURLs.isEmpty else { return }
+        if fileURLs.count == 1 { openFile(fileURLs[0]); return }
+
+        // De-duplicate while preserving first-seen order.
+        var seen = Set<URL>()
+        let files = fileURLs
+            .map { $0.standardizedFileURL }
+            .filter { seen.insert($0).inserted }
+
+        // Group by parent directory, keeping both the parents and the files
+        // within each in first-seen (drop) order.
+        var parentOrder: [URL] = []
+        var byParent: [URL: [URL]] = [:]
+        for file in files {
+            let parent = file.deletingLastPathComponent()
+            if byParent[parent] == nil { parentOrder.append(parent) }
+            byParent[parent, default: []].append(file)
         }
+
+        // Finder grants per-file sandbox access on a drop, so scope each file.
+        for file in files where scopeAccess(file) { scopedURLs.insert(file) }
+
+        var toSelect: [URL] = []
+        for parent in parentOrder {
+            let groupFiles = byParent[parent] ?? []
+            addFileGroupRoot(parent: parent, files: groupFiles)
+            toSelect.append(contentsOf: groupFiles)
+        }
+        selectItems(toSelect)
     }
 
     private func addSingleFileRoot(_ file: URL) {
-        guard !roots.contains(file) else { selectOnly(file); return }
-        let item = MediaItem(url: file)
         let parent = file.deletingLastPathComponent()
+        addFileGroupRoot(parent: parent, files: [file])
+        selectOnly(file)
+    }
 
-        // The sidebar node represents the file's PARENT directory (not the file
-        // itself), and items are keyed under that directory — so selecting the
-        // sidebar row in Folders mode finds the file. The root is still keyed by
-        // the file URL in `roots`/`resultsByRoot`/`singleFileRoots` so it has a
-        // unique identity and can be removed independently.
-        let node = FolderNode(url: parent, children: [], directMediaCount: 1)
+    /// Adds a root that shows only the given files from one directory — not the
+    /// directory's full contents. The sidebar node represents the PARENT
+    /// directory (so selecting its row in Folders mode finds the files), and
+    /// the items are keyed under that directory. The root is keyed by the
+    /// parent directory URL so a second drop from the same folder merges into
+    /// the existing entry instead of creating a duplicate.
+    ///
+    /// If the parent directory is already open as a normal (fully scanned)
+    /// root, the files are already present, so this only (re)selects them. If
+    /// it's already a grouped file root, any newly dropped files are merged in.
+    private func addFileGroupRoot(parent: URL, files: [URL]) {
+        guard !files.isEmpty else { return }
+        let parent = parent.standardizedFileURL
+
+        // Parent already open as a normal root: its files are all present.
+        if roots.contains(parent), !singleFileRoots.contains(parent) {
+            return
+        }
+
+        // Merge with any files already shown for this grouped root, preserving
+        // order and de-duplicating.
+        let existing = resultsByRoot[parent]?.allItems ?? []
+        var seen = Set(existing.map(\.id))
+        var items = existing
+        for file in files where seen.insert(file).inserted {
+            items.append(MediaItem(url: file))
+        }
+
+        let node = FolderNode(url: parent, children: [], directMediaCount: items.count)
         let result = ScanResult(
             root: parent,
-            allItems: [item],
-            itemsByDirectory: [parent: [item]],
+            allItems: items,
+            itemsByDirectory: [parent: items],
             tree: node
         )
-        roots.append(file)
-        singleFileRoots.insert(file)
-        resultsByRoot[file] = result
+        if !roots.contains(parent) { roots.append(parent) }
+        singleFileRoots.insert(parent)
+        resultsByRoot[parent] = result
         rebuildMerged()
-        selectOnly(file)
     }
 
     /// Removes a root folder, releasing its security scope and un-merging it.
@@ -528,20 +574,19 @@ final class BrowserModel {
     }
 
     /// A root paired with its tree, for the sidebar. `key` is the stable root
-    /// identity used for removal (the file URL for single-file roots); `tree`
-    /// is what to render (its parent directory for single-file roots).
+    /// identity used for removal; `tree` is the folder node to render. For a
+    /// grouped file-drop root both are the dropped files' shared parent
+    /// directory, and the tree lists only those files.
     struct RootEntry: Identifiable {
         let key: URL
         let tree: FolderNode
         var id: URL { key }
-        var isSingleFile: Bool
     }
 
     var rootEntries: [RootEntry] {
         roots.compactMap { root in
             guard let result = resultsByRoot[root] else { return nil }
-            return RootEntry(key: root, tree: result.tree,
-                             isSingleFile: singleFileRoots.contains(root))
+            return RootEntry(key: root, tree: result.tree)
         }
     }
 
@@ -1170,6 +1215,24 @@ final class BrowserModel {
         selectedItem = id
         rangeAnchor = id
         selectedItems = [id]
+    }
+
+    /// Replace the selection with a set of items, anchoring on the first. Used
+    /// when a batch of files (e.g. a multi-file Finder drop) should all end up
+    /// selected together. Items not present in the model are ignored; if none
+    /// remain, the selection is cleared.
+    func selectItems(_ ids: [MediaItem.ID]) {
+        let present = Set(allItems.map(\.id))
+        let valid = ids.filter(present.contains)
+        guard let anchor = valid.first else {
+            selectedItem = nil
+            rangeAnchor = nil
+            selectedItems = []
+            return
+        }
+        selectedItem = anchor
+        rangeAnchor = anchor
+        selectedItems = Set(valid)
     }
 
     /// Toggle an item in/out of the selection (Command-click).

@@ -346,24 +346,74 @@ struct ContentView: View {
         // Ignore files dragged out of our own grid and dropped back in.
         guard !InternalDrag.inProgress else { return false }
         guard !providers.isEmpty else { return false }
+
+        // Resolve every dropped provider to a URL, then open the whole batch at
+        // once. Loading providers one-by-one and opening each independently
+        // raced the per-file folder scans and left only the last file selected,
+        // so sibling files dropped together couldn't land in one folder with a
+        // shared selection. Gather first, dispatch once.
+        let group = DispatchGroup()
+        let box = URLBox()
         for provider in providers {
+            group.enter()
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
-                Task { @MainActor in openURL(url) }
+                if let url { box.append(url) }
+                group.leave()
             }
+        }
+        group.notify(queue: .main) {
+            Task { @MainActor in openURLs(box.urls) }
         }
         return true
     }
 
-    /// Opens a folder or file into the current window, appending to any folders
-    /// already present.
-    private func openURL(_ url: URL) {
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-            model.open(url: url)
-        } else {
-            // A file: show it (and browse its folder when the sandbox allows).
-            model.openFile(url)
+    /// Opens a batch of folders/files into the current window, appending to any
+    /// folders already present. Preserves the drop order.
+    private func openURLs(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+
+        var folders: [URL] = []
+        var files: [URL] = []
+        for url in urls {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+               isDir.boolValue {
+                folders.append(url)
+            } else {
+                files.append(url)
+            }
         }
+
+        for folder in folders { model.open(url: folder) }
+        // Files dropped together — especially siblings from one Finder folder —
+        // are opened as a group so same-directory files share a folder and end
+        // up selected together.
+        if !files.isEmpty { model.openFiles(files) }
+    }
+
+    /// Opens a single folder or file into the current window.
+    private func openURL(_ url: URL) {
+        openURLs([url])
+    }
+}
+
+/// A tiny thread-safe collector for drop URLs. `NSItemProvider.loadObject`
+/// completions fire on arbitrary background queues, so appends from several
+/// providers can overlap; this serializes them behind a lock while preserving
+/// the order in which each provider resolved.
+private final class URLBox {
+    private let lock = NSLock()
+    private var storage: [URL] = []
+
+    func append(_ url: URL) {
+        lock.lock()
+        storage.append(url)
+        lock.unlock()
+    }
+
+    var urls: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }
