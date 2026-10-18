@@ -18,13 +18,36 @@ struct MediaMetadata: Sendable, Equatable {
 /// cached values synchronously on appear — no actor hop, no task, no transient
 /// `.empty` flicker. The provider populates it as probes finish; the view reads
 /// it directly during scrolling and only kicks off an async probe on a miss.
+///
+/// Backed by `NSCache` rather than a plain dictionary so it can't grow without
+/// bound: a large library would otherwise keep one entry per file alive for the
+/// whole process lifetime. The `countLimit` is generous (metadata is tiny) but
+/// finite, and NSCache evicts least-recently-used entries past it, so scrolling
+/// a huge folder re-probes a few off-screen rows on return instead of pinning
+/// everything in memory forever. NSCache is internally thread-safe; the
+/// `@MainActor` here just keeps the call sites hop-free, matching the old API.
 @MainActor
 enum MediaMetadataCache {
-    private static var store: [URL: MediaMetadata] = [:]
+    private static let store: NSCache<NSURL, MediaMetadataBox> = {
+        let cache = NSCache<NSURL, MediaMetadataBox>()
+        cache.countLimit = 20_000
+        return cache
+    }()
 
-    static func cached(for url: URL) -> MediaMetadata? { store[url] }
+    static func cached(for url: URL) -> MediaMetadata? {
+        store.object(forKey: url as NSURL)?.value
+    }
 
-    static func set(_ value: MediaMetadata, for url: URL) { store[url] = value }
+    static func set(_ value: MediaMetadata, for url: URL) {
+        store.setObject(MediaMetadataBox(value), forKey: url as NSURL)
+    }
+}
+
+/// Reference wrapper so `MediaMetadata` (a value type) can live in `NSCache`,
+/// which only stores class instances.
+private final class MediaMetadataBox {
+    let value: MediaMetadata
+    init(_ value: MediaMetadata) { self.value = value }
 }
 
 /// A pixel dimension pair, formatted as "W × H".
@@ -55,13 +78,23 @@ actor VideoMetadataProvider {
 
     /// Cached metadata keyed by file URL. An entry of `.empty` means "probed,
     /// but nothing could be determined" so we don't probe the same file again.
-    private var cache: [URL: MediaMetadata] = [:]
+    ///
+    /// `NSCache` (not a plain dictionary) so it stays bounded: without a cap it
+    /// would retain one entry per probed file for the whole process lifetime,
+    /// which adds up over a large library. The limit is high (each entry is a
+    /// codec string plus a size) but finite; past it, NSCache evicts
+    /// least-recently-used entries and the rare off-screen row re-probes.
+    private let cache: NSCache<NSURL, MediaMetadataBox> = {
+        let cache = NSCache<NSURL, MediaMetadataBox>()
+        cache.countLimit = 20_000
+        return cache
+    }()
     private var inFlight: [URL: Task<MediaMetadata, Never>] = [:]
 
     /// Returns metadata for `url`, treating it as the given `kind` so we pick
     /// the right probe (FFmpeg for video, ImageIO for images). Cached per URL.
     func metadata(for url: URL, kind: MediaKind) async -> MediaMetadata {
-        if let cached = cache[url] {
+        if let cached = cache.object(forKey: url as NSURL)?.value {
             return cached
         }
 
@@ -92,7 +125,7 @@ actor VideoMetadataProvider {
     }
 
     private func store(_ value: MediaMetadata, for url: URL) {
-        cache[url] = value
+        cache.setObject(MediaMetadataBox(value), forKey: url as NSURL)
         inFlight[url] = nil
         // Publish to the synchronous main-actor snapshot so rows that mount
         // later can read it without hopping back onto this actor.

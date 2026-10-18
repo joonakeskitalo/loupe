@@ -157,6 +157,7 @@ struct ZoomableImageView: NSViewRepresentable {
         func stopObserving() {
             if let boundsObserver {
                 NotificationCenter.default.removeObserver(boundsObserver)
+                self.boundsObserver = nil
             }
         }
 

@@ -99,6 +99,29 @@ struct FaceFeaturePrint: Sendable {
     let confidence: Float
 }
 
+/// Reference wrapper so an array of value-type `FaceFeaturePrint`s can live in
+/// `NSCache`, which only stores class instances. Also computes the array's
+/// approximate memory cost so NSCache can evict by real size.
+final class FaceFeaturePrintsBox {
+    let prints: [FaceFeaturePrint]
+    init(_ prints: [FaceFeaturePrint]) { self.prints = prints }
+
+    /// Rough byte cost of a set of embeddings: a float vector is 4 bytes per
+    /// element; a Vision feature print is treated as a fixed, representative
+    /// size (its backing data isn't exposed, but prints are on this order). A
+    /// floor keeps the empty "no faces" sentinel non-zero so it still counts
+    /// toward (and is subject to) eviction.
+    static func cost(of prints: [FaceFeaturePrint]) -> Int {
+        let bytes = prints.reduce(0) { partial, print in
+            switch print.embedding {
+            case let .vector(v): return partial + v.count * MemoryLayout<Float>.stride
+            case .visionPrint:   return partial + 2_048 * MemoryLayout<Float>.stride
+            }
+        }
+        return max(64, bytes)
+    }
+}
+
 /// Turns a cropped, upright face image into a `FaceEmbedding`. Implementations
 /// are the swappable "engines". `isAvailable` lets the UI disable an engine
 /// whose model isn't installed.
@@ -404,8 +427,33 @@ actor FaceRecognizer {
     /// embeddings from different engines aren't comparable, so switching engines
     /// must recompute rather than reuse. An empty array means "processed, no
     /// face found", so a re-run skips the file instead of re-detecting.
-    private struct CacheKey: Hashable { let url: URL; let engine: FaceRecognitionEngine }
-    private var cache: [CacheKey: [FaceFeaturePrint]] = [:]
+    private struct CacheKey: Hashable {
+        let url: URL
+        let engine: FaceRecognitionEngine
+
+        /// Stable string form for the `NSCache` key (which needs an object).
+        /// The newline can't appear in `engine.rawValue`, so it's an
+        /// unambiguous separator between the two fields.
+        var cacheKey: NSString { "\(engine.rawValue)\n\(url.absoluteString)" as NSString }
+    }
+
+    /// `NSCache` rather than a plain dictionary because this is the heaviest of
+    /// the result caches: each value is an array of face embeddings (Vision
+    /// feature prints or float identity vectors), and keying on (URL, engine)
+    /// means switching engines keeps BOTH engines' entries. Without a bound that
+    /// grows for the whole process lifetime over a large library. The cost is
+    /// the summed embedding size, so the `totalCostLimit` (a slice of RAM, like
+    /// the image caches) evicts by real memory use; an evicted file is simply
+    /// re-detected on a later request.
+    private let cache: NSCache<NSString, FaceFeaturePrintsBox> = {
+        let cache = NSCache<NSString, FaceFeaturePrintsBox>()
+        // 5% of physical RAM. Embeddings are far smaller than decoded images,
+        // so this keeps a very large number of faces warm while staying modest.
+        let fraction = 0.05
+        let total = Double(ProcessInfo.processInfo.physicalMemory)
+        cache.totalCostLimit = Int((total * fraction).rounded())
+        return cache
+    }()
     private var inFlight: [CacheKey: Task<[FaceFeaturePrint], Never>] = [:]
 
     /// Whether the Core ML engine has a model installed. Loads the model once
@@ -438,7 +486,7 @@ actor FaceRecognizer {
     /// request and caching per engine (including the empty "no faces" case).
     func faces(for url: URL, engine: FaceRecognitionEngine) async -> [FaceFeaturePrint] {
         let key = CacheKey(url: url, engine: engine)
-        if let cached = cache[key] { return cached }
+        if let cached = cache.object(forKey: key.cacheKey) { return cached.prints }
         if let existing = inFlight[key] { return await existing.value }
 
         // Build the embedder once per request. For Core ML, fetch the shared,
@@ -465,7 +513,11 @@ actor FaceRecognizer {
     }
 
     private func store(_ value: [FaceFeaturePrint], for key: CacheKey) {
-        cache[key] = value
+        cache.setObject(
+            FaceFeaturePrintsBox(value),
+            forKey: key.cacheKey,
+            cost: FaceFeaturePrintsBox.cost(of: value)
+        )
         inFlight[key] = nil
     }
 

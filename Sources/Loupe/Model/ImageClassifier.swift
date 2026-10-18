@@ -34,7 +34,18 @@ actor ImageClassifier {
     /// Resolved category keyed by file URL. An entry is written once a file has
     /// been classified so re-running classification over a folder skips files
     /// that are already done.
-    private var cache: [URL: String] = [:]
+    ///
+    /// `NSCache` rather than a plain dictionary so it can't grow unbounded over
+    /// a large library — each entry is a short category string, but without a
+    /// cap the entry count would climb for the whole process lifetime. Past the
+    /// (generous) `countLimit`, NSCache evicts least-recently-used entries, so a
+    /// previously classified file may simply be reclassified later. Empty-string
+    /// values are the "classified, no category" sentinel (see `store`).
+    private let cache: NSCache<NSURL, NSString> = {
+        let cache = NSCache<NSURL, NSString>()
+        cache.countLimit = 50_000
+        return cache
+    }()
     private var inFlight: [URL: Task<String?, Never>] = [:]
 
     /// Minimum Vision confidence for a label to be considered. Vision returns
@@ -51,7 +62,10 @@ actor ImageClassifier {
     /// caching the result. Returns `nil` when the file can't be read as an
     /// image or no label clears the confidence floor.
     func category(for url: URL) async -> String? {
-        if let cached = cache[url] { return cached.isEmpty ? nil : cached }
+        if let cached = cache.object(forKey: url as NSURL) {
+            let value = cached as String
+            return value.isEmpty ? nil : value
+        }
 
         let task = taskForClassification(url: url)
         return await task.value
@@ -59,7 +73,7 @@ actor ImageClassifier {
 
     /// Whether `url` already has a cached category (so callers can show a count
     /// of remaining work without triggering classification).
-    func isClassified(_ url: URL) -> Bool { cache[url] != nil }
+    func isClassified(_ url: URL) -> Bool { cache.object(forKey: url as NSURL) != nil }
 
     private func taskForClassification(url: URL) -> Task<String?, Never> {
         if let existing = inFlight[url] { return existing }
@@ -87,7 +101,7 @@ actor ImageClassifier {
     }
 
     private func store(_ value: String?, for url: URL) {
-        cache[url] = value ?? ""
+        cache.setObject((value ?? "") as NSString, forKey: url as NSURL)
         inFlight[url] = nil
     }
 
