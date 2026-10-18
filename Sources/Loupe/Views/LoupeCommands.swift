@@ -13,10 +13,15 @@ struct LoupeCommands: Commands {
     @FocusedValue(\.trashShortcutEligible) private var trashEligible
 
     var body: some Commands {
-        // MARK: Item actions — placed after the Edit menu's pasteboard group.
-        CommandGroup(after: .pasteboard) {
-            Divider()
-
+        // MARK: Copy — REPLACES the Edit menu's standard pasteboard group.
+        //
+        // SwiftUI's `.pasteboard` group ships a built-in "Copy" already bound to
+        // ⌘C. Adding our own Copy *after* that group left two ⌘C owners in the
+        // Edit menu; the system's (no-op for our views) could win, so the
+        // shortcut appeared dead. Replacing the group makes our Copy the single
+        // ⌘C owner. Loupe is a read-only browser, so the system Cut/Paste/Delete
+        // the group also provided aren't meaningful and are intentionally gone.
+        CommandGroup(replacing: .pasteboard) {
             // Copy the selected file(s) to the clipboard as file references, so
             // ⌘C here then ⌘V in Finder copies the actual files. Gated on a
             // selection; the disabled state releases ⌘C so a focused search
@@ -45,7 +50,10 @@ struct LoupeCommands: Commands {
                 }
             }
             .disabled(!canCopyImage)
+        }
 
+        // MARK: Item actions — placed after the Edit menu's pasteboard group.
+        CommandGroup(after: .pasteboard) {
             Divider()
 
             // No key equivalent here: Return/Space already open the viewer as

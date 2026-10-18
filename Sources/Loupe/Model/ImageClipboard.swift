@@ -46,37 +46,44 @@ enum ImageCopyScale: String, CaseIterable, Sendable {
 /// any properties across. (When metadata is kept, the orientation is still
 /// baked into the pixels during decode, so the pasted image is upright.)
 enum ImageClipboard {
-    /// Copies the first image in `urls` to the general pasteboard as rendered
-    /// pixel data at `scale`.
+    /// Copies every image in `urls` to the general pasteboard as rendered pixel
+    /// data at `scale`, one pasteboard item per image.
     ///
-    /// When `stripMetadata` is true the copy is written as PNG — lossless and
-    /// with no EXIF/GPS container at all. When false, the copy is written as
-    /// JPEG with the source file's metadata (EXIF, GPS, maker notes) carried
-    /// across, so a consumer that reads JPEG metadata still sees the camera
-    /// info. Either way a plain bitmap is also advertised so simple consumers
-    /// can paste the pixels. Returns 1 on success, 0 if nothing could be
-    /// rendered. Only the primary image is written (the pasteboard holds one
-    /// image), which is the expected "copy this picture" behavior.
+    /// When `stripMetadata` is true each copy is written as PNG — lossless and
+    /// with no EXIF/GPS container at all. When false, each is written as JPEG
+    /// with the source file's metadata (EXIF, GPS, maker notes) carried across,
+    /// so a consumer that reads JPEG metadata still sees the camera info. Each
+    /// item also advertises a plain TIFF bitmap so simple consumers can paste
+    /// the pixels. Returns the number of images written, 0 if none could be
+    /// rendered.
+    ///
+    /// Multiple images go on the pasteboard as multiple items (the correct
+    /// model for a multi-selection). Apps that accept several — Finder, Mail,
+    /// Keynote — receive them all; apps that read a single image take the
+    /// first. A single selected image is just the one-item case.
     @discardableResult
     @MainActor
     static func copy(urls: [URL], scale: ImageCopyScale, stripMetadata: Bool) -> Int {
-        guard let url = urls.first,
-              let rendered = renderedData(url: url, scale: scale, stripMetadata: stripMetadata)
-        else {
-            return 0
+        let items: [NSPasteboardItem] = urls.compactMap { url in
+            guard let rendered = renderedData(url: url, scale: scale, stripMetadata: stripMetadata) else {
+                return nil
+            }
+            let item = NSPasteboardItem()
+            item.setData(rendered.data, forType: rendered.type)
+            // Also advertise a TIFF bitmap so apps that only read generic image
+            // data (and not PNG/JPEG specifically) still paste the pixels. TIFF
+            // carries no EXIF here either, so it never leaks stripped metadata.
+            if let tiff = rendered.image.tiffRepresentation {
+                item.setData(tiff, forType: .tiff)
+            }
+            return item
         }
+        guard !items.isEmpty else { return 0 }
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        let item = NSPasteboardItem()
-        item.setData(rendered.data, forType: rendered.type)
-        // Also advertise a TIFF bitmap so apps that only read generic image
-        // data (and not PNG/JPEG specifically) still paste the pixels. TIFF
-        // carries no EXIF here either, so it never leaks stripped metadata.
-        if let tiff = rendered.image.tiffRepresentation {
-            item.setData(tiff, forType: .tiff)
-        }
-        return pasteboard.writeObjects([item]) ? 1 : 0
+        guard pasteboard.writeObjects(items) else { return 0 }
+        return items.count
     }
 
     private struct Rendered {

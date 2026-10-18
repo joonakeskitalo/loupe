@@ -48,6 +48,9 @@ struct ContentView: View {
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             handleDrop(providers)
         }
+        // Make this window prefer joining Loupe's tab group, so a new window
+        // (⌘T / ⌘N) opens as a tab rather than a separate window.
+        .background(WindowTabbingConfigurator())
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
         }
@@ -395,6 +398,30 @@ struct ContentView: View {
     private func openURL(_ url: URL) {
         openURLs([url])
     }
+}
+
+/// Configures the hosting `NSWindow` to participate in Loupe's native tab
+/// group. Gives every Loupe window the same `tabbingIdentifier` (so they can
+/// merge into one tabbed window) and sets `tabbingMode = .preferred` so opening
+/// another window joins the current one as a tab instead of floating free.
+///
+/// SwiftUI's `WindowGroup` doesn't expose tabbing directly, so we reach the
+/// underlying window once it's attached. The tab bar, ⌘T "New Tab", and the
+/// tab-cycling commands all then work through AppKit's standard tab machinery.
+private struct WindowTabbingConfigurator: NSViewRepresentable {
+    static let tabbingIdentifier = "com.loupe.browser.window"
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { [weak view] in
+            guard let window = view?.window else { return }
+            window.tabbingIdentifier = Self.tabbingIdentifier
+            window.tabbingMode = .preferred
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// A tiny thread-safe collector for drop URLs. `NSItemProvider.loadObject`

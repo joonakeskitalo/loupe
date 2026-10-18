@@ -70,11 +70,29 @@ struct LoupeApp: App {
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
+                // ⌘T opens another window; because every Loupe window prefers
+                // tabbing (see WindowTabbingConfigurator), the new one joins the
+                // frontmost window as a tab. Routed through the window's tab
+                // action so it lands in the active window's tab group.
+                Button("New Tab") {
+                    WindowTabs.newTab(openWindow: { openWindow(value: [URL]()) })
+                }
+                .keyboardShortcut("t", modifiers: .command)
+
                 Button("Open Folder in New Window…") {
                     let urls = chooseFolders()
                     if !urls.isEmpty { openWindow(value: urls) }
                 }
                 .keyboardShortcut("o", modifiers: .command)
+            }
+
+            // Tab navigation. ⌃Tab / ⌃⇧Tab cycle through the frontmost window's
+            // tabs via AppKit's standard tab-selection actions.
+            CommandGroup(after: .windowArrangement) {
+                Button("Show Next Tab") { WindowTabs.selectNext() }
+                    .keyboardShortcut(.tab, modifiers: .control)
+                Button("Show Previous Tab") { WindowTabs.selectPrevious() }
+                    .keyboardShortcut(.tab, modifiers: [.control, .shift])
             }
 
             // The full set of File / Item / View menu commands, all acting on
@@ -89,6 +107,47 @@ struct LoupeApp: App {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         return panel.runModal() == .OK ? panel.urls : []
+    }
+}
+
+/// Drives native macOS window-tab actions on the frontmost (key) window.
+///
+/// AppKit exposes tabbing through responder-chain actions on `NSWindow`
+/// (`newWindowForTab:`, `selectNextTab:`, `selectPreviousTab:`). SwiftUI's
+/// `WindowGroup` doesn't surface these, so these helpers invoke them directly
+/// on the key window — the same calls the system's own Window-menu items use.
+@MainActor
+enum WindowTabs {
+    /// Opens a new tab in the frontmost window. Prefers AppKit's
+    /// `newWindowForTab:` (which adds a tab to the key window's group); if no
+    /// window can service it (e.g. none is open yet), falls back to opening a
+    /// fresh window via SwiftUI, which — because Loupe windows prefer tabbing —
+    /// still joins any existing window as a tab.
+    static func newTab(openWindow: () -> Void) {
+        if let window = NSApp.keyWindow,
+           window.responds(to: #selector(NSWindow.newWindowForTab(_:))) {
+            window.newWindowForTab(nil)
+            // Keep the new tab grouped with the window it was spawned from even
+            // if the system would otherwise float it (belt-and-suspenders when
+            // the global "prefer tabs" setting is off).
+            if let newWindow = NSApp.keyWindow, newWindow != window,
+               window.tabGroup?.windows.contains(newWindow) == false {
+                window.addTabbedWindow(newWindow, ordered: .above)
+                newWindow.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+        openWindow()
+    }
+
+    /// Selects the next tab in the frontmost window's tab group (⌃Tab).
+    static func selectNext() {
+        NSApp.keyWindow?.selectNextTab(nil)
+    }
+
+    /// Selects the previous tab in the frontmost window's tab group (⌃⇧Tab).
+    static func selectPrevious() {
+        NSApp.keyWindow?.selectPreviousTab(nil)
     }
 }
 
@@ -118,6 +177,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// which otherwise re-enables restoration).
     func applicationWillFinishLaunching(_ notification: Notification) {
         UserDefaults.standard.register(defaults: ["NSQuitAlwaysKeepsWindows": false])
+        // Allow Loupe's windows to merge into native macOS tabs. Without this
+        // the window group's windows always open as separate windows and the
+        // Window ▸ "Show Tab Bar" / tab shortcuts are unavailable. Each window
+        // then opts into preferring tabs via `WindowTabbingConfigurator`.
+        NSWindow.allowsAutomaticWindowTabbing = true
     }
 
     /// Never auto-create a blank untitled window on launch/activation.
