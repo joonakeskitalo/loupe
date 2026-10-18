@@ -277,6 +277,22 @@ struct ContentView: View {
             }
         }
 
+        // Progress while a multi-image "Copy Image As" render runs. Shown only
+        // during the copy; a single-image copy is instant and never appears.
+        ToolbarItem(id: "copyProgress") {
+            if model.isCopyingImages {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(model.copyProgress),
+                                 total: Double(max(1, model.copyTotal)))
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                    Text("Copying \(model.copyProgress)/\(model.copyTotal)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .help("Rendering images to copy…")
+            }
+        }
 
         ToolbarItem(id: "layout") {
             Picker("Layout", selection: $model.viewLayout) {

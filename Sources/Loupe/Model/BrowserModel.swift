@@ -2382,8 +2382,43 @@ final class BrowserModel {
     ) -> Int {
         let urls = imageURLs(preferring: item)
         guard !urls.isEmpty else { return 0 }
-        return ImageClipboard.copy(urls: urls, scale: scale, stripMetadata: stripMetadata)
+
+        // A single small image copies effectively instantly, so skip the async
+        // progress machinery and copy synchronously.
+        if urls.count == 1 {
+            return ImageClipboard.copy(urls: urls, scale: scale, stripMetadata: stripMetadata)
+        }
+
+        // Multiple images: render in the background with a progress indicator,
+        // since decoding/encoding many (large or RAW) images can take a moment.
+        guard !isCopyingImages else { return urls.count }
+        isCopyingImages = true
+        copyProgress = 0
+        copyTotal = urls.count
+
+        Task { @MainActor in
+            defer { isCopyingImages = false }
+            await ImageClipboard.copy(
+                urls: urls,
+                scale: scale,
+                stripMetadata: stripMetadata
+            ) { [weak self] completed, total in
+                self?.copyProgress = completed
+                self?.copyTotal = total
+            }
+        }
+        return urls.count
     }
+
+    // MARK: - Image-copy progress
+
+    /// True while a multi-image "Copy Image" render is in flight, so the UI can
+    /// show a progress indicator. A single-image copy is synchronous and never
+    /// flips this.
+    private(set) var isCopyingImages = false
+    /// Images rendered so far in the running copy, and the total requested.
+    private(set) var copyProgress = 0
+    private(set) var copyTotal = 0
 
     /// Whether a trash action currently has any target (used to enable/disable
     /// the menu item and keyboard shortcut).
