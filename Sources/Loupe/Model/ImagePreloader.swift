@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 
 /// Decodes and caches full-resolution images off the main thread so the
 /// fullscreen viewer can swap to the next/previous image instantly instead of
@@ -68,13 +69,25 @@ actor ImagePreloader {
         if let existing = inFlight[url] {
             return existing
         }
+        let maxPixel = Self.maxDecodePixelSize
         let task = Task<NSImage?, Never>.detached(priority: .userInitiated) {
-            // `NSImage(contentsOf:)` defers decoding until first draw; force the
-            // bitmap now, off the main thread, so the viewer doesn't pay the
-            // decode cost on the first paint.
-            guard let image = NSImage(contentsOf: url) else { return nil }
-            image.prepareForDisplay()
-            return image
+            // Decode with ImageIO at a display-sized cap rather than
+            // `NSImage(contentsOf:)`. For ordinary photos the two are
+            // equivalent, but a camera-raw file (e.g. Fujifilm `.raf`) decoded
+            // the old way realized the ENTIRE sensor mosaic at native
+            // resolution — a 40MP RAF is ~160 MB of RGBA — and the viewer never
+            // shows more than screen-many pixels anyway. Capping the longest
+            // edge to the largest screen dimension keeps full on-screen quality
+            // (including room to zoom) while bounding the decoded buffer, and
+            // ImageIO reports the true decoded size so the cache cost below is
+            // accurate (an `NSImage` from a RAF reports a proxy size that made
+            // the NSCache budget under-count and never evict — the apparent
+            // "leak"). The `autoreleasepool` drains the large CG temporaries a
+            // RAW decode spins up on this worker thread instead of letting them
+            // accumulate.
+            autoreleasepool {
+                Self.decode(url: url, maxPixelSize: maxPixel)
+            }
         }
         // Wrap the detached task so we can record completion on the actor.
         let wrapper = Task<NSImage?, Never> { [weak self] in
@@ -94,7 +107,9 @@ actor ImagePreloader {
     }
 
     /// Estimated decoded size of an image in bytes (RGBA, 4 bytes per pixel),
-    /// used as the NSCache cost so eviction tracks real memory use.
+    /// used as the NSCache cost so eviction tracks real memory use. Reads the
+    /// backing bitmap's pixel dimensions, which — because we build the image
+    /// from a concrete `CGImage` in `decode` — reflect the true decoded buffer.
     private static func byteCost(of image: NSImage) -> Int {
         let pixelWidth: Int
         let pixelHeight: Int
@@ -107,14 +122,48 @@ actor ImagePreloader {
         }
         return max(1, pixelWidth * pixelHeight * 4)
     }
-}
 
-private extension NSImage {
-    /// Forces the image's bitmap to decode now (off the main thread) so the
-    /// first on-screen draw is cheap. Drawing into a 1×1 context realizes the
-    /// representation without keeping any extra allocation around.
-    func prepareForDisplay() {
-        guard let rep = representations.first else { return }
-        _ = rep.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    /// Longest-edge cap, in pixels, for a decoded full image: the largest
+    /// screen dimension across all connected displays, times the maximum
+    /// backing scale, so a decoded image is still pixel-dense enough to fill
+    /// (and zoom a little within) the biggest display at full quality without
+    /// ever realizing a multi-hundred-megabyte camera-raw mosaic. Falls back to
+    /// a sane default if no screen is available.
+    private static let maxDecodePixelSize: Int = {
+        let screens = NSScreen.screens
+        let maxPoints = screens
+            .map { max($0.frame.width, $0.frame.height) }
+            .max() ?? 2560
+        let maxScale = screens.map(\.backingScaleFactor).max() ?? 2
+        return Int((maxPoints * maxScale).rounded())
+    }()
+
+    /// Decodes `url` with ImageIO, capping the longest edge to `maxPixelSize`.
+    /// `kCGImageSourceCreateThumbnailFromImageIfAbsent` makes ImageIO produce a
+    /// correctly-oriented, downscaled bitmap straight from the full image when
+    /// the cap is smaller than the source (and uses an embedded preview when
+    /// one is large enough), so for a huge RAW we never allocate the full
+    /// sensor resolution. Returns an `NSImage` wrapping the concrete `CGImage`
+    /// so its reported pixel size matches the real buffer.
+    nonisolated private static func decode(url: URL, maxPixelSize: Int) -> NSImage? {
+        let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
+              CGImageSourceGetCount(source) > 0 else {
+            return nil
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,   // honor EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize),
+            kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+
+        let size = CGSize(width: cgImage.width, height: cgImage.height)
+        return NSImage(cgImage: cgImage, size: size)
     }
 }
