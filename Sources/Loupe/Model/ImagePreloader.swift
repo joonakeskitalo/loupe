@@ -138,31 +138,23 @@ actor ImagePreloader {
         return Int((maxPoints * maxScale).rounded())
     }()
 
-    /// Decodes `url` with ImageIO, capping the longest edge to `maxPixelSize`.
-    /// `kCGImageSourceCreateThumbnailFromImageIfAbsent` makes ImageIO produce a
-    /// correctly-oriented, downscaled bitmap straight from the full image when
-    /// the cap is smaller than the source (and uses an embedded preview when
-    /// one is large enough), so for a huge RAW we never allocate the full
-    /// sensor resolution. Returns an `NSImage` wrapping the concrete `CGImage`
-    /// so its reported pixel size matches the real buffer.
+    /// Decodes `url`, capping the longest edge to `maxPixelSize`. Routes
+    /// through `ImageDecoding.decodeCGImage`, which produces a correctly
+    /// oriented, downscaled bitmap straight from the full image via ImageIO
+    /// (reusing an embedded preview when one is large enough), so for a huge
+    /// RAW we never allocate the full sensor resolution — and transparently
+    /// falls back to Core Image for files ImageIO decodes to an all-black frame
+    /// (notably 10-bit `.HIF`), which previously showed a black fullscreen
+    /// image. Returns an `NSImage` wrapping the concrete `CGImage` so its
+    /// reported pixel size matches the real buffer.
     nonisolated private static func decode(url: URL, maxPixelSize: Int) -> NSImage? {
-        let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
-              CGImageSourceGetCount(source) > 0 else {
+        guard let cgImage = ImageDecoding.decodeCGImage(
+            url: url,
+            maxPixelSize: maxPixelSize,
+            alwaysDecodeFromFullImage: true
+        ) else {
             return nil
         }
-
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,   // honor EXIF orientation
-            kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize),
-            kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
-        ]
-
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
-        }
-
         let size = CGSize(width: cgImage.width, height: cgImage.height)
         return NSImage(cgImage: cgImage, size: size)
     }

@@ -380,12 +380,13 @@ actor ThumbnailProvider {
         return max(1, pixelWidth * pixelHeight * 4)
     }
 
-    /// Decodes a thumbnail for an image file with ImageIO, in-process and
-    /// directly at the requested size. `kCGImageSourceThumbnailMaxPixelSize`
-    /// caps the longest edge (matching our `maxPixelDimension` clamp), so the
-    /// decoder produces a small bitmap without ever fully decoding a large
-    /// photo. Returns nil if the file isn't a decodable image, letting the
-    /// caller fall back to QuickLook.
+    /// Decodes a thumbnail for an image file, in-process and directly at the
+    /// requested size. Routes through `ImageDecoding.decodeCGImage`, which runs
+    /// ImageIO's fast thumbnail path (capping the longest edge to match our
+    /// `maxPixelDimension` clamp, reusing an embedded preview when present) and
+    /// transparently falls back to Core Image for files ImageIO decodes to an
+    /// all-black frame (notably 10-bit `.HIF`). Returns nil if the file isn't a
+    /// decodable image, letting the caller fall back to QuickLook.
     ///
     /// `nonisolated` so it never serializes other thumbnail work behind actor
     /// isolation. The actual decode is synchronous CG work, so it's dispatched
@@ -399,31 +400,10 @@ actor ThumbnailProvider {
         priority: TaskPriority
     ) async -> NSImage? {
         await Task.detached(priority: priority) {
-            // Don't let ImageIO consult the slow, cross-process thumbnail cache
-            // or decode the full image up front; we only want its fast
-            // thumbnail path.
-            let sourceOptions: [CFString: Any] = [
-                kCGImageSourceShouldCache: false
-            ]
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
-                  CGImageSourceGetCount(source) > 0 else {
-                return nil
-            }
-
             let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
-            let options: [CFString: Any] = [
-                // Build a thumbnail even when the file has no embedded one, and
-                // prefer the embedded one when present (cheapest of all).
-                kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,  // honor EXIF orientation
-                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-                kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
-            ]
-
-            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            guard let cgImage = ImageDecoding.decodeCGImage(url: url, maxPixelSize: maxPixel) else {
                 return nil
             }
-
             let size = CGSize(width: cgImage.width, height: cgImage.height)
             return NSImage(cgImage: cgImage, size: size)
         }.value
