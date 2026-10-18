@@ -141,23 +141,28 @@ enum ImageDecoding {
     }
 
     /// True if `image` is effectively all black — the signature of the ImageIO
-    /// 10-bit HEIF decode bug. Samples a coarse grid of pixels (not every one)
-    /// so the check is cheap on the already-downscaled result; a single
-    /// non-black sample is enough to accept the image.
+    /// 10-bit HEIF decode bug.
+    ///
+    /// Rather than re-rasterize the full-size thumbnail (a fresh buffer plus a
+    /// `CGContext.draw` the size of the whole image, paid on *every* decode),
+    /// this draws the image once into a tiny fixed `probeSize`×`probeSize` RGBA
+    /// buffer and inspects every pixel of that. Downscaling to ~24² means the
+    /// allocation and the draw are a few KB and a trivial blit no matter how
+    /// large the thumbnail is, and averaging over the whole shrunk image is
+    /// actually a more reliable "is there any content" test than sampling a
+    /// sparse grid of the big one. A single non-near-black probe pixel means
+    /// the image decoded with real content.
     private static func isEffectivelyBlack(_ image: CGImage) -> Bool {
-        let width = image.width
-        let height = image.height
-        guard width > 0, height > 0 else { return true }
+        guard image.width > 0, image.height > 0 else { return true }
 
-        // Render into a known RGBA8 buffer so we read raw bytes directly rather
-        // than paying NSBitmapImageRep.colorAt per sample.
-        let bytesPerRow = width * 4
-        var buffer = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let probe = 24
+        let bytesPerRow = probe * 4
+        var buffer = [UInt8](repeating: 0, count: bytesPerRow * probe)
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let ctx = CGContext(
             data: &buffer,
-            width: width,
-            height: height,
+            width: probe,
+            height: probe,
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
             space: sRGB,
@@ -166,25 +171,14 @@ enum ImageDecoding {
             // Can't inspect it — assume it's fine rather than forcing a fallback.
             return false
         }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // Draw the whole image shrunk into the probe buffer; the GPU/CG blit of
+        // an already-small thumbnail down to 24² is negligible.
+        ctx.interpolationQuality = .low
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: probe, height: probe))
 
-        // Sample ~an 11x11 grid of pixels; any non-near-black one means the
-        // image decoded with real content.
-        let steps = 11
-        let strideX = max(1, width / steps)
-        let strideY = max(1, height / steps)
-        var y = 0
-        while y < height {
-            var x = 0
-            while x < width {
-                let offset = y * bytesPerRow + x * 4
-                let r = buffer[offset]
-                let g = buffer[offset + 1]
-                let b = buffer[offset + 2]
-                if Int(r) + Int(g) + Int(b) > 12 { return false }
-                x += strideX
-            }
-            y += strideY
+        for i in stride(from: 0, to: buffer.count, by: 4) {
+            let sum = Int(buffer[i]) + Int(buffer[i + 1]) + Int(buffer[i + 2])
+            if sum > 12 { return false }
         }
         return true
     }

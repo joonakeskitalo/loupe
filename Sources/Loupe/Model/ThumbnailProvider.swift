@@ -220,6 +220,19 @@ actor ThumbnailProvider {
         return min(4, max(2, cores / 2))
     }()
 
+    /// Separate, tighter cap on camera-raw image decodes (`.RAF`, `.CR3`, …).
+    /// A RAW thumbnail runs ImageIO's full sensor-demosaic pipeline (or the
+    /// even heavier Core Image RAW fallback) — far costlier than an ordinary
+    /// JPEG/HEIC decode. Letting the generous general gate admit dozens of RAWs
+    /// at once thrashed CPU and memory and made the whole grid crawl while a
+    /// RAF folder loaded. Bounding them to roughly the core count keeps the
+    /// decoders saturated without oversubscription, while ordinary images still
+    /// flow through the wide general gate unthrottled.
+    private static let maxConcurrentRaw: Int = {
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        return min(8, max(2, cores))
+    }()
+
     /// Number of generations currently running (admitted through the gate).
     private var runningCount = 0
 
@@ -243,6 +256,12 @@ actor ThumbnailProvider {
     /// it, so a simple first-come queue (no priority) is enough here.
     private var videoRunningCount = 0
     private var videoWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Running count and FIFO backlog for the tight camera-raw decode gate.
+    /// Like video, RAW decodes are heavy and a minority of a typical folder, so
+    /// a simple first-come queue is enough.
+    private var rawRunningCount = 0
+    private var rawWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Hard cap on a thumbnail's longest edge, in pixels. Grid cells top out at
     /// 320 pt, so capping here (rather than honoring the full point-size ×
@@ -401,6 +420,30 @@ actor ThumbnailProvider {
         }
     }
 
+    /// Suspends until a camera-raw decode slot is free. Mirrors the video gate:
+    /// the caller already holds a general slot while waiting here, which is
+    /// fine because `maxConcurrent` is generous and RAW files are a minority of
+    /// a typical folder. Bounding RAW concurrency keeps a burst of heavy
+    /// demosaic decodes from thrashing the machine.
+    private func acquireRawSlot() async {
+        if rawRunningCount < Self.maxConcurrentRaw {
+            rawRunningCount += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            rawWaiters.append(continuation)
+        }
+    }
+
+    /// Frees a camera-raw decode slot and admits the next waiter (FIFO).
+    private func releaseRawSlot() {
+        if rawWaiters.isEmpty {
+            rawRunningCount -= 1
+        } else {
+            rawWaiters.removeFirst().resume()
+        }
+    }
+
     /// Picks the waiting URL to run next: highest `priority`, then earliest
     /// request order within that priority.
     private func highestPriorityWaiter() -> URL? {
@@ -448,6 +491,7 @@ actor ThumbnailProvider {
         }
 
         let kind = MediaKind.classify(url: url)
+        let isRaw = kind == .image && MediaKind.isRawImage(url: url)
 
         let task = Task<NSImage?, Never> { [weak self] in
             // Wait for a generation slot before touching any decoder, so no
@@ -481,11 +525,18 @@ actor ThumbnailProvider {
             // file (there's no QuickLook fallback below), so try it for every
             // non-video type, not just those classified as images.
             if kind == .image || (method == .custom && kind != .video) {
+                // Camera-raw decodes are heavy (full demosaic / Core Image RAW
+                // pipeline), so throttle them through the tight raw gate while
+                // ordinary images keep the wide general gate. The caller still
+                // holds a general slot while waiting here — fine, since RAWs are
+                // a minority and `maxConcurrent` is generous.
+                if isRaw { await self?.acquireRawSlot() }
                 image = await Self.imageIOThumbnail(
                     for: url,
                     pixelSize: pixelSize,
                     priority: decodePriority
                 )
+                if isRaw { await self?.releaseRawSlot() }
             }
 
             // General path / image fallback: QuickLook. Covers PDFs, documents,

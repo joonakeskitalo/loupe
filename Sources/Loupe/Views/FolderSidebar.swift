@@ -39,7 +39,7 @@ struct FolderSidebar: View {
                     SidebarLabel(
                         title: "All Media",
                         systemImage: "square.grid.3x3",
-                        count: nil,
+                        count: model.allItems.count > 0 ? model.allItems.count : nil,
                         isSelected: !model.showFlaggedOnly && model.colorTagFilter == nil
                             && model.aiCategoryFilter == nil && model.personFilter == nil
                             && model.mode == .flattened

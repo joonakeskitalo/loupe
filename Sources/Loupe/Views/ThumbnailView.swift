@@ -60,12 +60,12 @@ struct ThumbnailView: View {
             .overlay(alignment: .topTrailing) {
                 if isFlagged {
                     Image(systemName: "flag.fill")
-                        .font(.system(size: max(11, size * 0.13)))
+                        .font(.system(size: max(8, size * 0.09)))
                         .foregroundStyle(.white)
-                        .padding(5)
+                        .padding(3)
                         .background(Color.orange, in: Circle())
-                        .shadow(radius: 2)
-                        .padding(6)
+                        .shadow(radius: 1)
+                        .padding(5)
                 }
             }
             .overlay(alignment: .topLeading) {

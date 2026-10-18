@@ -50,6 +50,35 @@ enum MediaKind: String, Sendable {
         "mkv", "webm"
     ]
 
+    /// Camera-raw extensions. These still classify as `.image`, but they are
+    /// far heavier to decode than an ordinary JPEG/PNG/HEIC — ImageIO (or the
+    /// Core Image fallback) has to run a full sensor-demosaic pipeline — so the
+    /// thumbnailer routes them through a tighter concurrency gate to keep a
+    /// burst of RAW decodes from thrashing the machine while ordinary images
+    /// keep the fast path. Covers the common vendor formats.
+    static let rawImageExtensions: Set<String> = [
+        "raf",            // Fujifilm
+        "cr2", "cr3",     // Canon
+        "nef", "nrw",     // Nikon
+        "arw", "srf", "sr2", // Sony
+        "orf",            // Olympus / OM System
+        "rw2",            // Panasonic
+        "dng",            // Adobe / generic
+        "pef",            // Pentax
+        "raw", "rwl",     // Leica / generic
+        "x3f",            // Sigma
+        "3fr", "fff",     // Hasselblad
+        "iiq",            // Phase One
+        "erf",            // Epson
+        "mef", "mos",     // Mamiya / Leaf
+        "gpr"             // GoPro
+    ]
+
+    /// Whether `url` is a camera-raw image by extension.
+    static func isRawImage(url: URL) -> Bool {
+        rawImageExtensions.contains(url.pathExtension.lowercased())
+    }
+
     /// Extensions that must never be classified as video, even though the
     /// system maps them to a movie UTI. `.ts` resolves to the MPEG-2 transport
     /// stream type (`public.mpeg-2-transport-stream`, which conforms to

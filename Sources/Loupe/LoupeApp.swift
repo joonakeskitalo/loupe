@@ -49,6 +49,20 @@ struct LoupeApp: App {
                 }
         }
         .windowStyle(.titleBar)
+        // Open every new window at the same standard size rather than inheriting
+        // the previous window's frame. `.restorationBehavior(.disabled)` below
+        // stops the system from persisting/restoring the frame, so this default
+        // is what every launch gets. Kept just above the 900×600 window minimum
+        // so it's compact but not cramped.
+        .defaultSize(width: 1000, height: 680)
+        // Don't restore windows on launch — neither the number of windows nor
+        // each window's size/position. This is the SwiftUI-level control
+        // (macOS 15+) that actually governs `WindowGroup` persistence; the
+        // AppDelegate `applicationShouldRestoreApplicationState` callback is not
+        // reliably consulted for SwiftUI scenes, which is why the frame kept
+        // coming back. With this, each launch starts with a single window at
+        // `defaultSize`.
+        .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Window") {
@@ -94,6 +108,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let standardized = urls.map { $0.standardizedFileURL }
         guard !standardized.isEmpty else { return }
         Task { @MainActor in OpenURLBridge.shared.deliver(standardized) }
+    }
+
+    /// Register defaults before any window is created so window restoration is
+    /// off from the first launch. `NSQuitAlwaysKeepsWindows = false` is the
+    /// AppKit-level switch that stops the system reopening a quit app's windows;
+    /// it backs up the SwiftUI `.restorationBehavior(.disabled)` on the scene
+    /// (and covers the "Close windows when quitting an app" system setting,
+    /// which otherwise re-enables restoration).
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.register(defaults: ["NSQuitAlwaysKeepsWindows": false])
     }
 
     /// Never auto-create a blank untitled window on launch/activation.
