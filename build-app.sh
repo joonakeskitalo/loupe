@@ -55,6 +55,48 @@ echo "==> Bundling FFmpeg + mpv libraries from $BREW_PREFIX..."
 # versioned binary rather than a relative symlink.
 resolve() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 
+# A dependency may be recorded against another dylib as an absolute path, as
+# `@loader_path/...` (relative to the referrer's directory), or as
+# `@rpath/...` (searched through the referrer's own LC_RPATH entries). Homebrew
+# libs use all three — e.g. brotli's sub-libs reference each other via
+# `@rpath/libbrotlicommon.1.dylib` resolved through an `@loader_path/../lib`
+# rpath. Resolve any of these forms to a concrete file path so the closure walk
+# can follow them. `$1` = dependency string, `$2` = the referrer's real path.
+resolve_dep() {
+    local dep="$1" referrer="$2"
+    local referrer_dir
+    referrer_dir="$(dirname "$referrer")"
+    case "$dep" in
+        @loader_path/*|@executable_path/*)
+            resolve "$referrer_dir/${dep#@*/}"
+            ;;
+        @rpath/*)
+            local suffix="${dep#@rpath/}" rp candidate
+            # Try each LC_RPATH of the referrer, expanding @loader_path within
+            # it, and return the first that exists on disk.
+            while IFS= read -r rp; do
+                case "$rp" in
+                    @loader_path/*|@executable_path/*)
+                        candidate="$referrer_dir/${rp#@*/}/$suffix" ;;
+                    *)
+                        candidate="$rp/$suffix" ;;
+                esac
+                if [ -f "$candidate" ]; then
+                    resolve "$candidate"
+                    return 0
+                fi
+            done < <(otool -l "$referrer" | awk '/LC_RPATH/{f=1} f&&/path /{print $2; f=0}')
+            return 1
+            ;;
+        /*)
+            resolve "$dep"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # Collect the dependency closure. macOS ships bash 3.2 (no associative
 # arrays), so track seen realpaths in a newline-delimited string.
 SEEN=$'\n'
@@ -79,16 +121,20 @@ for lib in libavformat libavcodec libavutil libswscale; do
 done
 enqueue "$BREW_PREFIX/opt/mpv/lib/libmpv.dylib"
 
-# Walk the closure. QUEUE grows as we discover dependencies.
+# Walk the closure. QUEUE grows as we discover dependencies. A dependency is a
+# lib we must bundle when it resolves to a real file inside the Homebrew tree —
+# whether it was recorded as an absolute Homebrew path or indirectly via
+# @rpath/@loader_path (which `resolve_dep` expands). System libs (/usr/lib,
+# /System/...) resolve outside the Homebrew prefix and are left alone.
 i=0
 while [ $i -lt ${#QUEUE[@]} ]; do
     cur="${QUEUE[$i]}"
     i=$((i + 1))
-    # Each dependency path that points into the Homebrew tree is itself a lib
-    # we must bundle; enqueue its realpath.
     while IFS= read -r dep; do
-        case "$dep" in
-            "$BREW_PREFIX"/*) enqueue "$dep" ;;
+        [ -n "$dep" ] || continue
+        real="$(resolve_dep "$dep" "$cur")" || continue
+        case "$real" in
+            "$BREW_PREFIX"/*) enqueue "$real" ;;
         esac
     done < <(otool -L "$cur" | tail -n +2 | awk '{print $1}')
 done
@@ -102,20 +148,36 @@ for src in "${QUEUE[@]}"; do
     chmod u+w "$FRAMEWORKS_DIR/$base"
 done
 
-# Rewrite install names: set each lib's id to @rpath/<base>, and repoint every
-# Homebrew-pointing dependency to @rpath/<dep-base>.
+# Rewrite install names: set each lib's id to @rpath/<base>, repoint every
+# bundled dependency to @rpath/<dep-base>, and give each dylib an rpath of
+# @loader_path so those @rpath references resolve to the Frameworks dir the
+# dylib lives in. We rewrite any dependency that resolves into the Homebrew
+# tree, regardless of whether it was recorded as an absolute path or via
+# @rpath/@loader_path — otherwise a sibling like libbrotlicommon stays an
+# unresolved @rpath and the app fails to launch. The original dep string
+# (not its resolved path) is what `install_name_tool -change` must match.
 for src in "${QUEUE[@]}"; do
     base="$(basename "$src")"
     target="$FRAMEWORKS_DIR/$base"
     install_name_tool -id "@rpath/$base" "$target"
     while IFS= read -r dep; do
-        case "$dep" in
+        [ -n "$dep" ] || continue
+        # A dep already written as @rpath/<base> that we bundled needs no
+        # change (the new @loader_path rpath will resolve it), but rewriting it
+        # to the canonical basename is harmless and normalizes versioned names.
+        real="$(resolve_dep "$dep" "$src")" || continue
+        case "$real" in
             "$BREW_PREFIX"/*)
-                depbase="$(basename "$(resolve "$dep")")"
-                install_name_tool -change "$dep" "@rpath/$depbase" "$target"
+                depbase="$(basename "$real")"
+                if [ "$dep" != "@rpath/$depbase" ]; then
+                    install_name_tool -change "$dep" "@rpath/$depbase" "$target"
+                fi
                 ;;
         esac
     done < <(otool -L "$target" | tail -n +2 | awk '{print $1}')
+    # Ensure @rpath resolves to the dylib's own directory (Frameworks). Harmless
+    # if an equivalent rpath already exists.
+    install_name_tool -add_rpath "@loader_path" "$target" 2>/dev/null || true
 done
 
 # Point the main executable at the bundled libraries: rewrite its Homebrew
