@@ -239,7 +239,8 @@ struct BrowserListView: View {
             isFlagged: model.isFlagged(item.id),
             colorTag: model.colorTag(item.id),
             aiCategory: model.aiCategory(item.id),
-            method: model.thumbnailMethod
+            method: model.thumbnailMethod,
+            videoPosition: model.videoThumbnailPosition
         )
         .id(item.id)
         .contentShape(Rectangle())
@@ -412,6 +413,8 @@ private struct ListRowView: View {
     var aiCategory: String? = nil
     /// The window's active thumbnail-generation method.
     var method: ThumbnailMethod = .hybrid
+    /// Where in a video its thumbnail frame is taken (the window's setting).
+    var videoPosition: VideoThumbnailPosition = .defaultPosition
 
     @State private var image: NSImage?
     /// Codec + pixel dimensions, probed lazily for video and image rows.
@@ -502,7 +505,7 @@ private struct ListRowView: View {
         )
         // Only load a thumbnail when the row actually shows one; at the
         // smallest size we display a file-type icon and skip the work.
-        .task(id: showsThumbnail ? "\(method.rawValue)@\(item.id.absoluteString)" : nil) {
+        .task(id: showsThumbnail ? "\(method.rawValue)@\(videoPosition.rawValue)@\(item.id.absoluteString)" : nil) {
             await loadThumbnail()
         }
         // Metadata (codec/dimensions) is only probed for video/image rows, and
@@ -587,7 +590,7 @@ private struct ListRowView: View {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: thumbSize, height: thumbSize)
         if let result = await ThumbnailProvider.shared.thumbnail(
-            for: item.url, size: target, scale: scale, method: method
+            for: item.url, size: target, scale: scale, method: method, videoPosition: videoPosition
         ) {
             image = result
         }

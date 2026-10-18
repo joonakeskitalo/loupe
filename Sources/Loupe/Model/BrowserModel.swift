@@ -144,6 +144,23 @@ final class BrowserModel {
 
     private static let thumbnailMethodKey = "thumbnailMethod"
 
+    /// Where in a video its thumbnail frame is taken, as a fraction of the
+    /// clip's duration. A preference persisted across windows and launches, like
+    /// `thumbnailMethod`. Only the custom decode paths (AVFoundation / FFmpeg)
+    /// honor it; QuickLook picks its own poster frame. Changing it re-renders
+    /// video thumbnails on next request (the provider keys its cache by it).
+    var videoThumbnailPosition: VideoThumbnailPosition = {
+        let raw = UserDefaults.standard.string(forKey: videoThumbnailPositionKey)
+        return raw.flatMap(VideoThumbnailPosition.init(rawValue:)) ?? .defaultPosition
+    }() {
+        didSet {
+            guard videoThumbnailPosition != oldValue else { return }
+            UserDefaults.standard.set(videoThumbnailPosition.rawValue, forKey: Self.videoThumbnailPositionKey)
+        }
+    }
+
+    private static let videoThumbnailPositionKey = "videoThumbnailPosition"
+
     /// All folders selected in the sidebar (used in `.folders` mode). Supports
     /// multi-selection; the grid shows the union of every selected folder.
     var selectedFolders: Set<URL> = [] {

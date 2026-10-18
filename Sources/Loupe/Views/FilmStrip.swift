@@ -41,7 +41,8 @@ struct FilmStrip: View {
                             isCurrent: item.id == currentID,
                             isFlagged: model.isFlagged(item.id),
                             colorTag: model.colorTag(item.id),
-                            method: model.thumbnailMethod
+                            method: model.thumbnailMethod,
+                            videoPosition: model.videoThumbnailPosition
                         )
                         .id(item.id)
                         // Match the grid's click conventions: plain click
@@ -145,6 +146,8 @@ private struct FilmStripCell: View {
     var colorTag: ColorTag? = nil
     /// The window's active thumbnail-generation method.
     var method: ThumbnailMethod = .hybrid
+    /// Where in a video its thumbnail frame is taken (the window's setting).
+    var videoPosition: VideoThumbnailPosition = .defaultPosition
 
     @State private var image: NSImage?
 
@@ -219,15 +222,15 @@ private struct FilmStripCell: View {
             let scale = NSScreen.main?.backingScaleFactor ?? 2
             let target = CGSize(width: size, height: size)
             image = await ThumbnailProvider.shared.thumbnail(
-                for: item.url, size: target, scale: scale, method: method
+                for: item.url, size: target, scale: scale, method: method, videoPosition: videoPosition
             )
         }
     }
 
-    /// Reload the thumbnail when the item, the rendered size, or the active
-    /// generation method changes, so resizing the strip larger fetches a
-    /// crisper image and switching method re-renders.
+    /// Reload the thumbnail when the item, the rendered size, or either of the
+    /// active generation options changes, so resizing the strip larger fetches
+    /// a crisper image and switching method/position re-renders.
     private var thumbnailKey: String {
-        "\(method.rawValue)@\(item.id.absoluteString)@\(Int(size.rounded()))"
+        "\(method.rawValue)@\(videoPosition.rawValue)@\(item.id.absoluteString)@\(Int(size.rounded()))"
     }
 }

@@ -316,27 +316,6 @@ struct ContentView: View {
             }
         }
 
-        ToolbarItem(id: "thumbnailMethod") {
-            Menu {
-                Picker("Thumbnail Method", selection: $model.thumbnailMethod) {
-                    ForEach(ThumbnailMethod.allCases, id: \.self) { method in
-                        // Title plus a one-line explanation of the tradeoff so
-                        // the user can tell why they'd pick each one (notably
-                        // that Native macOS fixes black .mp4 thumbnails).
-                        VStack(alignment: .leading) {
-                            Text(method.displayName)
-                            Text(method.detail)
-                        }
-                        .tag(method)
-                    }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Label("Thumbnail Method", systemImage: "photo.badge.checkmark")
-            }
-            .help("How thumbnails are generated. Switch to Native macOS to fix black .mp4 thumbnails.")
-        }
-
         ToolbarItem(id: "size") {
             Slider(value: $model.thumbnailSize,
                    in: BrowserModel.minThumbnailSize...BrowserModel.maxThumbnailSize)

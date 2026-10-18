@@ -46,9 +46,12 @@ struct BrowserGridView: View {
         guard index + 1 < upper else { return }
         let urls = items[(index + 1)..<upper].map(\.url)
         let method = model.thumbnailMethod
+        let videoPosition = model.videoThumbnailPosition
         Task {
             for url in urls {
-                await ThumbnailProvider.shared.prefetch(url, size: target, scale: scale, method: method)
+                await ThumbnailProvider.shared.prefetch(
+                    url, size: target, scale: scale, method: method, videoPosition: videoPosition
+                )
             }
         }
     }
@@ -79,7 +82,8 @@ struct BrowserGridView: View {
             aiCategory: model.aiCategory(item.id),
             personCount: model.persons(item.id).count,
             hideFilename: model.hideFilenames,
-            method: model.thumbnailMethod
+            method: model.thumbnailMethod,
+            videoPosition: model.videoThumbnailPosition
         )
         // The ScrollViewReader scrolls to this id; a grouped person view may
         // show the same item under several people, so scrolling resolves to the

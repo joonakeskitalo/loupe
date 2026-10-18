@@ -18,7 +18,11 @@ enum FFmpegThumbnailer {
     /// Produces a thumbnail no larger than `maxPixelSize` on its longest edge,
     /// preserving aspect ratio. Returns nil if the file can't be opened or no
     /// frame can be decoded.
-    static func thumbnail(for url: URL, maxPixelSize: Int) -> NSImage? {
+    /// `positionFraction` is where to start sampling, as a fraction (0…1) of
+    /// the clip's duration. The brightness search below still runs forward from
+    /// there, so a chosen position that lands on a black frame still yields a
+    /// visible thumbnail.
+    static func thumbnail(for url: URL, maxPixelSize: Int, positionFraction: Double = 0.25) -> NSImage? {
         var formatCtx: UnsafeMutablePointer<AVFormatContext>? = nil
 
         // avformat_open_input takes ownership of the context pointer and frees
@@ -64,9 +68,12 @@ enum FFmpegThumbnailer {
             return nil
         }
 
-        // Seek ~20% in (clamped to 0.5…20s) so we start sampling past typical
-        // intros, when the stream exposes a usable duration. Best-effort.
-        seekPastIntro(formatCtx: formatCtx, stream: stream, streamIndex: streamIndex)
+        // Seek to the requested fraction of the duration (best-effort; the
+        // brightness search below handles whatever frame the seek lands on).
+        seekToFraction(
+            positionFraction,
+            formatCtx: formatCtx, stream: stream, streamIndex: streamIndex
+        )
 
         guard let frame = decodeBestFrame(
             formatCtx: formatCtx, codecCtx: codecCtx, streamIndex: streamIndex
@@ -83,20 +90,28 @@ enum FFmpegThumbnailer {
 
     // MARK: - Seeking
 
-    private static func seekPastIntro(
+    /// Seeks to `fraction` (0…1) of the clip's duration, when the stream
+    /// exposes a usable duration. `fraction == 0` leaves the demuxer at the
+    /// start (no seek). For non-zero fractions the brightness search in
+    /// `decodeBestFrame` still runs forward from the landing point, so a
+    /// position that happens to hit a dark frame still produces a usable
+    /// thumbnail. Best-effort: a stream with no known duration is left at the
+    /// start, where the search then begins.
+    private static func seekToFraction(
+        _ fraction: Double,
         formatCtx: UnsafeMutablePointer<AVFormatContext>?,
         stream: UnsafeMutablePointer<AVStream>,
         streamIndex: Int32
     ) {
+        guard fraction > 0 else { return }
         let durationTicks = formatCtx?.pointee.duration ?? 0
         guard durationTicks > 0 else { return }
         let durationSeconds = Double(durationTicks) / Double(AV_TIME_BASE)
         guard durationSeconds > 0 else { return }
 
-        // Aim for 25% in, with a 3s floor so short clips still clear a typical
-        // fade-from-black intro, capped so we don't overshoot into end credits.
-        // The brightness search below handles whatever the seek lands on.
-        let targetSeconds = min(max(3.0, durationSeconds * 0.25), durationSeconds * 0.5)
+        // Clamp a touch below the very end so a 75%/end position still leaves
+        // frames to decode rather than landing in trailing padding.
+        let targetSeconds = min(durationSeconds * fraction, durationSeconds * 0.95)
         let timeBase = stream.pointee.time_base
         guard timeBase.den != 0 else { return }
         let targetTs = Int64(targetSeconds * Double(timeBase.den) / Double(timeBase.num))

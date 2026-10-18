@@ -173,6 +173,20 @@ struct LoupeCommands: Commands {
             }
             .disabled(model == nil)
 
+            // Where in a video its thumbnail frame is taken. Moving off the
+            // start is another way to escape a black lead-in frame. Honored by
+            // the custom decode paths (AVFoundation / FFmpeg); Native macOS
+            // picks its own poster frame, so it's disabled there.
+            Menu("Video Thumbnail Frame") {
+                Picker("Video Thumbnail Frame", selection: videoThumbnailPositionBinding) {
+                    ForEach(VideoThumbnailPosition.allCases, id: \.self) { position in
+                        Text(position.displayName).tag(position)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            .disabled(model == nil || model?.thumbnailMethod == .nativeMacOS)
+
             // Section the grid/list by an AI dimension: none, scene category,
             // or recognized person. Each option disables itself until the
             // matching pass has produced something to group by.
@@ -309,4 +323,7 @@ struct LoupeCommands: Commands {
     private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
     private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }
     private var thumbnailMethodBinding: Binding<ThumbnailMethod> { binding(\.thumbnailMethod, default: .hybrid) }
+    private var videoThumbnailPositionBinding: Binding<VideoThumbnailPosition> {
+        binding(\.videoThumbnailPosition, default: .defaultPosition)
+    }
 }

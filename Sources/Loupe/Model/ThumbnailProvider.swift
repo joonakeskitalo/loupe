@@ -93,6 +93,37 @@ enum ThumbnailMethod: String, CaseIterable, Sendable {
     }
 }
 
+/// Where in a video the thumbnail frame is taken, expressed as a fraction of
+/// the clip's duration so it generalizes across clip lengths. Fixing a black
+/// `.mp4` thumbnail is often just a matter of moving off the lead-in frame, so
+/// this is exposed as a small menu of presets.
+///
+/// Only the custom decode paths (AVFoundation / FFmpeg) honor this; QuickLook
+/// (`.nativeMacOS`) picks its own poster frame and ignores the position.
+enum VideoThumbnailPosition: String, CaseIterable, Sendable {
+    case start = "Start"
+    case tenPercent = "10%"
+    case twentyFivePercent = "25%"
+    case fiftyPercent = "Middle"
+    case seventyFivePercent = "75%"
+
+    var displayName: String { rawValue }
+
+    /// The position as a fraction of the video's duration, 0…1.
+    var fraction: Double {
+        switch self {
+        case .start: return 0
+        case .tenPercent: return 0.10
+        case .twentyFivePercent: return 0.25
+        case .fiftyPercent: return 0.50
+        case .seventyFivePercent: return 0.75
+        }
+    }
+
+    /// The sensible default: a quarter in, past typical intros/fades.
+    static let defaultPosition: VideoThumbnailPosition = .twentyFivePercent
+}
+
 actor ThumbnailProvider {
     static let shared = ThumbnailProvider()
 
@@ -191,9 +222,10 @@ actor ThumbnailProvider {
         size: CGSize,
         scale: CGFloat,
         method: ThumbnailMethod = .hybrid,
+        videoPosition: VideoThumbnailPosition = .defaultPosition,
         priority: Priority = .visible
     ) async -> NSImage? {
-        let key = Self.cacheKey(url: url, method: method)
+        let key = Self.cacheKey(url: url, method: method, videoPosition: videoPosition)
         if let cached = cache.object(forKey: key) {
             return cached
         }
@@ -206,27 +238,44 @@ actor ThumbnailProvider {
         // Reuse or create the generation task, but DO NOT await it while the
         // actor is isolated — return the task's handle and await it outside, so
         // concurrent requests overlap instead of serializing.
-        let task = taskForThumbnail(url: url, pixelSize: pixelSize, method: method, priority: priority)
+        let task = taskForThumbnail(
+            url: url, pixelSize: pixelSize, method: method,
+            videoPosition: videoPosition, priority: priority
+        )
         return await task.value
     }
 
     /// Warms the cache for `url` at low priority without waiting for the result.
     /// Used to prefetch cells just outside the viewport so they're ready by the
     /// time a short scroll brings them in. No-op if already cached or in flight.
-    func prefetch(_ url: URL, size: CGSize, scale: CGFloat, method: ThumbnailMethod = .hybrid) {
-        let key = Self.cacheKey(url: url, method: method)
+    func prefetch(
+        _ url: URL,
+        size: CGSize,
+        scale: CGFloat,
+        method: ThumbnailMethod = .hybrid,
+        videoPosition: VideoThumbnailPosition = .defaultPosition
+    ) {
+        let key = Self.cacheKey(url: url, method: method, videoPosition: videoPosition)
         guard cache.object(forKey: key) == nil, inFlight[url] == nil else {
             return
         }
         let pixelSize = Self.clampedPixelSize(pointSize: size, scale: scale)
-        _ = taskForThumbnail(url: url, pixelSize: pixelSize, method: method, priority: .prefetch)
+        _ = taskForThumbnail(
+            url: url, pixelSize: pixelSize, method: method,
+            videoPosition: videoPosition, priority: .prefetch
+        )
     }
 
-    /// Composite cache key so a thumbnail generated under one method is never
-    /// served when another method is active — switching methods should re-render
-    /// (that's the whole point of switching). Keyed by method + URL.
-    private static func cacheKey(url: URL, method: ThumbnailMethod) -> NSString {
-        "\(method.rawValue)\n\(url.absoluteString)" as NSString
+    /// Composite cache key so a thumbnail generated under one set of options is
+    /// never served when a different set is active — switching the method or
+    /// the video position should re-render (that's the whole point). Keyed by
+    /// method + video position + URL.
+    private static func cacheKey(
+        url: URL,
+        method: ThumbnailMethod,
+        videoPosition: VideoThumbnailPosition
+    ) -> NSString {
+        "\(method.rawValue)\n\(videoPosition.rawValue)\n\(url.absoluteString)" as NSString
     }
 
     // MARK: - Gate
@@ -337,6 +386,7 @@ actor ThumbnailProvider {
         url: URL,
         pixelSize: CGSize,
         method: ThumbnailMethod,
+        videoPosition: VideoThumbnailPosition,
         priority: Priority
     ) -> Task<NSImage?, Never> {
         if let existing = inFlight[url] {
@@ -365,7 +415,7 @@ actor ThumbnailProvider {
                 if kind == .video { await self?.acquireVideoSlot() }
                 image = await Self.quickLookThumbnail(for: url, pixelSize: pixelSize)
                 if kind == .video { await self?.releaseVideoSlot() }
-                await self?.finish(url: url, method: method, image: image)
+                await self?.finish(url: url, method: method, videoPosition: videoPosition, image: image)
                 return image
             }
 
@@ -405,12 +455,13 @@ actor ThumbnailProvider {
                 image = await Self.videoFrame(
                     for: url,
                     pixelSize: pixelSize,
+                    position: videoPosition,
                     priority: decodePriority
                 )
                 await self?.releaseVideoSlot()
             }
 
-            await self?.finish(url: url, method: method, image: image)
+            await self?.finish(url: url, method: method, videoPosition: videoPosition, image: image)
             return image
         }
 
@@ -421,12 +472,17 @@ actor ThumbnailProvider {
     /// Records a finished generation: stores the image under the method-aware
     /// cache key, clears the in-flight entry, and releases the generation slot
     /// so the next waiter can start.
-    private func finish(url: URL, method: ThumbnailMethod, image: NSImage?) {
+    private func finish(
+        url: URL,
+        method: ThumbnailMethod,
+        videoPosition: VideoThumbnailPosition,
+        image: NSImage?
+    ) {
         inFlight[url] = nil
         if let image {
             cache.setObject(
                 image,
-                forKey: Self.cacheKey(url: url, method: method),
+                forKey: Self.cacheKey(url: url, method: method, videoPosition: videoPosition),
                 cost: Self.byteCost(of: image)
             )
         }
@@ -521,9 +577,10 @@ actor ThumbnailProvider {
     nonisolated private static func videoFrame(
         for url: URL,
         pixelSize: CGSize,
+        position: VideoThumbnailPosition,
         priority: TaskPriority
     ) async -> NSImage? {
-        if let image = await avFoundationFrame(for: url, pixelSize: pixelSize) {
+        if let image = await avFoundationFrame(for: url, pixelSize: pixelSize, position: position) {
             return image
         }
 
@@ -533,15 +590,24 @@ actor ThumbnailProvider {
         // The detached priority follows the request so a visible video decodes
         // ahead of a prefetched one at the OS scheduler level.
         let maxPixel = Int(max(pixelSize.width, pixelSize.height).rounded())
+        let fraction = position.fraction
         return await Task.detached(priority: priority) {
-            FFmpegThumbnailer.thumbnail(for: url, maxPixelSize: max(1, maxPixel))
+            FFmpegThumbnailer.thumbnail(
+                for: url, maxPixelSize: max(1, maxPixel), positionFraction: fraction
+            )
         }.value
     }
 
     /// Pulls a frame via AVFoundation. Returns nil for containers AVFoundation
     /// doesn't support (e.g. Matroska / WebM) so the caller can fall back.
     /// `pixelSize` is already in pixels, so it maps straight to `maximumSize`.
-    nonisolated private static func avFoundationFrame(for url: URL, pixelSize: CGSize) async -> NSImage? {
+    /// Seeks to `position` as a fraction of the clip's duration; `.start`
+    /// resolves to the first frame without needing the duration at all.
+    nonisolated private static func avFoundationFrame(
+        for url: URL,
+        pixelSize: CGSize,
+        position: VideoThumbnailPosition
+    ) async -> NSImage? {
         // Skip building a precise duration/timing index: a thumbnail doesn't
         // need frame-accurate seeking, and for some containers that index
         // requires scanning the whole file up front. This alone saves the
@@ -569,11 +635,22 @@ actor ThumbnailProvider {
         generator.requestedTimeToleranceAfter = .positiveInfinity
         generator.maximumSize = pixelSize
 
-        // Aim a short way in to skip black lead-in frames. With infinite
-        // tolerance this snaps to whatever keyframe is nearest, so there's no
-        // need to load the duration first (one fewer async round trip) — very
-        // short clips simply resolve to their first keyframe.
-        let time = CMTime(seconds: 1, preferredTimescale: 600)
+        // Resolve the requested position to a concrete time. `.start` maps to
+        // frame 0 and needs no duration (one fewer async round trip); any other
+        // fraction needs the duration, which we load lazily only in that case.
+        // With infinite tolerance the generator snaps to the nearest keyframe,
+        // so a very short clip simply resolves to its first frame.
+        let time: CMTime
+        if position == .start {
+            time = .zero
+        } else if let duration = try? await asset.load(.duration),
+                  duration.isNumeric, duration.seconds > 0 {
+            time = CMTime(seconds: duration.seconds * position.fraction, preferredTimescale: 600)
+        } else {
+            // Duration unavailable (some streams don't expose it cheaply). Fall
+            // back to a fixed 1s offset so we still skip a typical lead-in.
+            time = CMTime(seconds: 1, preferredTimescale: 600)
+        }
 
         do {
             let cgImage = try await generator.image(at: time).image
