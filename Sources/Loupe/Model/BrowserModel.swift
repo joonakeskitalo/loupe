@@ -125,6 +125,25 @@ final class BrowserModel {
     /// Toggles the grid filename captions on/off.
     func toggleHideFilenames() { hideFilenames.toggle() }
 
+    /// How thumbnails are generated (per-type `.hybrid`, QuickLook-everywhere
+    /// `.nativeMacOS`, or in-app-decoders-only `.custom`). A preference, not
+    /// per-folder data, so it's persisted across windows and launches like
+    /// `faceEngine`. Switching it re-renders thumbnails on next request — the
+    /// provider keys its cache by method, so a method change never serves a
+    /// thumbnail built the old way (which is the point: `.nativeMacOS` is how a
+    /// user escapes black `.mp4` thumbnails).
+    var thumbnailMethod: ThumbnailMethod = {
+        let raw = UserDefaults.standard.string(forKey: thumbnailMethodKey)
+        return raw.flatMap(ThumbnailMethod.init(rawValue:)) ?? .hybrid
+    }() {
+        didSet {
+            guard thumbnailMethod != oldValue else { return }
+            UserDefaults.standard.set(thumbnailMethod.rawValue, forKey: Self.thumbnailMethodKey)
+        }
+    }
+
+    private static let thumbnailMethodKey = "thumbnailMethod"
+
     /// All folders selected in the sidebar (used in `.folders` mode). Supports
     /// multi-selection; the grid shows the union of every selected folder.
     var selectedFolders: Set<URL> = [] {

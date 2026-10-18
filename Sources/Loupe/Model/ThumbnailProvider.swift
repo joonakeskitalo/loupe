@@ -19,6 +19,14 @@ import QuickLookThumbnailing
 ///   * **Everything else** (PDFs, documents, etc.) uses QuickLook, whose
 ///     generality is exactly what that long tail needs.
 ///
+/// That per-type routing is the default (`ThumbnailMethod.hybrid`). A caller
+/// can override it per request: `.nativeMacOS` runs QuickLook for every type
+/// (matching Finder, and rendering a video poster frame instead of seeking a
+/// keyframe — the way to dodge black `.mp4` thumbnails), while `.custom` uses
+/// only the in-process decoders and never QuickLook. The cache is keyed by
+/// method, so switching methods re-renders rather than serving a thumbnail
+/// built the old way.
+///
 /// Memory is bounded two ways: each image is capped at `maxPixelDimension` px
 /// on its longest edge (so a cell at any zoom level decodes a small image), and
 /// the cache evicts least-recently-used entries once the total decoded size
@@ -47,6 +55,44 @@ import QuickLookThumbnailing
 ///   * A waiting request can be *promoted*: if a URL queued at `.prefetch`
 ///     becomes visible, re-requesting it at `.visible` bumps it to the front
 ///     without starting duplicate work.
+/// How thumbnails are generated. Lets the user trade the default per-type
+/// routing against two single-pipeline alternatives when a particular file
+/// type thumbnails poorly on one path.
+///
+/// The motivating case is `.mp4` video: the custom AVFoundation path seeks to a
+/// representative keyframe with infinite tolerance, which on some H.264/HEVC
+/// `.mp4` files lands on an all-black lead-in frame and produces a black
+/// thumbnail. QuickLook (`.nativeMacOS`) renders its own video poster frame and
+/// sidesteps that, so a user hitting black `.mp4` thumbnails can switch to it.
+enum ThumbnailMethod: String, CaseIterable, Sendable {
+    /// Per-type routing (the default): images via ImageIO, video via
+    /// AVFoundation→FFmpeg, everything else via QuickLook. Fastest overall.
+    case hybrid = "Hybrid"
+    /// QuickLook for every file type. Uses the same system-wide thumbnailing
+    /// Finder/Quick Look use, so it matches OS behavior and renders video
+    /// poster frames rather than seeking a keyframe — the way to dodge black
+    /// `.mp4` thumbnails — at the cost of a cross-process hop per thumbnail.
+    case nativeMacOS = "Native macOS"
+    /// Loupe's own in-process decoders only, never QuickLook: images and any
+    /// ImageIO-decodable file via ImageIO, video via AVFoundation→FFmpeg.
+    /// Files no in-process decoder handles fall back to a type icon.
+    case custom = "Custom"
+
+    var displayName: String { rawValue }
+
+    /// A short explanation shown under each option in the picker.
+    var detail: String {
+        switch self {
+        case .hybrid:
+            return "Fastest. ImageIO for images, AVFoundation for video, Quick Look for the rest."
+        case .nativeMacOS:
+            return "Quick Look for everything. Fixes black .mp4 thumbnails; a bit slower."
+        case .custom:
+            return "In-app decoders only, no Quick Look. Other file types show a type icon."
+        }
+    }
+}
+
 actor ThumbnailProvider {
     static let shared = ThumbnailProvider()
 
@@ -62,7 +108,7 @@ actor ThumbnailProvider {
         }
     }
 
-    private let cache = NSCache<NSURL, NSImage>()
+    private let cache = NSCache<NSString, NSImage>()
     private var inFlight: [URL: Task<NSImage?, Never>] = [:]
 
     // MARK: - Scheduler
@@ -144,9 +190,11 @@ actor ThumbnailProvider {
         for url: URL,
         size: CGSize,
         scale: CGFloat,
+        method: ThumbnailMethod = .hybrid,
         priority: Priority = .visible
     ) async -> NSImage? {
-        if let cached = cache.object(forKey: url as NSURL) {
+        let key = Self.cacheKey(url: url, method: method)
+        if let cached = cache.object(forKey: key) {
             return cached
         }
 
@@ -158,19 +206,27 @@ actor ThumbnailProvider {
         // Reuse or create the generation task, but DO NOT await it while the
         // actor is isolated — return the task's handle and await it outside, so
         // concurrent requests overlap instead of serializing.
-        let task = taskForThumbnail(url: url, pixelSize: pixelSize, priority: priority)
+        let task = taskForThumbnail(url: url, pixelSize: pixelSize, method: method, priority: priority)
         return await task.value
     }
 
     /// Warms the cache for `url` at low priority without waiting for the result.
     /// Used to prefetch cells just outside the viewport so they're ready by the
     /// time a short scroll brings them in. No-op if already cached or in flight.
-    func prefetch(_ url: URL, size: CGSize, scale: CGFloat) {
-        guard cache.object(forKey: url as NSURL) == nil, inFlight[url] == nil else {
+    func prefetch(_ url: URL, size: CGSize, scale: CGFloat, method: ThumbnailMethod = .hybrid) {
+        let key = Self.cacheKey(url: url, method: method)
+        guard cache.object(forKey: key) == nil, inFlight[url] == nil else {
             return
         }
         let pixelSize = Self.clampedPixelSize(pointSize: size, scale: scale)
-        _ = taskForThumbnail(url: url, pixelSize: pixelSize, priority: .prefetch)
+        _ = taskForThumbnail(url: url, pixelSize: pixelSize, method: method, priority: .prefetch)
+    }
+
+    /// Composite cache key so a thumbnail generated under one method is never
+    /// served when another method is active — switching methods should re-render
+    /// (that's the whole point of switching). Keyed by method + URL.
+    private static func cacheKey(url: URL, method: ThumbnailMethod) -> NSString {
+        "\(method.rawValue)\n\(url.absoluteString)" as NSString
     }
 
     // MARK: - Gate
@@ -280,6 +336,7 @@ actor ThumbnailProvider {
     private func taskForThumbnail(
         url: URL,
         pixelSize: CGSize,
+        method: ThumbnailMethod,
         priority: Priority
     ) -> Task<NSImage?, Never> {
         if let existing = inFlight[url] {
@@ -296,38 +353,46 @@ actor ThumbnailProvider {
             await self?.acquireSlot(url: url, priority: priority)
 
             var image: NSImage?
+            let decodePriority: TaskPriority = priority == .visible ? .userInitiated : .utility
+
+            // `.nativeMacOS` forces QuickLook for every type — the same
+            // thumbnailing Finder/Quick Look use. It renders a video poster
+            // frame rather than seeking a keyframe, which is how it dodges the
+            // black `.mp4` thumbnails the AVFoundation seek can produce. Video
+            // still goes through the tight video gate so a cluster of slow
+            // QuickLook video renders can't monopolize the general slots.
+            if method == .nativeMacOS {
+                if kind == .video { await self?.acquireVideoSlot() }
+                image = await Self.quickLookThumbnail(for: url, pixelSize: pixelSize)
+                if kind == .video { await self?.releaseVideoSlot() }
+                await self?.finish(url: url, method: method, image: image)
+                return image
+            }
 
             // Fast path: images decode in-process via ImageIO, straight to the
             // target size. Much cheaper than QuickLook's cross-process agent.
             // Run on a detached task (not the cooperative pool) so the
             // synchronous CG decode runs on a real thread, lets many images
             // decode truly in parallel, and never blocks the async runtime.
-            if kind == .image {
+            // In `.custom` this also handles any ImageIO-decodable non-video
+            // file (there's no QuickLook fallback below), so try it for every
+            // non-video type, not just those classified as images.
+            if kind == .image || (method == .custom && kind != .video) {
                 image = await Self.imageIOThumbnail(
                     for: url,
                     pixelSize: pixelSize,
-                    priority: priority == .visible ? .userInitiated : .utility
+                    priority: decodePriority
                 )
             }
 
             // General path / image fallback: QuickLook. Covers PDFs, documents,
             // and anything ImageIO couldn't decode. Skipped for video, which has
             // its own decode chain below (QuickLook rarely adds value there and
-            // costs an XPC round trip).
-            if image == nil, kind != .video {
-                let request = QLThumbnailGenerator.Request(
-                    fileAt: url,
-                    size: pixelSize,
-                    scale: 1,
-                    representationTypes: .thumbnail
-                )
-                request.iconMode = true
-                do {
-                    let rep = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
-                    image = rep.nsImage
-                } catch {
-                    image = nil
-                }
+            // costs an XPC round trip). Skipped entirely under `.custom`, which
+            // never touches QuickLook — unhandled types fall back to a type
+            // icon in the cell instead.
+            if image == nil, kind != .video, method != .custom {
+                image = await Self.quickLookThumbnail(for: url, pixelSize: pixelSize)
             }
 
             // Video: AVFoundation first, then the bundled FFmpeg libraries for
@@ -340,12 +405,12 @@ actor ThumbnailProvider {
                 image = await Self.videoFrame(
                     for: url,
                     pixelSize: pixelSize,
-                    priority: priority == .visible ? .userInitiated : .utility
+                    priority: decodePriority
                 )
                 await self?.releaseVideoSlot()
             }
 
-            await self?.finish(url: url, image: image)
+            await self?.finish(url: url, method: method, image: image)
             return image
         }
 
@@ -353,14 +418,39 @@ actor ThumbnailProvider {
         return task
     }
 
-    /// Records a finished generation: stores the image, clears the in-flight
-    /// entry, and releases the generation slot so the next waiter can start.
-    private func finish(url: URL, image: NSImage?) {
+    /// Records a finished generation: stores the image under the method-aware
+    /// cache key, clears the in-flight entry, and releases the generation slot
+    /// so the next waiter can start.
+    private func finish(url: URL, method: ThumbnailMethod, image: NSImage?) {
         inFlight[url] = nil
         if let image {
-            cache.setObject(image, forKey: url as NSURL, cost: Self.byteCost(of: image))
+            cache.setObject(
+                image,
+                forKey: Self.cacheKey(url: url, method: method),
+                cost: Self.byteCost(of: image)
+            )
         }
         releaseSlot()
+    }
+
+    /// QuickLook thumbnail for `url` at `pixelSize` (already in pixels, so
+    /// scale 1). The system's general-purpose generator: an XPC hop to the
+    /// Quick Look agent that produces the same thumbnail Finder shows. Returns
+    /// nil if QuickLook can't represent the file.
+    nonisolated private static func quickLookThumbnail(for url: URL, pixelSize: CGSize) async -> NSImage? {
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: pixelSize,
+            scale: 1,
+            representationTypes: .thumbnail
+        )
+        request.iconMode = true
+        do {
+            let rep = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+            return rep.nsImage
+        } catch {
+            return nil
+        }
     }
 
     /// Estimated decoded size of an image in bytes (RGBA, 4 bytes per pixel),
@@ -400,12 +490,24 @@ actor ThumbnailProvider {
         priority: TaskPriority
     ) async -> NSImage? {
         await Task.detached(priority: priority) {
-            let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
-            guard let cgImage = ImageDecoding.decodeCGImage(url: url, maxPixelSize: maxPixel) else {
-                return nil
+            // `autoreleasepool` drains the large CG temporaries a decode spins
+            // up on this worker thread rather than letting them pile up across
+            // cells. It matters most for camera-raw files (e.g. Fujifilm
+            // `.RAF`): ImageIO's thumbnail decode — and especially the Core
+            // Image fallback inside `decodeCGImage` for a RAW that ImageIO
+            // can't produce a usable preview for — allocates sensor-sized
+            // intermediates, and without an explicit pool a grid full of RAFs
+            // held every one of those buffers alive until the enclosing async
+            // frame returned, which read as a large, growing memory footprint.
+            // This is the same guard the fullscreen preloader already applies.
+            autoreleasepool {
+                let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
+                guard let cgImage = ImageDecoding.decodeCGImage(url: url, maxPixelSize: maxPixel) else {
+                    return nil
+                }
+                let size = CGSize(width: cgImage.width, height: cgImage.height)
+                return NSImage(cgImage: cgImage, size: size)
             }
-            let size = CGSize(width: cgImage.width, height: cgImage.height)
-            return NSImage(cgImage: cgImage, size: size)
         }.value
     }
 

@@ -238,7 +238,8 @@ struct BrowserListView: View {
             isSelected: model.selectedItems.contains(item.id),
             isFlagged: model.isFlagged(item.id),
             colorTag: model.colorTag(item.id),
-            aiCategory: model.aiCategory(item.id)
+            aiCategory: model.aiCategory(item.id),
+            method: model.thumbnailMethod
         )
         .id(item.id)
         .contentShape(Rectangle())
@@ -409,6 +410,8 @@ private struct ListRowView: View {
     var colorTag: ColorTag? = nil
     /// AI-assigned category, if classified. Shown as a small pill after the name.
     var aiCategory: String? = nil
+    /// The window's active thumbnail-generation method.
+    var method: ThumbnailMethod = .hybrid
 
     @State private var image: NSImage?
     /// Codec + pixel dimensions, probed lazily for video and image rows.
@@ -499,7 +502,9 @@ private struct ListRowView: View {
         )
         // Only load a thumbnail when the row actually shows one; at the
         // smallest size we display a file-type icon and skip the work.
-        .task(id: showsThumbnail ? item.id : nil) { await loadThumbnail() }
+        .task(id: showsThumbnail ? "\(method.rawValue)@\(item.id.absoluteString)" : nil) {
+            await loadThumbnail()
+        }
         // Metadata (codec/dimensions) is only probed for video/image rows, and
         // an already-resolved value is read synchronously from the main-actor
         // cache below — so most rows never spawn a task here while scrolling.
@@ -581,7 +586,9 @@ private struct ListRowView: View {
         guard showsThumbnail else { return }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: thumbSize, height: thumbSize)
-        if let result = await ThumbnailProvider.shared.thumbnail(for: item.url, size: target, scale: scale) {
+        if let result = await ThumbnailProvider.shared.thumbnail(
+            for: item.url, size: target, scale: scale, method: method
+        ) {
             image = result
         }
     }

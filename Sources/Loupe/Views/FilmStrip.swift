@@ -40,7 +40,8 @@ struct FilmStrip: View {
                             isSelected: selectedIDs.contains(item.id),
                             isCurrent: item.id == currentID,
                             isFlagged: model.isFlagged(item.id),
-                            colorTag: model.colorTag(item.id)
+                            colorTag: model.colorTag(item.id),
+                            method: model.thumbnailMethod
                         )
                         .id(item.id)
                         // Match the grid's click conventions: plain click
@@ -142,6 +143,8 @@ private struct FilmStripCell: View {
     var isFlagged: Bool = false
     /// The item's color tag, if any (shown opposite the flag badge).
     var colorTag: ColorTag? = nil
+    /// The window's active thumbnail-generation method.
+    var method: ThumbnailMethod = .hybrid
 
     @State private var image: NSImage?
 
@@ -215,13 +218,16 @@ private struct FilmStripCell: View {
         .task(id: thumbnailKey) {
             let scale = NSScreen.main?.backingScaleFactor ?? 2
             let target = CGSize(width: size, height: size)
-            image = await ThumbnailProvider.shared.thumbnail(for: item.url, size: target, scale: scale)
+            image = await ThumbnailProvider.shared.thumbnail(
+                for: item.url, size: target, scale: scale, method: method
+            )
         }
     }
 
-    /// Reload the thumbnail when either the item or the rendered size changes,
-    /// so resizing the strip larger fetches a crisper image.
+    /// Reload the thumbnail when the item, the rendered size, or the active
+    /// generation method changes, so resizing the strip larger fetches a
+    /// crisper image and switching method re-renders.
     private var thumbnailKey: String {
-        "\(item.id.absoluteString)@\(Int(size.rounded()))"
+        "\(method.rawValue)@\(item.id.absoluteString)@\(Int(size.rounded()))"
     }
 }

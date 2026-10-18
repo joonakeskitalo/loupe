@@ -82,31 +82,62 @@ enum ImageDecoding {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
+    /// Shared, sRGB working-space `CIContext` reused across every Core Image
+    /// decode. A `CIContext` is a heavyweight object — it owns a Metal device,
+    /// command queues, and internal caches — and is explicitly designed to be
+    /// created once and reused. The previous code created a fresh one on every
+    /// fallback decode; under the grid's concurrent load, browsing many camera
+    /// RAWs (e.g. Fujifilm `.RAF`, which routes through this fallback) spun up
+    /// hundreds of contexts and exhausted GPU/Metal resources, after which
+    /// `createCGImage` began returning nil or all-black images — the "works for
+    /// a while, then thumbnails go black / missing" failure. One shared context
+    /// (safe for concurrent rendering) bounds that cost to a single allocation.
+    nonisolated(unsafe) private static let sharedCIContext: CIContext = {
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+        return CIContext(options: [
+            .workingColorSpace: sRGB,
+            // Don't let Core Image hold a growing cache of intermediate images
+            // across decodes; each thumbnail is one-shot, so caching only piles
+            // up memory while browsing a large folder.
+            .cacheIntermediates: false
+        ])
+    }()
+
     /// Core Image fallback: decodes `url` correctly for files ImageIO's
     /// full-image path mishandles, applies EXIF orientation, downscales to
     /// `maxPixelSize`, and renders to a plain 8-bit sRGB bitmap (which is what
     /// a thumbnail / on-screen image needs and sidesteps the broken 10-bit
     /// output).
+    ///
+    /// The downscale is applied to the `CIImage` *before* rendering, and only
+    /// the scaled extent is rasterized, so a 40MP RAW never materializes its
+    /// full sensor mosaic here — Core Image folds the scale into the RAW
+    /// pipeline and realizes just the small output. Rendering goes through the
+    /// shared `CIContext` so repeated decodes don't each allocate a new one.
     private static func coreImageDownscaled(url: URL, maxPixelSize: Int) -> CGImage? {
-        let ciOptions: [CIImageOption: Any] = [.applyOrientationProperty: true]
-        guard var image = CIImage(contentsOf: url, options: ciOptions) else {
-            return nil
-        }
+        // `autoreleasepool` so the large transient CG/CI buffers a RAW decode
+        // spins up are released as soon as this call returns rather than
+        // lingering until the enclosing worker drains.
+        autoreleasepool {
+            let ciOptions: [CIImageOption: Any] = [.applyOrientationProperty: true]
+            guard var image = CIImage(contentsOf: url, options: ciOptions) else {
+                return nil
+            }
 
-        let longest = max(image.extent.width, image.extent.height)
-        if longest > CGFloat(maxPixelSize), longest > 0 {
-            let factor = CGFloat(maxPixelSize) / longest
-            image = image.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
-        }
+            let longest = max(image.extent.width, image.extent.height)
+            if longest > CGFloat(maxPixelSize), longest > 0 {
+                let factor = CGFloat(maxPixelSize) / longest
+                image = image.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
+            }
 
-        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
-        let context = CIContext(options: [.workingColorSpace: sRGB])
-        return context.createCGImage(
-            image,
-            from: image.extent,
-            format: .RGBA8,
-            colorSpace: sRGB
-        )
+            let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+            return sharedCIContext.createCGImage(
+                image,
+                from: image.extent,
+                format: .RGBA8,
+                colorSpace: sRGB
+            )
+        }
     }
 
     /// True if `image` is effectively all black — the signature of the ImageIO

@@ -160,6 +160,19 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(model == nil)
 
+            // How thumbnails are generated. `Native macOS` (Quick Look) is the
+            // escape hatch for black .mp4 thumbnails the AVFoundation seek can
+            // produce under the default Hybrid routing.
+            Menu("Thumbnail Method") {
+                Picker("Thumbnail Method", selection: thumbnailMethodBinding) {
+                    ForEach(ThumbnailMethod.allCases, id: \.self) { method in
+                        Text(method.displayName).tag(method)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            .disabled(model == nil)
+
             // Section the grid/list by an AI dimension: none, scene category,
             // or recognized person. Each option disables itself until the
             // matching pass has produced something to group by.
@@ -295,4 +308,5 @@ struct LoupeCommands: Commands {
     private var groupingBinding: Binding<GroupingDimension> { binding(\.grouping, default: .none) }
     private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
     private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }
+    private var thumbnailMethodBinding: Binding<ThumbnailMethod> { binding(\.thumbnailMethod, default: .hybrid) }
 }

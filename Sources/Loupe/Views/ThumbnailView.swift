@@ -17,6 +17,8 @@ struct ThumbnailView: View {
     var personCount: Int = 0
     /// When true, the filename caption under the thumbnail is hidden.
     var hideFilename: Bool = false
+    /// How this cell's thumbnail is generated (the window's current method).
+    var method: ThumbnailMethod = .hybrid
 
     @State private var image: NSImage?
     @State private var didFail = false
@@ -132,7 +134,10 @@ struct ThumbnailView: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
         )
-        .task(id: item.id) {
+        // Re-run when the item OR the thumbnail method changes, so switching
+        // method (e.g. to fix black .mp4 thumbnails) refreshes visible cells
+        // instead of leaving the old image until the next scroll.
+        .task(id: ThumbnailRequestKey(id: item.id, method: method)) {
             await loadThumbnail()
         }
     }
@@ -147,6 +152,7 @@ struct ThumbnailView: View {
             for: item.url,
             size: target,
             scale: scale,
+            method: method,
             priority: .visible
         )
         if let result {
@@ -155,4 +161,11 @@ struct ThumbnailView: View {
             didFail = true
         }
     }
+}
+
+/// Identity for a cell's thumbnail request, so `.task(id:)` restarts the load
+/// whenever either the item or the active generation method changes.
+private struct ThumbnailRequestKey: Hashable {
+    let id: MediaItem.ID
+    let method: ThumbnailMethod
 }
