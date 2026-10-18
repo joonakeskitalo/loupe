@@ -19,6 +19,11 @@ struct FolderSidebar: View {
     /// without hand-tuning version-specific `List` insets.
     private static let rowInsets = EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 0)
 
+    /// Insets for a root header row. Same leading/trailing/top as `rowInsets`
+    /// so edges stay aligned, but no bottom inset so the header sits snug
+    /// against its first folder row (a smaller title-to-content gap).
+    private static let headerRowInsets = EdgeInsets(top: 2, leading: 2, bottom: 0, trailing: 0)
+
     var body: some View {
         List {
             Section("Library") {
@@ -118,7 +123,10 @@ struct FolderSidebar: View {
                 // no amount of header padding matches the counts.
                 Section {
                     RootHeaderRow(entry: entry) { model.removeRoot(entry.key) }
-                        .listRowInsets(Self.rowInsets)
+                        // Zero the header row's bottom inset so it hugs the
+                        // folder row directly beneath it; the rest of the
+                        // insets match the folder rows for aligned edges.
+                        .listRowInsets(Self.headerRowInsets)
                         .contextMenu {
                             Button("Remove Folder", role: .destructive) {
                                 model.removeRoot(entry.key)
@@ -272,7 +280,12 @@ private struct RootHeaderRow: View {
             .buttonStyle(.plain)
             .help("Remove this folder from the window")
         }
-        .padding(.vertical, 3)
+        // Asymmetric vertical padding: keep the top breathing room that
+        // separates this root header from the section above, but trim the
+        // bottom so the header sits closer to its own folder rows (a tighter
+        // title-to-content gap, which reads as one grouped unit).
+        .padding(.top, 3)
+        .padding(.bottom, 0)
         // Slightly less trailing inset than the rows below so the remove button
         // sits a touch further right (toward the sidebar edge).
         .padding(.trailing, 0)
