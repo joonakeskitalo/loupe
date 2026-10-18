@@ -335,6 +335,8 @@ private struct PeopleSection: View {
     let rowInsets: EdgeInsets
 
     @State private var isExpanded = true
+    /// The person row currently highlighted as a drag-and-drop target, if any.
+    @State private var dropTargetPerson: Int?
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
@@ -356,6 +358,22 @@ private struct PeopleSection: View {
                 }
                 .buttonStyle(.plain)
                 .listRowInsets(rowInsets)
+                // Drag images from the grid/list and drop them here to assign
+                // them to this person. If the grid is currently filtered to a
+                // person, the drop *moves* the files out of that person into
+                // this one; otherwise it just adds this person to them.
+                .dropDestination(for: URL.self) { urls, _ in
+                    let movingFrom = model.personFilter == person ? nil : model.personFilter
+                    let n = model.assignPerson(person, toURLs: urls, movingFrom: movingFrom)
+                    return n > 0
+                } isTargeted: { targeted in
+                    dropTargetPerson = targeted ? person : (dropTargetPerson == person ? nil : dropTargetPerson)
+                }
+                .listRowBackground(
+                    dropTargetPerson == person
+                        ? RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.25))
+                        : nil
+                )
                 .contextMenu {
                     // Merge this person into another — the clusterer often
                     // splits one person across IDs; this stitches them back.
@@ -396,21 +414,46 @@ private struct FaceControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Engine picker. Core ML is disabled until a model is installed.
-            Picker("Engine", selection: $model.faceEngine) {
-                ForEach(FaceRecognitionEngine.allCases, id: \.self) { engine in
-                    Text(engine.displayName)
-                        .tag(engine)
+            // Engine picker — only shown when more than one engine is
+            // selectable. (Core ML is currently disabled, leaving just Vision,
+            // so the picker is hidden to avoid a pointless single-option menu.)
+            if FaceRecognitionEngine.selectableCases.count > 1 {
+                Picker("Engine", selection: $model.faceEngine) {
+                    ForEach(FaceRecognitionEngine.selectableCases, id: \.self) { engine in
+                        Text(engine.displayName)
+                            .tag(engine)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .disabled(model.isClassifying)
+            }
+
+            if FaceRecognitionEngine.coreMLEngineEnabled && model.faceEngine == .coreMLEmbedding {
+                HStack(spacing: 8) {
+                    Button(model.coreMLFaceModelAvailable ? "Change Model…" : "Choose Model…") {
+                        model.chooseFaceModel()
+                    }
+                    .controlSize(.small)
+                    if model.coreMLFaceModelAvailable {
+                        Button("Remove") { model.clearFaceModel() }
+                            .controlSize(.small)
+                    }
+                }
+                if !model.coreMLFaceModelAvailable {
+                    Text("Pick a Core ML face-embedding model (.mlmodel/.mlpackage) to use this engine.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .disabled(model.isClassifying)
 
-            if model.faceEngine == .coreMLEmbedding && !model.coreMLFaceModelAvailable {
-                Text("No Core ML face model installed. Add one to use this engine.")
+            // Why a recent run found nothing (e.g. the model's output couldn't
+            // be read as an embedding).
+            if let note = model.faceRecognitionNote {
+                Label(note, systemImage: "exclamationmark.triangle")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

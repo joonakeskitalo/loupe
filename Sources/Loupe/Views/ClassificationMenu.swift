@@ -122,14 +122,18 @@ struct AIMenu: View {
 
             // MARK: Face recognition — settings first, then the action.
             Section("People") {
-                Picker("Engine", selection: $model.faceEngine) {
-                    ForEach(FaceRecognitionEngine.allCases, id: \.self) { engine in
-                        Text(engine.displayName).tag(engine)
+                // Engine picker only when more than one engine is selectable.
+                // Core ML is disabled for now, leaving just Vision.
+                if FaceRecognitionEngine.selectableCases.count > 1 {
+                    Picker("Engine", selection: $model.faceEngine) {
+                        ForEach(FaceRecognitionEngine.selectableCases, id: \.self) { engine in
+                            Text(engine.displayName).tag(engine)
+                        }
                     }
-                }
 
-                if model.faceEngine == .coreMLEmbedding && !model.coreMLFaceModelAvailable {
-                    Text("No Core ML face model installed")
+                    if model.faceEngine == .coreMLEmbedding && !model.coreMLFaceModelAvailable {
+                        Text("No Core ML face model installed")
+                    }
                 }
 
                 // Sensitivity slider lives in the menu so it's set before a run.

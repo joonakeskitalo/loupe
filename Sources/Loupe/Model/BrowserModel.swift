@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import UniformTypeIdentifiers
 
 /// Whether the grid shows every file recursively or just one folder's files.
 enum BrowseMode: String, CaseIterable {
@@ -274,7 +275,10 @@ final class BrowserModel {
     /// comparable — the user must re-run "Find Faces".
     var faceEngine: FaceRecognitionEngine = {
         let raw = UserDefaults.standard.string(forKey: faceEngineKey)
-        return raw.flatMap(FaceRecognitionEngine.init(rawValue:)) ?? .visionFeaturePrint
+        let stored = raw.flatMap(FaceRecognitionEngine.init(rawValue:)) ?? .visionFeaturePrint
+        // Don't start on an engine that's currently disabled (e.g. a stale
+        // Core ML preference from before it was turned off).
+        return FaceRecognitionEngine.selectableCases.contains(stored) ? stored : .visionFeaturePrint
     }() {
         didSet {
             guard faceEngine != oldValue else { return }
@@ -306,6 +310,11 @@ final class BrowserModel {
     /// Whether a Core ML face model is installed (so the UI can offer that
     /// engine). Resolved once on the first query and cached.
     private(set) var coreMLFaceModelAvailable = false
+
+    /// A human-readable note shown after a face run that produced nothing,
+    /// explaining why (e.g. the Core ML model's output couldn't be read). `nil`
+    /// when the last run was fine.
+    private(set) var faceRecognitionNote: String?
 
     private static let faceEngineKey = "faceRecognitionEngine"
     private static let faceThresholdKey = "faceClusterThreshold"
@@ -1894,7 +1903,47 @@ final class BrowserModel {
             // Order the gathered prints by display order so clustering (and
             // thus person IDs) is deterministic, then run the shared pass.
             let ordered = pending.map { (id: $0.id, faces: printsByItem[$0.id] ?? []) }
+
+            // Diagnostics: how many images yielded at least one embedding, and
+            // the total embedding count + dimension. This pins down whether the
+            // problem is detection, embedding, or clustering.
+            let embeddedFaceCount = printsByItem.values.reduce(0) { $0 + $1.count }
+            let imagesWithEmbeddings = printsByItem.values.filter { !$0.isEmpty }.count
+            let dim = printsByItem.values.lazy.flatMap { $0 }.first.map { face -> Int in
+                if case let .vector(v) = face.embedding { return v.count }
+                return -1
+            } ?? 0
+            print("[FaceRecognition] engine=\(engine.rawValue) images=\(pending.count) " +
+                  "imagesWithFaces=\(imagesWithEmbeddings) faces=\(embeddedFaceCount) dim=\(dim) " +
+                  "threshold=\(threshold)")
+
             self.applyClustering(ordered, into: &clusterer)
+
+            // Explain a Core ML run that produced no useful grouping.
+            if engine == .coreMLEmbedding {
+                if embeddedFaceCount == 0 {
+                    // Nothing embedded: either the request failed or the output
+                    // couldn't be read as a vector.
+                    self.faceRecognitionNote = await FaceRecognizer.shared.coreMLFailureReason()
+                        ?? "The Core ML model ran but returned no face embeddings. "
+                           + "Check the model's output is a float multi-array (embedding)."
+                } else {
+                    // Embeddings exist. If almost every face became its own
+                    // "person", the threshold is too strict for this model's
+                    // distance scale — nudge the user toward a looser setting.
+                    let people = self.personList.count
+                    print("[FaceRecognition] produced \(people) people from \(embeddedFaceCount) faces")
+                    if people >= embeddedFaceCount, embeddedFaceCount > 1 {
+                        self.faceRecognitionNote =
+                            "Each face became its own person — the sensitivity is too strict "
+                            + "for this model. Move the slider toward 'Looser'."
+                    } else {
+                        self.faceRecognitionNote = nil
+                    }
+                }
+            } else {
+                self.faceRecognitionNote = nil
+            }
 
             if self.grouping == .person || self.personFilter != nil {
                 self.invalidateDisplayCache()
@@ -1965,6 +2014,56 @@ final class BrowserModel {
         }
     }
 
+    /// Present an open panel to pick a Core ML face-embedding model, store a
+    /// security-scoped bookmark to it (so it loads under the app sandbox on
+    /// future launches), and refresh availability. The bookmark — not a raw
+    /// path — is what the sandbox honors.
+    func chooseFaceModel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true   // .mlmodelc / .mlpackage are directories
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a Core ML face-embedding model (.mlmodel, .mlmodelc, or .mlpackage)"
+        panel.prompt = "Use Model"
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "mlmodel"),
+            UTType(filenameExtension: "mlmodelc"),
+            UTType(filenameExtension: "mlpackage")
+        ].compactMap { $0 }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // Create an app-scoped bookmark the sandbox will restore later.
+        if let bookmark = try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) {
+            UserDefaults.standard.set(
+                bookmark, forKey: CoreMLFaceEmbedder.modelBookmarkDefaultsKey
+            )
+        }
+
+        // Reload the store with the new model, switch to the Core ML engine,
+        // and recompute availability.
+        Task { @MainActor in
+            await FaceModelStore.shared.invalidate()
+            self.faceEngine = .coreMLEmbedding
+            self.refreshCoreMLFaceAvailability()
+        }
+    }
+
+    /// Forget the chosen Core ML model (clears the bookmark) and fall back to
+    /// the Vision engine.
+    func clearFaceModel() {
+        UserDefaults.standard.removeObject(forKey: CoreMLFaceEmbedder.modelBookmarkDefaultsKey)
+        if faceEngine == .coreMLEmbedding { faceEngine = .visionFeaturePrint }
+        Task { @MainActor in
+            await FaceModelStore.shared.invalidate()
+            self.refreshCoreMLFaceAvailability()
+        }
+    }
+
     /// Clear all recognized people and drop any person filter/grouping.
     func clearFaces() {
         facePersons = [:]
@@ -2031,6 +2130,33 @@ final class BrowserModel {
     func targetsContainPerson(_ person: Int, item: MediaItem? = nil) -> Bool {
         let targets = editTargets(for: item)
         return targets.contains { facePersons[$0]?.contains(person) ?? false }
+    }
+
+    /// Assign the given image files (by URL — from a drag-and-drop) to `person`.
+    /// When `movingFrom` is set, those files are first removed from that person,
+    /// turning the drop into a *move* from one person to another (used when the
+    /// grid is currently filtered to a person). Non-image files are ignored.
+    /// Returns the number of files actually assigned.
+    @discardableResult
+    func assignPerson(_ person: Int, toURLs urls: [URL], movingFrom: Int? = nil) -> Int {
+        let present = Set(allItems.lazy.filter { $0.kind == .image }.map(\.id))
+        let ids = urls.map { $0.standardizedFileURL }.filter { present.contains($0) }
+        guard !ids.isEmpty else { return 0 }
+
+        for id in ids {
+            var people = facePersons[id] ?? []
+            if let movingFrom { people.remove(movingFrom) }
+            people.insert(person)
+            facePersons[id] = people
+        }
+        // A move may have emptied the source person; drop a stale filter.
+        if let filter = personFilter,
+           !facePersons.values.contains(where: { $0.contains(filter) }) {
+            personFilter = nil
+        }
+        invalidateDisplayCache()
+        clampSelection()
+        return ids.count
     }
 
     /// Delete a whole person: remove that ID from every photo it appears in.

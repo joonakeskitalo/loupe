@@ -38,6 +38,16 @@ enum FaceRecognitionEngine: String, CaseIterable, Sendable {
         case .coreMLEmbedding: return 0.3...1.4
         }
     }
+
+    /// Whether the Core ML engine is offered in the UI. Temporarily off while
+    /// the Core ML path is being sorted out — the implementation stays intact,
+    /// it just isn't selectable. Flip to `true` to re-enable.
+    static let coreMLEngineEnabled = false
+
+    /// Engines the user may actually choose, honoring `coreMLEngineEnabled`.
+    static var selectableCases: [FaceRecognitionEngine] {
+        coreMLEngineEnabled ? allCases : [.visionFeaturePrint]
+    }
 }
 
 /// An engine-agnostic face descriptor. The clusterer only ever asks for the
@@ -134,19 +144,168 @@ struct VisionFeaturePrintEmbedder: FaceEmbedder {
 ///
 /// When no model is found, `isAvailable` is false and `embed` returns nil, so
 /// the UI disables this option and the app stays on the Vision engine.
-struct CoreMLFaceEmbedder: FaceEmbedder {
-    /// UserDefaults key holding an optional absolute path to a model file.
+/// Loads the Core ML face model **once** and hands out the shared, immutable
+/// Vision container to every embedder. This exists because the previous design
+/// rebuilt (and recompiled) the model on *every* face — dozens of concurrent
+/// compilations of the same file — and, worse, released the model's
+/// security-scoped file access the instant loading returned, before inference
+/// actually read the weights. Under the sandbox that revoked-mid-read is what
+/// made Core ML hang. Here the model is compiled/copied into the app's own
+/// sandbox cache once, so inference never depends on the scoped resource
+/// staying open, and the heavy load happens a single time.
+actor FaceModelStore {
+    static let shared = FaceModelStore()
+
     static let modelPathDefaultsKey = "faceEmbeddingModelPath"
-    /// Bundle resource name looked up when no explicit path is set.
+    static let modelBookmarkDefaultsKey = "faceEmbeddingModelBookmark"
     private static let bundleModelName = "FaceEmbedding"
 
-    /// The loaded Vision model container, resolved once at init. Nil when no
-    /// model is installed (the common case until the user adds one).
-    /// `CoreMLModelContainer` is Vision's own `@unchecked Sendable` type.
+    private var loaded = false
+    private var container: CoreMLModelContainer?
+    private var lastError: String?
+
+    /// Returns the shared container, loading it on first use. Subsequent calls
+    /// return the cached result (including nil when no model is installed).
+    func modelContainer() -> CoreMLModelContainer? {
+        if !loaded { load(); loaded = true }
+        return container
+    }
+
+    func isAvailable() -> Bool { modelContainer() != nil }
+    func failureReason() -> String? { lastError }
+
+    /// Forget the loaded model so the next request reloads (e.g. after the user
+    /// chooses a different model file).
+    func invalidate() {
+        loaded = false
+        container = nil
+        lastError = nil
+    }
+
+    private func note(_ message: String) {
+        guard lastError != message else { return }
+        lastError = message
+        print("[FaceModelStore] \(message)")
+    }
+
+    /// Records a runtime (inference-time) error reason, so a run that produced
+    /// no embeddings can explain why. Callable from the embedder.
+    func noteRuntime(_ message: String) { note(message) }
+
+    // MARK: - Loading (runs once)
+
+    private func load() {
+        // 1. Security-scoped bookmark (the sandbox-friendly path).
+        if let data = UserDefaults.standard.data(forKey: Self.modelBookmarkDefaultsKey) {
+            var stale = false
+            if let url = try? URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            ) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                // Compile/copy into our sandbox cache *while access is held*, so
+                // the model Vision runs no longer needs the scoped resource.
+                if let local = Self.localizedCompiledModel(from: url, note: note),
+                   let c = Self.makeContainer(compiledURL: local, note: note) {
+                    container = c
+                    return
+                }
+            } else {
+                note("Could not resolve the saved model bookmark; re-choose the model.")
+            }
+        }
+
+        // 2. Raw path (unsandboxed dev runs only).
+        if let path = UserDefaults.standard.string(forKey: Self.modelPathDefaultsKey),
+           !path.isEmpty {
+            let url = URL(fileURLWithPath: path)
+            if let local = Self.localizedCompiledModel(from: url, note: note),
+               let c = Self.makeContainer(compiledURL: local, note: note) {
+                container = c
+                return
+            }
+        }
+
+        // 3. Bundled resource.
+        for ext in ["mlmodelc", "mlmodel"] {
+            if let url = Bundle.main.url(forResource: Self.bundleModelName, withExtension: ext),
+               let local = Self.localizedCompiledModel(from: url, note: note),
+               let c = Self.makeContainer(compiledURL: local, note: note) {
+                container = c
+                return
+            }
+        }
+    }
+
+    /// Produces a compiled `.mlmodelc` that lives inside the app's own caches
+    /// directory, so later inference reads weights from a path the sandbox
+    /// owns outright (not via a scoped bookmark). Compiles a raw `.mlmodel`;
+    /// copies an already-compiled `.mlmodelc`/`.mlpackage`-compiled dir in.
+    private static func localizedCompiledModel(
+        from url: URL, note: (String) -> Void
+    ) -> URL? {
+        let fm = FileManager.default
+        let compiledSource: URL
+        do {
+            if url.pathExtension == "mlmodelc" {
+                compiledSource = url
+            } else {
+                // .mlmodel and .mlpackage both compile via compileModel(at:).
+                compiledSource = try MLModel.compileModel(at: url)
+            }
+        } catch {
+            note("Failed to compile the model: \(error.localizedDescription)")
+            return nil
+        }
+
+        // Copy the compiled model into our caches dir so access doesn't depend
+        // on the scoped resource during inference.
+        guard let caches = try? fm.url(
+            for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        ) else {
+            // If we can't make a local copy, fall back to using it in place.
+            return compiledSource
+        }
+        let dest = caches.appendingPathComponent("FaceEmbedding.mlmodelc")
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.copyItem(at: compiledSource, to: dest)
+            return dest
+        } catch {
+            // Copy failed (rare) — use the compiled source directly.
+            return compiledSource
+        }
+    }
+
+    private static func makeContainer(
+        compiledURL: URL, note: (String) -> Void
+    ) -> CoreMLModelContainer? {
+        do {
+            let mlModel = try MLModel(contentsOf: compiledURL, configuration: MLModelConfiguration())
+            return try CoreMLModelContainer(model: mlModel)
+        } catch {
+            note("Failed to load the compiled model: \(error.localizedDescription)")
+            return nil
+        }
+    }
+}
+
+struct CoreMLFaceEmbedder: FaceEmbedder {
+    /// Re-exported for callers that set/clear the model preference.
+    static let modelPathDefaultsKey = FaceModelStore.modelPathDefaultsKey
+    static let modelBookmarkDefaultsKey = FaceModelStore.modelBookmarkDefaultsKey
+
+    /// The shared, once-loaded container (nil when no model is installed).
     private let container: CoreMLModelContainer?
 
-    init() {
-        self.container = Self.loadModel()
+    /// Built from an already-resolved container so a per-image embedder never
+    /// triggers a load. `FaceRecognizer` fetches the container from
+    /// `FaceModelStore` once per run and passes it in.
+    init(container: CoreMLModelContainer?) {
+        self.container = container
     }
 
     var isAvailable: Bool { container != nil }
@@ -156,64 +315,62 @@ struct CoreMLFaceEmbedder: FaceEmbedder {
         var request = CoreMLRequest(model: container)
         // The crop already *is* the face; fill the model's input with it.
         request.cropAndScaleAction = .scaleToFill
-        guard let observations = try? await request.perform(on: faceImage) else { return nil }
 
-        guard let vector = Self.firstVector(from: observations) else { return nil }
+        let observations: [any VisionObservation]
+        do {
+            observations = try await request.perform(on: faceImage)
+        } catch {
+            await FaceModelStore.shared.noteRuntime("Core ML request failed: \(error.localizedDescription)")
+            return nil
+        }
+
+        guard let vector = Self.firstVector(from: observations) else {
+            await FaceModelStore.shared.noteRuntime("""
+            Core ML model produced no numeric vector output. \
+            Observation types: \(observations.map { String(describing: Swift.type(of: $0)) }.joined(separator: ", ")). \
+            The model must output a multi-array embedding.
+            """)
+            return nil
+        }
         return .vector(Self.l2Normalized(vector))
     }
 
-    // MARK: - Loading
-
-    /// Resolves a model from the user-specified path first, then the app
-    /// bundle. Returns nil if neither exists or the file won't load.
-    private static func loadModel() -> CoreMLModelContainer? {
-        let config = MLModelConfiguration()
-
-        // 1. Explicit user path (compiled .mlmodelc or raw .mlmodel).
-        if let path = UserDefaults.standard.string(forKey: modelPathDefaultsKey),
-           !path.isEmpty {
-            if let c = loadModel(at: URL(fileURLWithPath: path), config: config) { return c }
-        }
-
-        // 2. Bundled resource (compiled .mlmodelc preferred, else .mlmodel).
-        for ext in ["mlmodelc", "mlmodel"] {
-            if let url = Bundle.main.url(forResource: bundleModelName, withExtension: ext),
-               let c = loadModel(at: url, config: config) {
-                return c
-            }
-        }
-        return nil
-    }
-
-    /// Loads a model at `url` into a Vision container, compiling a raw
-    /// `.mlmodel` on the fly if needed.
-    private static func loadModel(at url: URL, config: MLModelConfiguration) -> CoreMLModelContainer? {
-        let compiledURL: URL
-        if url.pathExtension == "mlmodel" {
-            guard let compiled = try? MLModel.compileModel(at: url) else { return nil }
-            compiledURL = compiled
-        } else {
-            compiledURL = url
-        }
-        guard let mlModel = try? MLModel(contentsOf: compiledURL, configuration: config),
-              let container = try? CoreMLModelContainer(model: mlModel) else {
-            return nil
-        }
-        return container
-    }
-
-    /// Extracts the embedding vector from the model's output: the first
-    /// feature-value observation whose value is a shaped (multi-array) output.
-    /// Returns nil if nothing vector-like is found.
+    /// Extracts the embedding vector from the model's output. Robust across the
+    /// shapes a face model surfaces through Vision:
+    ///   * a `CoreMLFeatureValueObservation` wrapping a multi-array — read via a
+    ///     bridge to `MLFeatureValue.multiArrayValue`, which handles *any*
+    ///     element dtype (Float32, Float16, Double, Int) uniformly. The earlier
+    ///     code only tried `shapedArrayValue(of: Float.self)`, which returns nil
+    ///     for a Float16-backed array — the usual output of a converted
+    ///     ArcFace/FaceNet model, and the likely reason it found nothing.
+    /// Returns the largest numeric vector found (the embedding), or nil.
     private static func firstVector(from observations: [any VisionObservation]) -> [Float]? {
+        var best: [Float]?
         for case let obs as CoreMLFeatureValueObservation in observations {
-            if let shaped = obs.featureValue.shapedArrayValue(of: Float.self) {
-                return shaped.scalars
-            }
-            if let shaped = obs.featureValue.shapedArrayValue(of: Double.self) {
-                return shaped.scalars.map(Float.init)
-            }
+            guard let vector = vector(from: obs.featureValue) else { continue }
+            if best == nil || vector.count > best!.count { best = vector }
         }
+        return best
+    }
+
+    /// Reads a float vector out of a feature value regardless of its backing
+    /// dtype, by bridging the sendable value to a classic `MLFeatureValue` and
+    /// walking its `MLMultiArray` (whose `floatValue` subscript converts any
+    /// element type). Falls back to the typed shaped-array accessors.
+    private static func vector(from value: MLSendableFeatureValue) -> [Float]? {
+        // Preferred: the underlying multi-array, any dtype.
+        let classic = MLFeatureValue(value)
+        if let array = classic.multiArrayValue {
+            let count = array.count
+            guard count > 0 else { return nil }
+            var out = [Float](repeating: 0, count: count)
+            for i in 0..<count { out[i] = array[i].floatValue }
+            return out
+        }
+        // Fallbacks for shaped-array-typed values.
+        if let s = value.shapedArrayValue(of: Float.self) { return s.scalars }
+        if let s = value.shapedArrayValue(of: Float16.self) { return s.scalars.map { Float($0) } }
+        if let s = value.shapedArrayValue(of: Double.self) { return s.scalars.map(Float.init) }
         return nil
     }
 
@@ -251,9 +408,13 @@ actor FaceRecognizer {
     private var cache: [CacheKey: [FaceFeaturePrint]] = [:]
     private var inFlight: [CacheKey: Task<[FaceFeaturePrint], Never>] = [:]
 
-    /// Whether the Core ML engine has a model installed. Cheap to query; the UI
-    /// uses it to enable/disable that option.
-    func coreMLAvailable() -> Bool { CoreMLFaceEmbedder().isAvailable }
+    /// Whether the Core ML engine has a model installed. Loads the model once
+    /// (cached in `FaceModelStore`); the UI uses this to enable the option.
+    func coreMLAvailable() async -> Bool { await FaceModelStore.shared.isAvailable() }
+
+    /// The most recent reason a Core ML embedding failed, if any — so a run that
+    /// found no faces can explain itself instead of failing silently.
+    func coreMLFailureReason() async -> String? { await FaceModelStore.shared.failureReason() }
 
     /// Ignore low-confidence detections — partial/occluded "faces" produce
     /// noisy prints that pollute clusters.
@@ -278,19 +439,21 @@ actor FaceRecognizer {
     func faces(for url: URL, engine: FaceRecognitionEngine) async -> [FaceFeaturePrint] {
         let key = CacheKey(url: url, engine: engine)
         if let cached = cache[key] { return cached }
-        let task = taskForFaces(key: key)
-        return await task.value
-    }
+        if let existing = inFlight[key] { return await existing.value }
 
-    private func taskForFaces(key: CacheKey) -> Task<[FaceFeaturePrint], Never> {
-        if let existing = inFlight[key] { return existing }
-
-        let embedder: any FaceEmbedder = key.engine == .coreMLEmbedding
-            ? CoreMLFaceEmbedder()
-            : VisionFeaturePrintEmbedder()
+        // Build the embedder once per request. For Core ML, fetch the shared,
+        // already-loaded container from the store (loaded a single time, not
+        // per image) — this is what fixed the per-image recompile stall.
+        let embedder: any FaceEmbedder
+        if engine == .coreMLEmbedding {
+            let container = await FaceModelStore.shared.modelContainer()
+            embedder = CoreMLFaceEmbedder(container: container)
+        } else {
+            embedder = VisionFeaturePrintEmbedder()
+        }
 
         let task = Task<[FaceFeaturePrint], Never> {
-            await Self.detectFaces(for: key.url, embedder: embedder)
+            await Self.detectFaces(for: url, embedder: embedder)
         }
         inFlight[key] = task
 
@@ -298,7 +461,7 @@ actor FaceRecognizer {
             let value = await task.value
             await self?.store(value, for: key)
         }
-        return task
+        return await task.value
     }
 
     private func store(_ value: [FaceFeaturePrint], for key: CacheKey) {
