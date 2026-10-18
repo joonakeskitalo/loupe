@@ -61,7 +61,7 @@ struct MediaViewer: View {
                 if items.isEmpty {
                     Text("No selection").foregroundStyle(.secondary)
                 } else if isMulti {
-                    MultiGrid(items: items)
+                    MultiGrid(model: model, items: items)
                 } else {
                     // No `.id(...)` here: reusing the same underlying view across
                     // navigation lets the image swap + refit happen in one pass,
@@ -645,6 +645,7 @@ private struct ViewerKeyHandling: ViewModifier {
 /// the row/column split that makes each cell as large as possible for the
 /// available space, filling the viewport instead of scrolling.
 private struct MultiGrid: View {
+    @Bindable var model: BrowserModel
     let items: [MediaItem]
 
     private let gap: CGFloat = 12
@@ -678,6 +679,28 @@ private struct MultiGrid: View {
             .padding(outerPadding)
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        // Number keys flag/unflag an individual tile: 1 → first image, 2 →
+        // second, … up to 9. Each key targets its specific item regardless of
+        // the (whole-set) selection, so a single press toggles just that tile.
+        .background { flagHotkeys }
+    }
+
+    /// Invisible shortcut buttons mapping digits 1–9 to the matching tile's
+    /// flag toggle. Only as many keys as there are visible items are mounted.
+    @ViewBuilder
+    private var flagHotkeys: some View {
+        ZStack {
+            ForEach(Array(items.prefix(9).enumerated()), id: \.element.id) { index, item in
+                Button {
+                    model.toggleFlag(id: item.id)
+                } label: { EmptyView() }
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
+                .focusable(false)
+            }
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     private func cell(_ item: MediaItem) -> some View {
@@ -690,6 +713,7 @@ private struct MultiGrid: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(white: 0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .topLeading) { cellBadges(for: item) }
             Text(item.name)
                 .font(.caption)
                 .foregroundStyle(.white)
@@ -697,6 +721,31 @@ private struct MultiGrid: View {
                 .truncationMode(.middle)
                 .frame(height: captionHeight)
         }
+    }
+
+    /// Per-tile overlay: the position number (its flag hotkey) plus a flag
+    /// badge when the tile is flagged, so the number-key mapping is discoverable
+    /// and the flag state is visible at a glance.
+    @ViewBuilder
+    private func cellBadges(for item: MediaItem) -> some View {
+        let position = items.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
+        HStack(spacing: 4) {
+            if let position, position <= 9 {
+                Text("\(position)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(.black.opacity(0.55), in: Circle())
+            }
+            if model.isFlagged(item.id) {
+                Image(systemName: "flag.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(Color.orange, in: Circle())
+            }
+        }
+        .padding(6)
     }
 
     /// Chooses the (rows, cols) split that maximizes the area of each cell,

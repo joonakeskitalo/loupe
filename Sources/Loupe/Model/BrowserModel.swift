@@ -1482,6 +1482,18 @@ final class BrowserModel {
         clampSelection()
     }
 
+    /// Toggle the flag on exactly one item, regardless of the current
+    /// selection. Used by the multi-image viewer's number hotkeys, where each
+    /// key targets a specific tile even though every shown item is selected.
+    func toggleFlag(id: MediaItem.ID) {
+        if flaggedItems.contains(id) {
+            flaggedItems.remove(id)
+        } else {
+            flaggedItems.insert(id)
+        }
+        clampSelection()
+    }
+
     func clearFlags() {
         flaggedItems = []
         clampSelection()
