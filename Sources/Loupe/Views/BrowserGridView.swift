@@ -438,6 +438,21 @@ struct BrowserGridView: View {
         Button("Copy\(suffix)", systemImage: "doc.on.doc") {
             model.copyToClipboard(item)
         }
+        // Copy the picture itself (pixels) at a chosen size, optionally with
+        // metadata stripped. Only offered when the target(s) include an image.
+        if model.imageURLs(preferring: item).isEmpty == false {
+            Menu("Copy Image As") {
+                Toggle("Remove EXIF / Metadata", isOn: $model.imageCopyStripsMetadata)
+                Divider()
+                ForEach(ImageCopyScale.allCases, id: \.self) { scale in
+                    Button(scale.displayName) {
+                        model.copyImageToClipboard(
+                            item, scale: scale, stripMetadata: model.imageCopyStripsMetadata
+                        )
+                    }
+                }
+            }
+        }
         Button("Open with Default App\(suffix)") {
             model.openInDefaultApp(item)
         }

@@ -322,17 +322,25 @@ final class ZoomScrollView: NSScrollView {
         }
 
         // Hand-tool pan: the image is "grabbed" and follows the pointer, like
-        // dragging a sheet of paper. Dragging right slides the image right,
-        // which means the viewport reveals content further to the left, so the
-        // clip's bounds origin moves the SAME direction as the pointer. In this
-        // flipped-free clip the content view's bounds use the document's
-        // (unmagnified) coordinate space, so divide the view-space delta by the
-        // magnification to track the pointer 1:1 on screen.
+        // dragging a sheet of paper. We move the clip's bounds origin so the
+        // content tracks the pointer 1:1 on screen; divide the view-space delta
+        // by the magnification to convert it into the document's (unmagnified)
+        // coordinate space that the clip bounds use.
+        //
+        // The clip view is NOT flipped, so bounds.origin.y increases UPWARD:
+        // raising the origin reveals content higher in the image. To "grab the
+        // paper" — drag the pointer up and have the content move up with it —
+        // the viewport must move DOWN relative to the content, i.e. origin.y
+        // must DECREASE as the pointer's y increases. So X follows the pointer
+        // (`+= dx`) while Y is inverted (`-= dy`). The earlier `+= dy` inverted
+        // the vertical drag, which fought the pointer and — once a Y scroll
+        // limit was hit — made vertical panning appear stuck whenever the image
+        // overflowed on both axes.
         let scale = magnification == 0 ? 1 : magnification
         let clip = contentView
         var origin = clip.bounds.origin
         origin.x += dx / scale
-        origin.y += dy / scale
+        origin.y -= dy / scale
         clip.setBoundsOrigin(clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
         reflectScrolledClipView(clip)
 

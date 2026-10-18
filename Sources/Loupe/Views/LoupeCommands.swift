@@ -27,6 +27,25 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("c", modifiers: .command)
                 .disabled(!hasSelection || viewerOpen)
 
+            // Copy the actual picture (pixels), not the file reference, at a
+            // chosen size and optionally without EXIF/metadata. The toggle
+            // controls whether metadata is stripped for every scale below.
+            Menu("Copy Image As") {
+                Toggle("Remove EXIF / Metadata", isOn: stripMetadataBinding)
+
+                Divider()
+
+                ForEach(ImageCopyScale.allCases, id: \.self) { scale in
+                    Button(scale.displayName) {
+                        model?.copyImageToClipboard(
+                            scale: scale,
+                            stripMetadata: model?.imageCopyStripsMetadata ?? false
+                        )
+                    }
+                }
+            }
+            .disabled(!canCopyImage)
+
             Divider()
 
             // No key equivalent here: Return/Space already open the viewer as
@@ -260,6 +279,11 @@ struct LoupeCommands: Commands {
     private var hasSelection: Bool { !(model?.selectedItems.isEmpty ?? true) }
     private var canTrash: Bool { model?.canTrashSelection ?? false }
     private var canOpen: Bool { hasItems && !viewerOpen }
+    /// Enabled when the selection has at least one image. Unlike the plain
+    /// Copy command this stays available while the viewer is open: its submenu
+    /// items carry no key equivalents, so there's no ⌘C ownership conflict with
+    /// the viewer's own copy handler.
+    private var canCopyImage: Bool { model?.canCopyImageSelection ?? false }
 
     private var flagTitle: String {
         let count = model?.selectedItems.count ?? 0
@@ -326,4 +350,5 @@ struct LoupeCommands: Commands {
     private var videoThumbnailPositionBinding: Binding<VideoThumbnailPosition> {
         binding(\.videoThumbnailPosition, default: .defaultPosition)
     }
+    private var stripMetadataBinding: Binding<Bool> { binding(\.imageCopyStripsMetadata, default: false) }
 }

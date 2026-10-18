@@ -161,6 +161,20 @@ final class BrowserModel {
 
     private static let videoThumbnailPositionKey = "videoThumbnailPosition"
 
+    /// Whether the "Copy Image" actions strip EXIF/metadata from the copied
+    /// pixels. A persisted preference so the choice sticks across the per-scale
+    /// copy commands and across launches.
+    var imageCopyStripsMetadata: Bool = {
+        UserDefaults.standard.bool(forKey: imageCopyStripsMetadataKey)
+    }() {
+        didSet {
+            guard imageCopyStripsMetadata != oldValue else { return }
+            UserDefaults.standard.set(imageCopyStripsMetadata, forKey: Self.imageCopyStripsMetadataKey)
+        }
+    }
+
+    private static let imageCopyStripsMetadataKey = "imageCopyStripsMetadata"
+
     /// All folders selected in the sidebar (used in `.folders` mode). Supports
     /// multi-selection; the grid shows the union of every selected folder.
     var selectedFolders: Set<URL> = [] {
@@ -2332,6 +2346,41 @@ final class BrowserModel {
         let paths = urls.map(\.path).joined(separator: "\n")
         pasteboard.setString(paths, forType: .string)
         return urls.count
+    }
+
+    /// Image URLs among the given items (or the current selection), in display
+    /// order. Used by the "Copy Image" actions, which only operate on images.
+    func imageURLs(preferring item: MediaItem? = nil) -> [URL] {
+        let candidates: [MediaItem]
+        if let item, !selectedItems.contains(item.id) {
+            candidates = [item]
+        } else {
+            let selected = selectedMediaItems
+            candidates = selected.isEmpty ? (item.map { [$0] } ?? []) : selected
+        }
+        return candidates.filter { $0.kind == .image }.map(\.url)
+    }
+
+    /// Whether the current selection (or `item`) contains at least one image,
+    /// so the "Copy Image" menu items can enable/disable themselves.
+    var canCopyImageSelection: Bool {
+        selectedMediaItems.contains { $0.kind == .image }
+    }
+
+    /// Copies the selected image(s) to the clipboard as rendered pixel data —
+    /// at `scale`, optionally with EXIF/metadata stripped — rather than as file
+    /// references. Pasting drops in the actual picture (resized / de-tagged as
+    /// chosen). Returns the number of images copied. No-op if nothing in the
+    /// selection is an image.
+    @discardableResult
+    func copyImageToClipboard(
+        _ item: MediaItem? = nil,
+        scale: ImageCopyScale = .original,
+        stripMetadata: Bool = false
+    ) -> Int {
+        let urls = imageURLs(preferring: item)
+        guard !urls.isEmpty else { return 0 }
+        return ImageClipboard.copy(urls: urls, scale: scale, stripMetadata: stripMetadata)
     }
 
     /// Whether a trash action currently has any target (used to enable/disable
