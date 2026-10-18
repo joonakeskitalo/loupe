@@ -11,6 +11,9 @@ enum ImageCopyScale: String, CaseIterable, Sendable {
     case quarter = "25%"
     case max2048 = "Fit 2048 px"
     case max1024 = "Fit 1024 px"
+    case max512 = "Fit 512 px"
+    case max256 = "Fit 256 px"
+    case max128 = "Fit 128 px"
 
     var displayName: String { rawValue }
 
@@ -26,6 +29,9 @@ enum ImageCopyScale: String, CaseIterable, Sendable {
         case .quarter: return max(1, sourceLongestEdge / 4)
         case .max2048: return min(sourceLongestEdge, 2048)
         case .max1024: return min(sourceLongestEdge, 1024)
+        case .max512: return min(sourceLongestEdge, 512)
+        case .max256: return min(sourceLongestEdge, 256)
+        case .max128: return min(sourceLongestEdge, 128)
         }
     }
 }
