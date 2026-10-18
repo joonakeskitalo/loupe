@@ -18,11 +18,15 @@ enum FFmpegThumbnailer {
     /// Produces a thumbnail no larger than `maxPixelSize` on its longest edge,
     /// preserving aspect ratio. Returns nil if the file can't be opened or no
     /// frame can be decoded.
-    /// `positionFraction` is where to start sampling, as a fraction (0…1) of
-    /// the clip's duration. The brightness search below still runs forward from
-    /// there, so a chosen position that lands on a black frame still yields a
-    /// visible thumbnail.
-    static func thumbnail(for url: URL, maxPixelSize: Int, positionFraction: Double = 0.25) -> NSImage? {
+    /// `position` is where to start sampling — a fraction of the clip's
+    /// duration or a fixed offset in seconds. The brightness search below still
+    /// runs forward from there, so a chosen position that lands on a black
+    /// frame still yields a visible thumbnail.
+    static func thumbnail(
+        for url: URL,
+        maxPixelSize: Int,
+        position: VideoThumbnailPosition = .defaultPosition
+    ) -> NSImage? {
         var formatCtx: UnsafeMutablePointer<AVFormatContext>? = nil
 
         // avformat_open_input takes ownership of the context pointer and frees
@@ -68,10 +72,10 @@ enum FFmpegThumbnailer {
             return nil
         }
 
-        // Seek to the requested fraction of the duration (best-effort; the
-        // brightness search below handles whatever frame the seek lands on).
-        seekToFraction(
-            positionFraction,
+        // Seek to the requested position (best-effort; the brightness search
+        // below handles whatever frame the seek lands on).
+        seek(
+            to: position,
             formatCtx: formatCtx, stream: stream, streamIndex: streamIndex
         )
 
@@ -90,28 +94,28 @@ enum FFmpegThumbnailer {
 
     // MARK: - Seeking
 
-    /// Seeks to `fraction` (0…1) of the clip's duration, when the stream
-    /// exposes a usable duration. `fraction == 0` leaves the demuxer at the
-    /// start (no seek). For non-zero fractions the brightness search in
-    /// `decodeBestFrame` still runs forward from the landing point, so a
-    /// position that happens to hit a dark frame still produces a usable
-    /// thumbnail. Best-effort: a stream with no known duration is left at the
+    /// Seeks to `position`, resolved against the clip's duration. `.start`
+    /// leaves the demuxer at the beginning (no seek). For any other position
+    /// the brightness search in `decodeBestFrame` still runs forward from the
+    /// landing point, so a position that happens to hit a dark frame still
+    /// produces a usable thumbnail. Best-effort: a stream with no known
+    /// duration can still honor an absolute-seconds position (it just can't be
+    /// clamped), while a fractional position with no duration stays at the
     /// start, where the search then begins.
-    private static func seekToFraction(
-        _ fraction: Double,
+    private static func seek(
+        to position: VideoThumbnailPosition,
         formatCtx: UnsafeMutablePointer<AVFormatContext>?,
         stream: UnsafeMutablePointer<AVStream>,
         streamIndex: Int32
     ) {
-        guard fraction > 0 else { return }
-        let durationTicks = formatCtx?.pointee.duration ?? 0
-        guard durationTicks > 0 else { return }
-        let durationSeconds = Double(durationTicks) / Double(AV_TIME_BASE)
-        guard durationSeconds > 0 else { return }
+        guard !position.isStart else { return }
 
-        // Clamp a touch below the very end so a 75%/end position still leaves
-        // frames to decode rather than landing in trailing padding.
-        let targetSeconds = min(durationSeconds * fraction, durationSeconds * 0.95)
+        let durationTicks = formatCtx?.pointee.duration ?? 0
+        let durationSeconds = durationTicks > 0 ? Double(durationTicks) / Double(AV_TIME_BASE) : 0
+
+        let targetSeconds = position.resolvedSeconds(duration: durationSeconds)
+        guard targetSeconds > 0 else { return }
+
         let timeBase = stream.pointee.time_base
         guard timeBase.den != 0 else { return }
         let targetTs = Int64(targetSeconds * Double(timeBase.den) / Double(timeBase.num))

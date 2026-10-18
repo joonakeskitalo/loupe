@@ -100,23 +100,76 @@ enum ThumbnailMethod: String, CaseIterable, Sendable {
 ///
 /// Only the custom decode paths (AVFoundation / FFmpeg) honor this; QuickLook
 /// (`.nativeMacOS`) picks its own poster frame and ignores the position.
+/// A position is one of two kinds: a *fraction* of the clip's duration (which
+/// generalizes across clip lengths) or a fixed number of *seconds* from the
+/// start (useful when you know roughly where the interesting frame sits, e.g.
+/// after a fixed-length intro). An absolute offset past the end of a short clip
+/// is clamped by the decode paths rather than failing.
 enum VideoThumbnailPosition: String, CaseIterable, Sendable {
     case start = "Start"
     case tenPercent = "10%"
     case twentyFivePercent = "25%"
     case fiftyPercent = "Middle"
     case seventyFivePercent = "75%"
+    case fiveSeconds = "5 seconds"
+    case tenSeconds = "10 seconds"
+    case thirtySeconds = "30 seconds"
 
     var displayName: String { rawValue }
 
-    /// The position as a fraction of the video's duration, 0…1.
-    var fraction: Double {
+    /// How a position is measured.
+    enum Measure: Sendable {
+        /// A fraction (0…1) of the clip's duration.
+        case fraction(Double)
+        /// A fixed offset in seconds from the start.
+        case seconds(Double)
+    }
+
+    var measure: Measure {
         switch self {
-        case .start: return 0
-        case .tenPercent: return 0.10
-        case .twentyFivePercent: return 0.25
-        case .fiftyPercent: return 0.50
-        case .seventyFivePercent: return 0.75
+        case .start: return .fraction(0)
+        case .tenPercent: return .fraction(0.10)
+        case .twentyFivePercent: return .fraction(0.25)
+        case .fiftyPercent: return .fraction(0.50)
+        case .seventyFivePercent: return .fraction(0.75)
+        case .fiveSeconds: return .seconds(5)
+        case .tenSeconds: return .seconds(10)
+        case .thirtySeconds: return .seconds(30)
+        }
+    }
+
+    /// Resolves this position to a concrete time in seconds given the clip's
+    /// `duration` (also in seconds). A fractional position scales with the
+    /// duration; an absolute position is clamped so it never lands at or past
+    /// the end of a clip shorter than the requested offset — it backs off to
+    /// 95% of the duration so there's still a frame to decode. Pass a
+    /// non-positive `duration` when the duration is unknown; a fractional
+    /// position then resolves to 0 and an absolute one to its raw offset.
+    func resolvedSeconds(duration: Double) -> Double {
+        switch measure {
+        case .fraction(let f):
+            guard duration > 0 else { return 0 }
+            return duration * f
+        case .seconds(let s):
+            guard duration > 0 else { return s }
+            return min(s, duration * 0.95)
+        }
+    }
+
+    /// Whether this position is measured from the very start (frame 0), so a
+    /// decode path can skip loading the duration entirely.
+    var isStart: Bool {
+        if case .fraction(0) = measure { return true }
+        return false
+    }
+
+    /// Whether resolving this position requires knowing the clip's duration.
+    /// Absolute-seconds positions don't (except to clamp a short clip), and
+    /// `.start` doesn't either.
+    var needsDuration: Bool {
+        switch measure {
+        case .fraction(let f): return f > 0
+        case .seconds: return true   // only to clamp; harmless if unavailable
         }
     }
 
@@ -590,10 +643,9 @@ actor ThumbnailProvider {
         // The detached priority follows the request so a visible video decodes
         // ahead of a prefetched one at the OS scheduler level.
         let maxPixel = Int(max(pixelSize.width, pixelSize.height).rounded())
-        let fraction = position.fraction
         return await Task.detached(priority: priority) {
             FFmpegThumbnailer.thumbnail(
-                for: url, maxPixelSize: max(1, maxPixel), positionFraction: fraction
+                for: url, maxPixelSize: max(1, maxPixel), position: position
             )
         }.value
     }
@@ -636,21 +688,24 @@ actor ThumbnailProvider {
         generator.maximumSize = pixelSize
 
         // Resolve the requested position to a concrete time. `.start` maps to
-        // frame 0 and needs no duration (one fewer async round trip); any other
-        // fraction needs the duration, which we load lazily only in that case.
-        // With infinite tolerance the generator snaps to the nearest keyframe,
-        // so a very short clip simply resolves to its first frame.
-        let time: CMTime
-        if position == .start {
-            time = .zero
-        } else if let duration = try? await asset.load(.duration),
-                  duration.isNumeric, duration.seconds > 0 {
-            time = CMTime(seconds: duration.seconds * position.fraction, preferredTimescale: 600)
+        // frame 0 and needs no duration (one fewer async round trip). Other
+        // positions resolve against the duration: a fractional one scales with
+        // it, an absolute-seconds one is clamped so it can't overshoot a short
+        // clip. The duration is loaded lazily and only when the position needs
+        // it. With infinite tolerance the generator snaps to the nearest
+        // keyframe, so a very short clip simply resolves to its first frame.
+        let seconds: Double
+        if position.isStart {
+            seconds = 0
         } else {
-            // Duration unavailable (some streams don't expose it cheaply). Fall
-            // back to a fixed 1s offset so we still skip a typical lead-in.
-            time = CMTime(seconds: 1, preferredTimescale: 600)
+            var duration = 0.0
+            if position.needsDuration,
+               let d = try? await asset.load(.duration), d.isNumeric, d.seconds > 0 {
+                duration = d.seconds
+            }
+            seconds = position.resolvedSeconds(duration: duration)
         }
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
 
         do {
             let cgImage = try await generator.image(at: time).image
