@@ -124,7 +124,7 @@ struct FolderSidebar: View {
                                 model.removeRoot(entry.key)
                             }
                         }
-                    FolderRow(node: entry.tree, model: model, focused: $focused)
+                    FolderRow(node: entry.tree, model: model, focused: $focused, isRoot: true)
                         .listRowInsets(Self.rowInsets)
                 }
             }
@@ -172,6 +172,9 @@ private struct FolderRow: View {
     let node: FolderNode
     @Bindable var model: BrowserModel
     var focused: FocusState<Bool>.Binding
+    /// True for a root's top-level folder row, so it's pulled flush-left to
+    /// line up under its root header. Nested children keep the default indent.
+    var isRoot: Bool = false
 
     @State private var isExpanded: Bool = true
 
@@ -210,6 +213,10 @@ private struct FolderRow: View {
     var body: some View {
         if node.children.isEmpty {
             rowLabel
+                // A childless root row has no disclosure chevron, so counteract
+                // the List's leading content inset to sit flush-left under the
+                // root header (matching the header name's alignment).
+                .padding(.leading, isRoot ? -12 : 0)
         } else {
             DisclosureGroup(isExpanded: $isExpanded) {
                 ForEach(node.children) { child in
