@@ -264,12 +264,21 @@ actor ThumbnailProvider {
     private var rawWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Hard cap on a thumbnail's longest edge, in pixels. Grid cells top out at
-    /// 320 pt, so capping here (rather than honoring the full point-size ×
-    /// backing-scale, which would be 640 px on Retina) matches the largest cell
-    /// 1:1 while quartering the decoded size versus the old worst case. A
-    /// 320²-RGBA image is ~400 KB versus ~1.6 MB at 640². Smaller cells end up
-    /// well under the cap and cost proportionally less.
-    private static let maxPixelDimension: CGFloat = 320
+    /// 320 pt, so on a Retina display the largest cell is 640 physical pixels.
+    /// The cap must match that physical size, not the point size — capping at
+    /// 320 px decoded a half-resolution thumbnail that AppKit then upscaled 2×
+    /// into the cell, which looked soft/blurry (worst on already-small source
+    /// images, where there's no spare detail to hide the upscale). Capping at
+    /// the largest cell's point size × the maximum backing scale decodes at
+    /// true display resolution so thumbnails stay crisp. Memory per thumbnail
+    /// rises (a 640²-RGBA image is ~1.6 MB vs ~400 KB at 320²), but the cache is
+    /// byte-budgeted and evicts LRU, so it self-limits; smaller cells still cost
+    /// proportionally less.
+    private static let maxPixelDimension: CGFloat = {
+        let maxCellPoints: CGFloat = 320  // BrowserModel.maxThumbnailSize
+        let maxScale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        return (maxCellPoints * maxScale).rounded()
+    }()
 
     /// Byte budget for cached thumbnails: 20% of physical RAM. NSCache evicts
     /// least-recently-used entries once the summed per-image cost exceeds this.
