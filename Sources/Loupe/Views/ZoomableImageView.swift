@@ -321,16 +321,18 @@ final class ZoomScrollView: NSScrollView {
             NSCursor.closedHand.push()
         }
 
-        // Move the document the same direction as the drag: dragging right
-        // should reveal content to the left, so the clip's bounds origin moves
-        // opposite to the pointer. In this flipped-free clip the content view's
-        // bounds use the document's (unmagnified) coordinate space, so divide
-        // the view-space delta by the magnification to pan 1:1 on screen.
+        // Hand-tool pan: the image is "grabbed" and follows the pointer, like
+        // dragging a sheet of paper. Dragging right slides the image right,
+        // which means the viewport reveals content further to the left, so the
+        // clip's bounds origin moves the SAME direction as the pointer. In this
+        // flipped-free clip the content view's bounds use the document's
+        // (unmagnified) coordinate space, so divide the view-space delta by the
+        // magnification to track the pointer 1:1 on screen.
         let scale = magnification == 0 ? 1 : magnification
         let clip = contentView
         var origin = clip.bounds.origin
-        origin.x -= dx / scale
-        origin.y -= dy / scale
+        origin.x += dx / scale
+        origin.y += dy / scale
         clip.setBoundsOrigin(clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
         reflectScrolledClipView(clip)
 
