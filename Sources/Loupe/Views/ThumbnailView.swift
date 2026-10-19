@@ -41,6 +41,8 @@ struct ThumbnailView: View {
                 if let image {
                     Image(nsImage: image)
                         .resizable()
+                        .interpolation(.high)
+                        .antialiased(true)
                         .aspectRatio(contentMode: .fit)
                         .padding(4)
                 } else {

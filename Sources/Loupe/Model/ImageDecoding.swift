@@ -56,9 +56,20 @@ enum ImageDecoding {
 
     /// ImageIO's fast thumbnail decode, capped at `maxPixelSize` on the longest
     /// edge and oriented via EXIF. Produces a small bitmap without fully
-    /// decoding a large photo. When `alwaysDecodeFromFullImage` is false it
-    /// reuses an embedded preview if one exists; when true it always downscales
-    /// the full image.
+    /// decoding a large photo.
+    ///
+    /// Embedded-preview handling (the fix for blurry large JPEGs):
+    /// `kCGImageSourceCreateThumbnailFromImageIfAbsent` reuses an embedded
+    /// preview when the file has one — but it returns that preview *at its own
+    /// size and silently ignores `kCGImageSourceThumbnailMaxPixelSize`*. Most
+    /// camera/phone JPEGs embed a tiny EXIF preview (commonly 160×120), so the
+    /// grid was handed a 160 px bitmap and upscaled it into the cell, which is
+    /// the reported blur. So when `alwaysDecodeFromFullImage` is false we check
+    /// the result: if the preview came back smaller than requested while the
+    /// full image is actually larger, we redo the decode with
+    /// `...FromImageAlways`, which honors the cap and downscales the full image.
+    /// Files whose embedded preview is already big enough (or that have none)
+    /// keep the cheap single-decode path.
     private static func imageIOThumbnail(
         url: URL,
         maxPixelSize: Int,
@@ -70,7 +81,46 @@ enum ImageDecoding {
             return nil
         }
 
-        let thumbnailKey: CFString = alwaysDecodeFromFullImage
+        if alwaysDecodeFromFullImage {
+            return createThumbnail(from: source, maxPixelSize: maxPixelSize, fromFullImage: true)
+        }
+
+        // Cheap path first: reuse an embedded preview if present.
+        guard let preview = createThumbnail(from: source, maxPixelSize: maxPixelSize, fromFullImage: false) else {
+            return nil
+        }
+
+        // If the longest edge is at the cap, ImageIO downscaled the full image
+        // (or the embedded preview was large enough) — the result is as sharp
+        // as requested, so keep it.
+        let previewLongest = max(preview.width, preview.height)
+        if previewLongest >= maxPixelSize {
+            return preview
+        }
+
+        // The preview is smaller than requested. If the source image itself is
+        // larger than the preview, that preview is a too-small embedded EXIF
+        // thumbnail that would upscale blurrily — redecode from the full image.
+        // Otherwise the source really is this small (a genuinely tiny image),
+        // so the preview is already the best we can do.
+        let fullLongest = fullImagePixelLongestEdge(source)
+        if fullLongest > previewLongest {
+            if let full = createThumbnail(from: source, maxPixelSize: maxPixelSize, fromFullImage: true) {
+                return full
+            }
+        }
+        return preview
+    }
+
+    /// Runs ImageIO's thumbnail decode on an already-opened source. `fromFullImage`
+    /// selects between reusing an embedded preview (`false`) and always
+    /// downscaling the full image (`true`).
+    private static func createThumbnail(
+        from source: CGImageSource,
+        maxPixelSize: Int,
+        fromFullImage: Bool
+    ) -> CGImage? {
+        let thumbnailKey: CFString = fromFullImage
             ? kCGImageSourceCreateThumbnailFromImageAlways
             : kCGImageSourceCreateThumbnailFromImageIfAbsent
         let options: [CFString: Any] = [
@@ -80,6 +130,18 @@ enum ImageDecoding {
             kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// Longest-edge pixel size of the source's full image, read from the
+    /// container's header properties (`PixelWidth`/`PixelHeight`) without
+    /// decoding any pixels. Returns 0 if the dimensions aren't available.
+    private static func fullImagePixelLongestEdge(_ source: CGImageSource) -> Int {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return 0
+        }
+        let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+        let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        return max(width, height)
     }
 
     /// Shared, sRGB working-space `CIContext` reused across every Core Image

@@ -558,6 +558,8 @@ private struct ListRowView: View {
                 if let image {
                     Image(nsImage: image)
                         .resizable()
+                        .interpolation(.high)
+                        .antialiased(true)
                         .aspectRatio(contentMode: .fit)
                         .padding(2)
                 } else {

@@ -464,19 +464,33 @@ actor ThumbnailProvider {
         }?.key
     }
 
-    /// Converts a requested point size + backing scale into a pixel size whose
-    /// longest edge is capped at `maxPixelDimension`.
+    /// Converts a requested point size + backing scale into the pixel size to
+    /// decode at. The longest edge is always driven to `maxPixelDimension`
+    /// (preserving the requested aspect ratio), not merely capped at it.
+    ///
+    /// Why target the max rather than the exact cell size: the cache is keyed by
+    /// method + video position + URL and deliberately NOT by size, so a URL has
+    /// one cached bitmap shared across every zoom level. If we decoded at the
+    /// current (small) cell size, the first request — often a low-zoom prefetch
+    /// — would seed the cache with a small image that a later zoom-in then
+    /// upscales into a larger cell, which reads as blurry. Decoding every
+    /// thumbnail at the resolution the LARGEST cell needs (320 pt × max backing
+    /// scale) keeps the one cached bitmap crisp at all zoom levels. The memory
+    /// budget was already sized around `maxPixelDimension`-sized entries, so
+    /// this costs nothing the cache wasn't already prepared to hold.
     private static func clampedPixelSize(pointSize: CGSize, scale: CGFloat) -> CGSize {
         let requested = CGSize(
             width: max(1, pointSize.width * scale),
             height: max(1, pointSize.height * scale)
         )
         let longest = max(requested.width, requested.height)
-        guard longest > maxPixelDimension else { return requested }
+        // Scale the requested box so its longest edge hits maxPixelDimension,
+        // whether that means scaling up (small/low-zoom cells) or down (a cell
+        // larger than the cap). Aspect ratio is preserved; squares stay square.
         let factor = maxPixelDimension / longest
         return CGSize(
-            width: (requested.width * factor).rounded(),
-            height: (requested.height * factor).rounded()
+            width: max(1, (requested.width * factor).rounded()),
+            height: max(1, (requested.height * factor).rounded())
         )
     }
 
