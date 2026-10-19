@@ -787,10 +787,15 @@ final class BrowserModel {
             base = base.filter { facePersons[$0.id]?.contains(personFilter) ?? false }
         }
 
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty {
-            base = base.filter {
-                $0.name.localizedCaseInsensitiveContains(query)
+        // Split the query into terms on commas and whitespace so "beach sunset"
+        // or "beach, sunset" both match names containing every term (AND), in
+        // any order. Empty terms (from runs of separators) are dropped.
+        let terms = searchText
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
+            .map(String.init)
+        if !terms.isEmpty {
+            base = base.filter { item in
+                terms.allSatisfy { item.name.localizedCaseInsensitiveContains($0) }
             }
         }
         return base
