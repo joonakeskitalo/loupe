@@ -114,6 +114,10 @@ struct ContentView: View {
             \.trashShortcutEligible,
             !(searchFocused || model.isViewerPresented)
         )
+        // Published so menu commands can release ⌘A (and any other text-editing
+        // shortcut) while the search field is focused, letting the field's
+        // native "select all text" work instead of selecting all grid items.
+        .focusedSceneValue(\.searchFieldFocused, searchFocused)
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.
         .toolbar(model.isViewerPresented ? .hidden : .automatic, for: .windowToolbar)

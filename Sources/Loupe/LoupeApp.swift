@@ -16,6 +16,15 @@ struct TrashShortcutEligibleKey: FocusedValueKey {
     typealias Value = Bool
 }
 
+/// Whether the toolbar search field currently has keyboard focus. Menu
+/// commands whose shortcuts collide with text editing (notably ⌘A "Select
+/// All") read this and release their key equivalent while it's true, so the
+/// focused text field gets the native editing behavior (⌘A selects the field's
+/// text) instead of the menu hijacking the key.
+struct SearchFieldFocusedKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
 extension FocusedValues {
     var activeBrowserModel: BrowserModel? {
         get { self[ActiveBrowserModelKey.self] }
@@ -25,6 +34,11 @@ extension FocusedValues {
     var trashShortcutEligible: Bool? {
         get { self[TrashShortcutEligibleKey.self] }
         set { self[TrashShortcutEligibleKey.self] = newValue }
+    }
+
+    var searchFieldFocused: Bool? {
+        get { self[SearchFieldFocusedKey.self] }
+        set { self[SearchFieldFocusedKey.self] = newValue }
     }
 }
 

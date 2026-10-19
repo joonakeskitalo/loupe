@@ -11,6 +11,7 @@ import SwiftUI
 struct LoupeCommands: Commands {
     @FocusedValue(\.activeBrowserModel) private var model
     @FocusedValue(\.trashShortcutEligible) private var trashEligible
+    @FocusedValue(\.searchFieldFocused) private var searchFieldFocused
 
     var body: some Commands {
         // MARK: Copy — REPLACES the Edit menu's standard pasteboard group.
@@ -148,10 +149,14 @@ struct LoupeCommands: Commands {
         }
 
         // MARK: Select All — standard text-editing group.
+        //
+        // Gated on search focus too: a disabled Button releases its ⌘A
+        // shortcut, so while the search field is focused ⌘A falls through to the
+        // field and selects its text (instead of selecting all grid items).
         CommandGroup(after: .textEditing) {
             Button("Select All Items") { model?.selectAll() }
                 .keyboardShortcut("a", modifiers: .command)
-                .disabled(!hasItems || viewerOpen)
+                .disabled(!hasItems || viewerOpen || searchFocused)
         }
 
         // MARK: View menu — merged into SwiftUI's built-in "View" menu (via
@@ -293,6 +298,7 @@ struct LoupeCommands: Commands {
     // it's open, matching the in-window hotkey behavior.
 
     private var viewerOpen: Bool { model?.isViewerPresented ?? false }
+    private var searchFocused: Bool { searchFieldFocused ?? false }
     private var hasItems: Bool { !(model?.displayedItems.isEmpty ?? true) }
     private var hasSelection: Bool { !(model?.selectedItems.isEmpty ?? true) }
     private var canTrash: Bool { model?.canTrashSelection ?? false }
