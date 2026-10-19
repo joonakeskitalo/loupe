@@ -40,11 +40,13 @@ enum SortOrder: String, CaseIterable {
 
 /// How the grid/list break their items into sections, if at all. The two AI
 /// features each contribute a dimension: the scene classifier groups by
-/// category, face recognition groups by person. `.none` is a flat list.
+/// category, face recognition groups by person. `.folder` sections by the
+/// containing directory. `.none` is a flat list.
 enum GroupingDimension: String, CaseIterable {
     case none = "None"
     case category = "Category"
     case person = "Person"
+    case folder = "Folder"
 }
 
 @MainActor
@@ -1690,6 +1692,7 @@ final class BrowserModel {
     var groupedDisplayedItems: [CategoryGroup] {
         switch grouping {
         case .person:   return groupedByPerson
+        case .folder:   return groupedByFolder
         case .category, .none: return groupedByCategoryGroups
         }
     }
@@ -1740,6 +1743,31 @@ final class BrowserModel {
                 symbol: "person.slash", items: noPeople, isResidual: true))
         }
         return groups
+    }
+
+    /// Sections the displayed items by their containing directory. Each item
+    /// lands in exactly one bucket (its parent folder). Folders are ordered by
+    /// their path so sibling directories read in a stable, natural order, and
+    /// the header shows the folder's own name.
+    private var groupedByFolder: [CategoryGroup] {
+        let items = displayedItems
+        var buckets: [URL: [MediaItem]] = [:]
+        var order: [URL] = []
+        for item in items {
+            let dir = item.parentDirectory
+            if buckets[dir] == nil { order.append(dir) }
+            buckets[dir, default: []].append(item)
+        }
+        let sorted = order.sorted {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+        return sorted.map { dir in
+            CategoryGroup(
+                id: "folder-\(dir.path)",
+                title: dir.lastPathComponent,
+                symbol: "folder",
+                items: buckets[dir] ?? [])
+        }
     }
 
     /// Classify the current selection (or a specific right-clicked item) with

@@ -235,13 +235,16 @@ struct LoupeCommands: Commands {
             Menu("Group By") {
                 Picker("Group By", selection: groupingBinding) {
                     Text("None").tag(GroupingDimension.none)
+                    Text("Folder").tag(GroupingDimension.folder)
                     Text("Category").tag(GroupingDimension.category)
                     Text("Person").tag(GroupingDimension.person)
                 }
                 .pickerStyle(.inline)
             }
-            .disabled(model == nil
-                      || ((model?.classifiedCount ?? 0) == 0 && (model?.withFacesCount ?? 0) == 0))
+            // Folder grouping needs no AI pass, so the menu is live whenever a
+            // window has content; the AI dimensions still only group once their
+            // respective passes have produced something.
+            .disabled(model == nil || !(model?.hasContent ?? false))
 
             // Quick toggle for the most common case (⇧⌘G flips category
             // grouping on/off), kept for muscle memory.
