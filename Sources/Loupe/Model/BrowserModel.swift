@@ -1230,7 +1230,7 @@ final class BrowserModel {
 
     func selectFirstIfNeeded() {
         if selectedItem == nil || selectedItems.isEmpty {
-            if let first = displayedItems.first?.id {
+            if let first = visualOrderItems.first?.id {
                 selectOnly(first)
             }
         }
@@ -1307,7 +1307,7 @@ final class BrowserModel {
 
     /// Select the contiguous range from the anchor to `id` (Shift-click).
     func extendSelection(to id: MediaItem.ID) {
-        let items = displayedItems
+        let items = visualOrderItems
         guard let anchor = rangeAnchor ?? selectedItem ?? selectedItems.first,
               let a = items.firstIndex(where: { $0.id == anchor }),
               let b = items.firstIndex(where: { $0.id == id }) else {
@@ -1321,7 +1321,7 @@ final class BrowserModel {
     }
 
     func moveSelection(by offset: Int) {
-        let items = displayedItems
+        let items = visualOrderItems
         guard !items.isEmpty else { return }
         guard let current = selectedItem,
               let idx = items.firstIndex(where: { $0.id == current }) else {
@@ -1341,7 +1341,7 @@ final class BrowserModel {
     /// leading item. Falls back to a single-step move when fewer than two items
     /// are selected.
     func moveSelectionBlock(by offset: Int) {
-        let items = displayedItems
+        let items = visualOrderItems
         guard !items.isEmpty else { return }
 
         // Page by exactly the number of items currently shown. Driving this off
@@ -1384,7 +1384,7 @@ final class BrowserModel {
     /// Used to build up or trim a side-by-side multi-image view from the
     /// keyboard.
     func extendViewerSelection(by offset: Int) {
-        let items = displayedItems
+        let items = visualOrderItems
         guard !items.isEmpty else { return }
 
         let order = items.map(\.id)
@@ -1424,7 +1424,7 @@ final class BrowserModel {
     /// already on screen. For a single selection this is the item right after
     /// the current one.
     func upcomingImageURLs(count: Int) -> [URL] {
-        let items = displayedItems
+        let items = visualOrderItems
         guard !items.isEmpty, !selectedItems.isEmpty else { return [] }
 
         // Resume from just past the end of the current selection block.
@@ -1452,7 +1452,7 @@ final class BrowserModel {
     /// between the anchor and the moved cursor, so the selection grows and
     /// shrinks like a standard range selection.
     func moveSelection(_ direction: MoveDirection, columns: Int, extend: Bool = false) {
-        let items = displayedItems
+        let items = visualOrderItems
         guard !items.isEmpty else { return }
         let cols = max(1, columns)
 
@@ -1695,6 +1695,27 @@ final class BrowserModel {
         case .folder:   return groupedByFolder
         case .category, .none: return groupedByCategoryGroups
         }
+    }
+
+    /// The items in the exact order the grid/list draws them. With no grouping
+    /// this is the flat `displayedItems`; with grouping active it's the items
+    /// flattened across sections in `groupedDisplayedItems` order. Keyboard
+    /// navigation and Shift-click range selection run against this so they
+    /// follow what the user sees rather than the underlying flat sort.
+    ///
+    /// A `.person` grouping can show the same photo under several people; here
+    /// each item is kept once, at its first on-screen position, so ranges and
+    /// stepping stay well defined (selection is keyed by item regardless).
+    var visualOrderItems: [MediaItem] {
+        guard grouping != .none else { return displayedItems }
+        var seen: Set<MediaItem.ID> = []
+        var out: [MediaItem] = []
+        for group in groupedDisplayedItems {
+            for item in group.items where seen.insert(item.id).inserted {
+                out.append(item)
+            }
+        }
+        return out
     }
 
     private var groupedByCategoryGroups: [CategoryGroup] {
