@@ -246,6 +246,15 @@ struct LoupeCommands: Commands {
             // respective passes have produced something.
             .disabled(model == nil || !(model?.hasContent ?? false))
 
+            // Quick toggle for folder grouping (⌘G flips between grouping by
+            // folder and a flat list). Needs no AI pass, so it's live whenever
+            // the window has content.
+            Button(groupByFolderToggleTitle) {
+                model?.grouping = model?.grouping == .folder ? .none : .folder
+            }
+            .keyboardShortcut("g", modifiers: .command)
+            .disabled(model == nil || !(model?.hasContent ?? false))
+
             // Quick toggle for the most common case (⇧⌘G flips category
             // grouping on/off), kept for muscle memory.
             Button(groupByCategoryToggleTitle) {
@@ -346,6 +355,10 @@ struct LoupeCommands: Commands {
         if selectedImages > 1 { return "Find Faces in \(selectedImages) Images" }
         if hasSelection && selectedImages == 1 { return "Find Faces in Image" }
         return "Find Faces in All Images"
+    }
+
+    private var groupByFolderToggleTitle: String {
+        model?.grouping == .folder ? "Ungroup" : "Group by Folder"
     }
 
     private var groupByCategoryToggleTitle: String {
