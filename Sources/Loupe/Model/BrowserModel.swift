@@ -792,12 +792,29 @@ final class BrowserModel {
         // Split the query into terms on commas and whitespace so "beach sunset"
         // or "beach, sunset" both match names containing every term (AND), in
         // any order. Empty terms (from runs of separators) are dropped.
-        let terms = searchText
-            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
-            .map(String.init)
-        if !terms.isEmpty {
+        //
+        // A term prefixed with "-" is a negation: items whose name contains the
+        // text after the minus are excluded. So "beach -sunset" keeps names with
+        // "beach" but drops any that also contain "sunset". A bare "-" (nothing
+        // after it) is ignored.
+        var includeTerms: [String] = []
+        var excludeTerms: [String] = []
+        for rawTerm in searchText.split(whereSeparator: { $0 == "," || $0.isWhitespace }) {
+            if rawTerm.first == "-" {
+                let term = String(rawTerm.dropFirst())
+                if !term.isEmpty { excludeTerms.append(term) }
+            } else {
+                includeTerms.append(String(rawTerm))
+            }
+        }
+        if !includeTerms.isEmpty {
             base = base.filter { item in
-                terms.allSatisfy { item.name.localizedCaseInsensitiveContains($0) }
+                includeTerms.allSatisfy { item.name.localizedCaseInsensitiveContains($0) }
+            }
+        }
+        if !excludeTerms.isEmpty {
+            base = base.filter { item in
+                !excludeTerms.contains { item.name.localizedCaseInsensitiveContains($0) }
             }
         }
         return base
