@@ -114,9 +114,12 @@ struct MediaViewer: View {
             }
 
             // Info sidebar beside the media (same flag the grid uses, so the
-            // visibility is shared between the grid and the viewer).
+            // visibility is shared between the grid and the viewer). Forced to
+            // dark mode so it matches the viewer's black chrome regardless of
+            // the system appearance.
             if model.showInfoSidebar {
                 ItemInfoSidebar(model: model)
+                    .environment(\.colorScheme, .dark)
                     .transition(.move(edge: .trailing))
             }
             }
