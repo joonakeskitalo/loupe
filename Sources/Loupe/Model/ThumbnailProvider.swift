@@ -711,6 +711,17 @@ actor ThumbnailProvider {
             return image
         }
 
+        // No video frame yet. Many files that classify as video actually carry
+        // their picture as embedded cover art rather than a video track — an
+        // `.m4v`/`.mp4`/`.m4a` audio file with artwork is the common case, and
+        // `avFoundationFrame` returns nil for those (it requires a video
+        // track). Pull the embedded artwork before falling through to the
+        // FFmpeg frame decode, so these files show their cover art instead of a
+        // bare film icon.
+        if let artwork = await embeddedArtwork(for: url, pixelSize: pixelSize) {
+            return artwork
+        }
+
         // AVFoundation couldn't decode this container. Decode a frame with the
         // bundled FFmpeg libraries on a background task so the demux/decode work
         // never touches the cooperative pool's forward-progress guarantees.
@@ -722,6 +733,69 @@ actor ThumbnailProvider {
                 for: url, maxPixelSize: max(1, maxPixel), position: position
             )
         }.value
+    }
+
+    /// Extracts embedded cover art from a media file's metadata and scales it
+    /// down to a thumbnail. This is how audio-with-artwork files that happen to
+    /// use a video container (`.m4v`, `.mp4`, `.m4a`) get a thumbnail: they have
+    /// no video track for `avFoundationFrame` to seize a frame from, but they
+    /// do carry a picture in their common `artwork` metadata.
+    ///
+    /// Reads both the asset-level common metadata and each metadata format's
+    /// entries (iTunes-style `.m4a`/`.m4v` artwork lives under a format key
+    /// rather than the common one in some files), takes the first artwork it
+    /// finds, and downscales via ImageIO so a full-resolution cover doesn't
+    /// land in the grid at native size. Returns nil when there's no artwork.
+    nonisolated private static func embeddedArtwork(
+        for url: URL,
+        pixelSize: CGSize
+    ) async -> NSImage? {
+        let asset = AVURLAsset(
+            url: url,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: false]
+        )
+
+        // Collect candidate metadata items: the common set first, then every
+        // format-specific set (iTunes, ID3, QuickTime, …). Any of them may hold
+        // the artwork depending on how the file was authored.
+        var items: [AVMetadataItem] = []
+        if let common = try? await asset.load(.commonMetadata) {
+            items.append(contentsOf: common)
+        }
+        if let formats = try? await asset.load(.availableMetadataFormats) {
+            for format in formats {
+                if let formatItems = try? await asset.loadMetadata(for: format) {
+                    items.append(contentsOf: formatItems)
+                }
+            }
+        }
+
+        // Pull the raw image data from the first artwork item we can read.
+        var artworkData: Data?
+        for item in items where item.commonKey == .commonKeyArtwork {
+            if let data = try? await item.load(.dataValue) {
+                artworkData = data
+                break
+            }
+        }
+        guard let data = artworkData else { return nil }
+
+        // Downscale the cover to the thumbnail size via ImageIO rather than
+        // loading it at full resolution — album art is often 1000²+ px, which
+        // the grid never needs. Falls back to a direct NSImage if the thumbnail
+        // decode fails for any reason.
+        let maxPixel = Int(max(1, max(pixelSize.width, pixelSize.height).rounded()))
+        if let source = CGImageSourceCreateWithData(data as CFData, nil) {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel
+            ]
+            if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+                return NSImage(cgImage: cgImage, size: .zero)
+            }
+        }
+        return NSImage(data: data)
     }
 
     /// Pulls a frame via AVFoundation. Returns nil for containers AVFoundation
