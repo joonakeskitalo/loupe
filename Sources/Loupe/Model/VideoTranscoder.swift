@@ -48,6 +48,10 @@ enum VideoTranscoder {
 
         var displayName: String { rawValue }
 
+        /// A filename-safe token for this resolution (e.g. "1080p"), appended
+        /// to exported file names.
+        var fileNameToken: String { rawValue }
+
         /// The fixed output height in pixels.
         var height: Int {
             switch self {
@@ -79,6 +83,15 @@ enum VideoTranscoder {
             }
         }
 
+        /// A short filename-safe token for this codec (e.g. "h264", "h265"),
+        /// appended to exported file names.
+        var fileNameToken: String {
+            switch self {
+            case .h264: return "h264"
+            case .hevcVideoToolbox: return "h265"
+            }
+        }
+
         /// Whether this is a hardware VideoToolbox encoder (affects which
         /// quality options apply).
         var isVideoToolbox: Bool { self == .hevcVideoToolbox }
@@ -100,6 +113,15 @@ enum VideoTranscoder {
 
         /// The default: constant quality at CQ 70.
         static let `default`: RateControl = .constantQuality(70)
+
+        /// A short filename-safe token describing the rate control (e.g.
+        /// "cq70" or "auto"), appended to exported file names.
+        var fileNameToken: String {
+            switch self {
+            case .constantQuality(let cq): return "cq\(cq)"
+            case .automaticBitrate: return "auto"
+            }
+        }
     }
 
     enum TranscodeError: Error {

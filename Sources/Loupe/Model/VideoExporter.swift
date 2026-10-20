@@ -33,7 +33,18 @@ enum VideoExporter {
             let scoped = directory.startAccessingSecurityScopedResource()
             defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
 
-            let baseName = sourceURL.deletingPathExtension().lastPathComponent
+            // Append the chosen settings (resolution, codec, quality) to the
+            // name so exports with different settings are distinguishable and
+            // self-describing, e.g. "clip_1080p_h265_cq70.mp4". The whole base
+            // is sanitized to stay filesystem-safe.
+            let sourceBase = sourceURL.deletingPathExtension().lastPathComponent
+            let settingsSuffix = [
+                resolution.fileNameToken,
+                codec.fileNameToken,
+                rateControl.fileNameToken
+            ].joined(separator: "_")
+            let baseName = Self.sanitizedFileName("\(sourceBase)_\(settingsSuffix)")
+
             let dest = Self.uniqueDestination(
                 directory: directory,
                 baseName: baseName,
@@ -61,6 +72,38 @@ enum VideoExporter {
                 return false
             }
         }.value
+    }
+
+    /// Makes `name` safe to use as a filename component: replaces path
+    /// separators, the colon (illegal on HFS+/APFS as shown in Finder), and
+    /// other characters that commonly break tools with underscores, collapses
+    /// runs of whitespace/underscores, and trims leading/trailing separators
+    /// and dots. Falls back to "video" if nothing usable remains.
+    nonisolated private static func sanitizedFileName(_ name: String) -> String {
+        // Disallow anything outside a conservative, cross-platform-safe set.
+        let allowed = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_. ")
+        let replaced = String(name.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+
+        // Collapse whitespace to single underscores and squeeze repeated
+        // underscores so a messy source name doesn't produce "a___b".
+        let underscored = replaced
+            .split(whereSeparator: { $0 == " " || $0 == "\t" })
+            .joined(separator: "_")
+        var collapsed = ""
+        var lastWasUnderscore = false
+        for ch in underscored {
+            if ch == "_" {
+                if lastWasUnderscore { continue }
+                lastWasUnderscore = true
+            } else {
+                lastWasUnderscore = false
+            }
+            collapsed.append(ch)
+        }
+
+        let trimmed = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: "_.-"))
+        return trimmed.isEmpty ? "video" : trimmed
     }
 
     /// Builds a destination URL in `directory` for `baseName`.`ext`, appending
