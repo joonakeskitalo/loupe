@@ -2734,6 +2734,107 @@ final class BrowserModel {
         exportImages(toDirectory: directory, item: item)
     }
 
+    // MARK: - Video export (transcode)
+
+    /// The output resolution for a video export (1080p / 720p). Window-scoped
+    /// and in-session only, like the image export prefs.
+    var exportVideoResolution: VideoTranscoder.Resolution = .p1080
+
+    /// True while a video transcode is running, so the UI can show progress.
+    private(set) var isExportingVideo = false
+    /// 0...1 progress of the running transcode (best-effort), and how many of
+    /// the batch have finished / the total requested.
+    private(set) var videoExportFraction: Double = 0
+    private(set) var videoExportCompleted = 0
+    private(set) var videoExportTotal = 0
+
+    /// Video URLs among the given items (or the current selection), in display
+    /// order. The video counterpart to `imageURLs`.
+    func videoURLs(preferring item: MediaItem? = nil) -> [URL] {
+        let candidates: [MediaItem]
+        if let item, !selectedItems.contains(item.id) {
+            candidates = [item]
+        } else {
+            let selected = selectedMediaItems
+            candidates = selected.isEmpty ? (item.map { [$0] } ?? []) : selected
+        }
+        return candidates.filter { $0.kind == .video }.map(\.url)
+    }
+
+    /// Whether the current selection (or `item`) contains at least one video,
+    /// so the video export UI can enable/disable itself.
+    var canExportVideoSelection: Bool {
+        selectedMediaItems.contains { $0.kind == .video }
+    }
+
+    /// Whether a quick video re-export is possible: a remembered destination
+    /// plus at least one video in the target.
+    func canQuickExportVideo(_ item: MediaItem? = nil) -> Bool {
+        lastExportDirectory != nil && !videoURLs(preferring: item).isEmpty
+    }
+
+    /// Transcodes the selected video(s) (or `item`) into `directory` at
+    /// `exportVideoResolution`, copying the audio stream. Non-video items are
+    /// ignored. Returns immediately; the transcode runs on a detached task and
+    /// drives `isExportingVideo` / `videoExportFraction` /
+    /// `videoExportCompleted` / `videoExportTotal` so the UI can show progress.
+    ///
+    /// Output files are MP4s named after the source, de-duped against the
+    /// destination so an export never clobbers an existing file.
+    func exportVideos(toDirectory directory: URL, item: MediaItem? = nil) {
+        let urls = videoURLs(preferring: item)
+        guard !urls.isEmpty, !isExportingVideo else { return }
+
+        let resolution = exportVideoResolution
+
+        // Remember the destination so "Quick Export" can reuse it this session.
+        lastExportDirectory = directory
+
+        isExportingVideo = true
+        videoExportFraction = 0
+        videoExportCompleted = 0
+        videoExportTotal = urls.count
+
+        Task { @MainActor in
+            defer { isExportingVideo = false }
+            await VideoExporter.export(
+                urls: urls,
+                toDirectory: directory,
+                resolution: resolution
+            ) { [weak self] completed, total, fraction in
+                self?.videoExportCompleted = completed
+                self?.videoExportTotal = total
+                self?.videoExportFraction = fraction
+            }
+        }
+    }
+
+    /// Re-transcodes the selected video(s) into the previously-chosen folder
+    /// without prompting again. No-op if no folder has been chosen this session
+    /// or there's nothing exportable.
+    func quickExportVideo(_ item: MediaItem? = nil) {
+        guard let directory = lastExportDirectory else { return }
+        exportVideos(toDirectory: directory, item: item)
+    }
+
+    /// Prompts for a destination folder, then transcodes the selected video(s)
+    /// (or `item`) into it at the current resolution preset. No-op if nothing
+    /// exportable is targeted or the user cancels.
+    func exportVideosToChosenFolder(_ item: MediaItem? = nil) {
+        guard !videoURLs(preferring: item).isEmpty else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        panel.message = "Choose a folder to export the selected video(s) into."
+
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        exportVideos(toDirectory: directory, item: item)
+    }
+
     /// Whether a trash action currently has any target (used to enable/disable
     /// the menu item and keyboard shortcut).
     var canTrashSelection: Bool { !selectedItems.isEmpty }

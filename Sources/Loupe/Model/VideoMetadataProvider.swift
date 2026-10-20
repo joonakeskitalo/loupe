@@ -10,8 +10,11 @@ struct MediaMetadata: Sendable, Equatable {
     var codec: String?
     /// Pixel width/height. Nil when it can't be determined.
     var pixelSize: PixelSize?
+    /// Clip length in seconds (videos only). Nil for images or when the
+    /// container reports no usable duration.
+    var duration: Double?
 
-    static let empty = MediaMetadata(codec: nil, pixelSize: nil)
+    static let empty = MediaMetadata(codec: nil, pixelSize: nil, duration: nil)
 }
 
 /// A main-actor snapshot of already-resolved metadata, so list rows can render
@@ -144,7 +147,7 @@ actor VideoMetadataProvider {
         else {
             return .empty
         }
-        return MediaMetadata(codec: nil, pixelSize: PixelSize(width: width, height: height))
+        return MediaMetadata(codec: nil, pixelSize: PixelSize(width: width, height: height), duration: nil)
     }
 
     // MARK: - Video
@@ -188,6 +191,14 @@ actor VideoMetadataProvider {
         let h = Int(codecpar.pointee.height)
         if w > 0, h > 0 { pixelSize = PixelSize(width: w, height: h) }
 
-        return MediaMetadata(codec: codec, pixelSize: pixelSize)
+        // Container duration, in AV_TIME_BASE units (microseconds). Can be
+        // AV_NOPTS_VALUE / 0 when unknown, so only report a positive value.
+        var duration: Double?
+        let durationTicks = formatCtx?.pointee.duration ?? 0
+        if durationTicks > 0 {
+            duration = Double(durationTicks) / Double(AV_TIME_BASE)
+        }
+
+        return MediaMetadata(codec: codec, pixelSize: pixelSize, duration: duration)
     }
 }

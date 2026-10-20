@@ -81,6 +81,9 @@ struct ItemInfoSidebar: View {
                 if items.contains(where: { $0.kind == .image }) {
                     ExportSection(model: model, item: nil)
                 }
+                if items.contains(where: { $0.kind == .video }) {
+                    VideoExportSection(model: model, item: nil)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,6 +148,9 @@ private struct SingleItemInfo: View {
                     if let dimensions = metadata.pixelSize?.displayString {
                         InfoRow(label: "Dimensions", value: dimensions)
                     }
+                    if item.kind == .video, let duration = metadata.duration {
+                        InfoRow(label: "Length", value: durationString(duration))
+                    }
                     if item.kind == .video, let codec = metadata.codec {
                         InfoRow(label: "Codec", value: codec.uppercased())
                     }
@@ -189,6 +195,9 @@ private struct SingleItemInfo: View {
 
                 if item.kind == .image {
                     ExportSection(model: model, item: item)
+                }
+                if item.kind == .video {
+                    VideoExportSection(model: model, item: item)
                 }
             }
             .padding(14)
@@ -274,6 +283,19 @@ private struct SingleItemInfo: View {
     private func dateString(_ date: Date) -> String {
         guard date != .distantPast else { return "—" }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// Formats a clip length in seconds as H:MM:SS (dropping the hours field
+    /// when under an hour), e.g. "3:07" or "1:02:45".
+    private func durationString(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
     }
 }
 
@@ -376,6 +398,76 @@ private struct ExportSection: View {
                 }
             }
         }
+    }
+}
+
+/// Export controls for the current video selection, embedded in the sidebar.
+/// Mirrors `ExportSection` but for video: a resolution preset (1080p / 720p)
+/// and buttons that transcode the selection to a chosen folder (audio copied,
+/// video rescaled). Shown only when the target contains at least one video.
+///
+/// `item` scopes the export like `ExportSection`: `nil` exports the whole
+/// selection, a specific item exports just that one.
+private struct VideoExportSection: View {
+    @Bindable var model: BrowserModel
+    var item: MediaItem?
+
+    var body: some View {
+        InfoSection(title: "Export Video") {
+            Picker("Resolution", selection: $model.exportVideoResolution) {
+                ForEach(VideoTranscoder.Resolution.allCases, id: \.self) { res in
+                    Text(res.displayName).tag(res)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+
+            Text("Rescales video and copies the audio track. Output is MP4 (H.264).")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if model.isExportingVideo {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: perFileProgress)
+                        .progressViewStyle(.linear)
+                    Text("Transcoding \(min(model.videoExportCompleted + 1, model.videoExportTotal))/\(model.videoExportTotal)…")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+            } else {
+                Button {
+                    model.exportVideosToChosenFolder(item)
+                } label: {
+                    Label("Export to Folder…", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+                .padding(.top, 2)
+
+                if model.canQuickExportVideo(item), let dir = model.lastExportDirectory {
+                    Button {
+                        model.quickExportVideo(item)
+                    } label: {
+                        Label("Quick Export to \(dir.lastPathComponent)", systemImage: "bolt")
+                            .frame(maxWidth: .infinity)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .controlSize(.small)
+                    .help("Transcode again to \(dir.path) without choosing a folder.")
+                }
+            }
+        }
+    }
+
+    /// Combined progress across the batch: completed files plus the current
+    /// file's fraction, over the total count.
+    private var perFileProgress: Double {
+        guard model.videoExportTotal > 0 else { return 0 }
+        let done = Double(model.videoExportCompleted) + model.videoExportFraction
+        return min(1.0, done / Double(model.videoExportTotal))
     }
 }
 
