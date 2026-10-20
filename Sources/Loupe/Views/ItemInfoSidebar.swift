@@ -77,6 +77,10 @@ struct ItemInfoSidebar: View {
                         InfoRow(label: kind.displayName, value: "\(count)")
                     }
                 }
+
+                if items.contains(where: { $0.kind == .image }) {
+                    ExportSection(model: model, item: nil)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,6 +186,10 @@ private struct SingleItemInfo: View {
                         .controlSize(.small)
                         .padding(.top, 2)
                 }
+
+                if item.kind == .image {
+                    ExportSection(model: model, item: item)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -266,6 +274,66 @@ private struct SingleItemInfo: View {
     private func dateString(_ date: Date) -> String {
         guard date != .distantPast else { return "—" }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+/// Export controls for the current image selection, embedded in the sidebar.
+/// Mirrors the "Export Images As" menu — format, resolution, and a
+/// remove-metadata toggle — but inline, with a button that prompts for a
+/// destination folder and runs the export. Shown only when the target contains
+/// at least one image.
+///
+/// `item` scopes the export: `nil` exports the whole selection (multi-select
+/// case); a specific item exports just that one (single-item case). While an
+/// export is running the controls disable and a progress readout appears.
+private struct ExportSection: View {
+    @Bindable var model: BrowserModel
+    var item: MediaItem?
+
+    var body: some View {
+        InfoSection(title: "Export Image") {
+            Picker("Format", selection: $model.exportFormat) {
+                ForEach(ImageCopyFormat.allCases, id: \.self) { format in
+                    Text(format.displayName).tag(format)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+
+            Picker("Resolution", selection: $model.exportScale) {
+                ForEach(ImageCopyScale.allCases, id: \.self) { scale in
+                    Text(scale.displayName).tag(scale)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+
+            // PNG has no EXIF container, so stripping is moot for it.
+            Toggle("Remove EXIF / Metadata", isOn: $model.exportStripsMetadata)
+                .controlSize(.small)
+                .disabled(!model.exportFormat.canCarryMetadata)
+
+            if model.isExportingImages {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(model.exportProgress),
+                                 total: Double(max(1, model.exportTotal)))
+                        .progressViewStyle(.linear)
+                    Text("\(model.exportProgress)/\(model.exportTotal)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+            } else {
+                Button {
+                    model.exportImagesToChosenFolder(item)
+                } label: {
+                    Label("Export to Folder…", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+                .padding(.top, 2)
+            }
+        }
     }
 }
 
