@@ -1804,10 +1804,42 @@ final class BrowserModel {
         let allTagged = targets.allSatisfy { colorTags[$0] == tag }
         if allTagged {
             for id in targets { colorTags[id] = nil }
+            clampSelection()
         } else {
+            // Remember where the cursor should land before the tag is applied,
+            // so that if a color-tag filter is active (which drops the newly
+            // tagged item out of view) we can still follow the list forward.
+            let successor = successorAfterTagging(targets)
             for id in targets { colorTags[id] = tag }
+            clampSelection()
+            advanceAfterTagging(successor)
         }
-        clampSelection()
+    }
+
+    /// The item the selection should move to after `targets` are color-tagged:
+    /// the next item in visual order following the single tagged item. Mirrors
+    /// the "mark as hidden" flow so tagging one item after another walks the
+    /// list without extra navigation. Returns `nil` for multi-item actions (we
+    /// leave those selections intact) or when there's nothing to advance to.
+    /// Must be called *before* `colorTags` is updated so the current filtered
+    /// order still reflects the targets.
+    private func successorAfterTagging(_ targets: [MediaItem.ID]) -> MediaItem.ID? {
+        guard targets.count == 1, let tagged = targets.first else { return nil }
+        let order = visualOrderItems
+        guard let idx = order.firstIndex(where: { $0.id == tagged }) else { return nil }
+        // Prefer the next item in order; fall back to the previous one when the
+        // tagged item is the last, so a trailing item still advances somewhere.
+        if idx + 1 < order.count { return order[idx + 1].id }
+        if idx - 1 >= 0 { return order[idx - 1].id }
+        return nil
+    }
+
+    /// Moves the selection onto the item computed by `successorAfterTagging`,
+    /// but only for a single-item selection — multi-selection tagging keeps the
+    /// user's selection intact.
+    private func advanceAfterTagging(_ id: MediaItem.ID?) {
+        guard selectedItems.count == 1, let id else { return }
+        selectOnly(id)
     }
 
     /// Remove any color tag from the given item(s) or the current selection.
