@@ -1,5 +1,24 @@
 import Foundation
 
+/// A thread-safe one-way cancellation flag, shared between the main-actor queue
+/// (which flips it) and the detached transcode worker (which polls it). Needed
+/// because the transcode runs on `Task.detached`, which does NOT inherit Swift
+/// task cancellation — so a plain `Task.isCancelled` check wouldn't see the
+/// queue's cancel. A tiny locked bool bridges the two cleanly.
+final class CancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock(); cancelled = true; lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+}
+
 /// Transcodes videos to a user-chosen directory at a target resolution — the
 /// video counterpart to `ImageExporter`. It drives `VideoTranscoder` (the
 /// libav* transcode) once per file, bracketing the writes in security-scoped
@@ -21,6 +40,7 @@ enum VideoExporter {
         resolution: VideoTranscoder.Resolution,
         codec: VideoTranscoder.Codec,
         rateControl: VideoTranscoder.RateControl,
+        cancellation: CancellationFlag,
         progress: @escaping @MainActor (_ fraction: Double) -> Void
     ) async -> Bool {
         progress(0)
@@ -58,12 +78,18 @@ enum VideoExporter {
                     output: dest,
                     resolution: resolution,
                     codec: codec,
-                    rateControl: rateControl
+                    rateControl: rateControl,
+                    isCancelled: { cancellation.isCancelled }
                 ) { fraction in
                     Task { @MainActor in progress(fraction) }
                 }
                 await MainActor.run { progress(1.0) }
                 return true
+            } catch VideoTranscoder.TranscodeError.cancelled {
+                // Cancelled by the user — expected, not an error. Drop the
+                // partial output and report failure (the queue removes the job).
+                try? fm.removeItem(at: dest)
+                return false
             } catch {
                 NSLog("Loupe: failed to transcode \(sourceURL.path) → \(dest.path): \(error)")
                 // Remove any partial output so a failed export doesn't leave a

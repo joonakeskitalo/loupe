@@ -2890,6 +2890,15 @@ final class BrowserModel {
     /// True while the queue worker is actively draining jobs.
     private(set) var isDrainingVideoQueue = false
 
+    /// Cancellation flag for the job currently transcoding, so an active job
+    /// can be aborted. The detached transcode worker polls it. Nil between jobs.
+    @ObservationIgnored private var activeVideoExportCancellation: CancellationFlag?
+
+    /// Jobs the user asked to cancel while they were mid-transcode. The drain
+    /// loop removes (rather than marks failed) any job in this set when its
+    /// transcode returns.
+    @ObservationIgnored private var cancelledVideoExportJobs: Set<VideoExportJob.ID> = []
+
     /// Whether anything in the queue is still queued or transcoding.
     var hasPendingVideoExports: Bool {
         videoExportQueue.contains { !$0.status.isFinished }
@@ -2977,45 +2986,77 @@ final class BrowserModel {
         }
     }
 
-    /// Processes every still-queued job in order, one at a time.
+    /// Processes every still-queued job in order, one at a time. Each job's
+    /// transcode runs in its own cancellable task (stored in
+    /// `activeVideoExportTask`) so `removeVideoExportJob` can abort it.
     private func drainVideoExportQueue() async {
         while let index = videoExportQueue.firstIndex(where: { $0.status == .queued }) {
             let job = videoExportQueue[index]
             videoExportQueue[index].status = .transcoding(fraction: 0)
             let jobID = job.id
 
+            let cancellation = CancellationFlag()
+            activeVideoExportCancellation = cancellation
+
             let succeeded = await VideoExporter.transcodeOne(
                 sourceURL: job.sourceURL,
                 destinationDirectory: job.destinationDirectory,
                 resolution: job.resolution,
                 codec: job.codec,
-                rateControl: job.rateControl
+                rateControl: job.rateControl,
+                cancellation: cancellation
             ) { [weak self] fraction in
                 guard let self else { return }
                 if let i = self.videoExportQueue.firstIndex(where: { $0.id == jobID }) {
                     self.videoExportQueue[i].status = .transcoding(fraction: fraction)
                 }
             }
+            activeVideoExportCancellation = nil
 
-            if let i = videoExportQueue.firstIndex(where: { $0.id == jobID }) {
+            // If the user cancelled this job mid-transcode, drop it from the
+            // queue entirely rather than leaving a "failed" row behind.
+            if cancelledVideoExportJobs.remove(jobID) != nil {
+                videoExportQueue.removeAll { $0.id == jobID }
+            } else if let i = videoExportQueue.firstIndex(where: { $0.id == jobID }) {
                 videoExportQueue[i].status = succeeded ? .completed : .failed
             }
         }
     }
 
-    /// Removes a job from the queue. A job that's currently transcoding can't
-    /// be removed (its work is already in flight); only queued or finished jobs
-    /// can be dropped.
+    /// Removes a job from the queue. A queued or finished job is dropped
+    /// immediately; a job that's currently transcoding is cancelled (its
+    /// in-flight transcode aborts promptly and the partial output is deleted),
+    /// then the drain loop removes it.
     func removeVideoExportJob(_ id: VideoExportJob.ID) {
-        guard let index = videoExportQueue.firstIndex(where: { $0.id == id }),
-              !videoExportQueue[index].status.isActive else { return }
-        videoExportQueue.remove(at: index)
+        guard let index = videoExportQueue.firstIndex(where: { $0.id == id }) else { return }
+
+        if videoExportQueue[index].status.isActive {
+            // Mark it for removal and signal the running transcode to stop; the
+            // drain loop finishes the cleanup when the transcode returns.
+            cancelledVideoExportJobs.insert(id)
+            activeVideoExportCancellation?.cancel()
+        } else {
+            videoExportQueue.remove(at: index)
+        }
     }
 
     /// Clears all finished (completed/failed) jobs from the queue, leaving any
     /// queued or in-flight ones.
     func clearFinishedVideoExports() {
         videoExportQueue.removeAll { $0.status.isFinished }
+    }
+
+    /// Removes every job: cancels an in-flight transcode and drops all queued
+    /// and finished entries.
+    func clearVideoExportQueue() {
+        if let active = activeVideoExportJob {
+            cancelledVideoExportJobs.insert(active.id)
+            activeVideoExportCancellation?.cancel()
+        }
+        // Drop everything that isn't the active job (that one is removed by the
+        // drain loop once its cancelled transcode returns).
+        let activeID = activeVideoExportJob?.id
+        videoExportQueue.removeAll { $0.id != activeID }
     }
 
     /// Re-transcodes the selected video(s) into the previously-chosen folder

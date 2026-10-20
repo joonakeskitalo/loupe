@@ -136,6 +136,7 @@ enum VideoTranscoder {
         case scaler
         case allocation
         case encode
+        case cancelled
     }
 
     /// Transcodes `input` to `output` (an MP4), scaling the video to
@@ -146,12 +147,18 @@ enum VideoTranscoder {
     /// duration/PTS).
     ///
     /// Synchronous and `nonisolated`: run it from a detached task.
+    ///
+    /// `isCancelled` is polled once per demuxed packet; when it returns true
+    /// the transcode aborts promptly and throws `TranscodeError.cancelled`
+    /// (the caller is responsible for deleting any partial output). This lets a
+    /// queue cancel an in-flight export.
     nonisolated static func transcode(
         input: URL,
         output: URL,
         resolution: Resolution,
         codec: Codec = .h264,
         rateControl: RateControl = .default,
+        isCancelled: (@Sendable () -> Bool)? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
     ) throws {
         // MARK: Open input
@@ -389,6 +396,13 @@ enum VideoTranscoder {
 
         // MARK: Demux loop
         while av_read_frame(inputCtx, packet) >= 0 {
+            // Cooperative cancellation: bail out between packets. Unref the
+            // packet we just read so it isn't leaked, then throw.
+            if isCancelled?() == true {
+                av_packet_unref(packet)
+                throw TranscodeError.cancelled
+            }
+
             let streamIdx = packet.pointee.stream_index
 
             if streamIdx == videoIndex {

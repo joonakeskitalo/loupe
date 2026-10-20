@@ -555,10 +555,17 @@ private struct VideoExportQueueView: View {
             }
             .frame(maxHeight: 160)
 
-            if model.videoExportQueue.contains(where: { $0.status.isFinished }) {
-                Button("Clear Finished") { model.clearFinishedVideoExports() }
+            HStack(spacing: 12) {
+                if model.videoExportQueue.contains(where: { $0.status.isFinished }) {
+                    Button("Clear Finished") { model.clearFinishedVideoExports() }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                }
+                Spacer()
+                Button("Remove All") { model.clearVideoExportQueue() }
                     .controlSize(.small)
                     .buttonStyle(.borderless)
+                    .help("Cancel any running transcode and clear the queue.")
             }
         }
         .padding(.horizontal, 14)
@@ -577,8 +584,8 @@ private struct VideoExportQueueView: View {
 }
 
 /// A single row in the transcode queue: a status glyph (or spinner), the
-/// source file name, an inline progress bar while it's encoding, and a remove
-/// button for queued/finished jobs.
+/// source file name, an inline progress bar while it's encoding, and a
+/// remove/cancel button (drops a queued or finished job, cancels an active one).
 private struct VideoExportQueueRow: View {
     let job: BrowserModel.VideoExportJob
     let onRemove: () -> Void
@@ -592,17 +599,16 @@ private struct VideoExportQueueRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                // Queued or finished jobs can be removed; an active one can't.
-                if !job.status.isActive {
-                    Button {
-                        onRemove()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove from queue")
+                // Every job can be removed: a queued/finished one is dropped,
+                // an in-flight one is cancelled.
+                Button {
+                    onRemove()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
                 }
+                .buttonStyle(.plain)
+                .help(job.status.isActive ? "Cancel transcode" : "Remove from queue")
             }
             if case .transcoding(let fraction) = job.status {
                 ProgressView(value: fraction)
