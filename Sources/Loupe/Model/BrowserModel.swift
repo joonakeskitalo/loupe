@@ -1657,11 +1657,16 @@ final class BrowserModel {
 
         let anyVisible = targets.contains { !hiddenItems.contains($0) }
         if anyVisible {
+            // Remember where the hidden block sat so we can land the cursor on
+            // the item that follows it, keeping keyboard navigation flowing.
+            let successor = successorAfterHiding(targets)
             hiddenItems.formUnion(targets)
+            clampSelection()
+            selectAfterHiding(successor)
         } else {
             hiddenItems.subtract(targets)
+            clampSelection()
         }
-        clampSelection()
     }
 
     /// Toggle the hidden state on exactly one item, regardless of the current
@@ -1669,10 +1674,41 @@ final class BrowserModel {
     func toggleHidden(id: MediaItem.ID) {
         if hiddenItems.contains(id) {
             hiddenItems.remove(id)
+            clampSelection()
         } else {
+            let successor = successorAfterHiding([id])
             hiddenItems.insert(id)
+            clampSelection()
+            selectAfterHiding(successor)
         }
-        clampSelection()
+    }
+
+    /// The item that should receive the selection after `targets` are hidden:
+    /// the first still-visible item that comes after the hidden block in
+    /// visual order, or the last surviving item when the block sat at the end.
+    /// Returns `nil` when nothing visible remains. Must be called *before*
+    /// `hiddenItems` is updated so the ordering still reflects the targets.
+    private func successorAfterHiding(_ targets: [MediaItem.ID]) -> MediaItem.ID? {
+        let order = visualOrderItems
+        let hiding = Set(targets)
+        guard let firstHiddenIdx = order.firstIndex(where: { hiding.contains($0.id) }) else {
+            return nil
+        }
+        // Walk forward from the first hidden item to the next survivor.
+        if let next = order[firstHiddenIdx...].first(where: { !hiding.contains($0.id) }) {
+            return next.id
+        }
+        // The hidden block ran to the end; fall back to the last survivor.
+        return order[..<firstHiddenIdx].last(where: { !hiding.contains($0.id) })?.id
+    }
+
+    /// Applies the selection computed by `successorAfterHiding` once the items
+    /// are hidden, but only when the hide actually cleared the selection — if
+    /// something survived (e.g. a multi-selection where not everything was
+    /// hidden) we leave the user's selection intact.
+    private func selectAfterHiding(_ id: MediaItem.ID?) {
+        guard selectedItems.isEmpty, let id else { return }
+        selectOnly(id)
     }
 
     /// Unhide every item, and leave the "Hidden" Library view if it's active
