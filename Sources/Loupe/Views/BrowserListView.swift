@@ -14,6 +14,10 @@ struct BrowserListView: View {
     /// keyboard navigation) doesn't yank a clicked, already-visible item.
     @State private var suppressNextScroll = false
 
+    /// Vertical gap below each group (except the last) that separates adjacent
+    /// sections when grouping is active, so sections read as distinct.
+    private static let groupSpacing: CGFloat = 20
+
     /// Normalized zoom position in 0...1 across the grid's 90–320 range.
     private var zoomFraction: Double {
         (model.thumbnailSize - BrowserModel.minThumbnailSize)
@@ -59,11 +63,21 @@ struct BrowserListView: View {
                     ScrollView {
                         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                             if model.grouping != .none {
-                                ForEach(model.groupedDisplayedItems) { group in
+                                let groups = model.groupedDisplayedItems
+                                ForEach(Array(groups.enumerated()),
+                                        id: \.element.id) { groupIndex, group in
                                     Section {
                                         ForEach(group.entries) { entry in row(for: entry.item) }
                                     } header: {
                                         sectionHeader(group)
+                                    } footer: {
+                                        // Gap below every group but the last.
+                                        // A footer spans the full width and is
+                                        // not pinned, so the next group's header
+                                        // still sticks flush to the top.
+                                        if groupIndex < groups.count - 1 {
+                                            Color.clear.frame(height: Self.groupSpacing)
+                                        }
                                     }
                                 }
                             } else {

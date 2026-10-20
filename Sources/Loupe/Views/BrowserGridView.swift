@@ -143,6 +143,10 @@ struct BrowserGridView: View {
         .background(.bar)
     }
 
+    /// Vertical gap below each group (except the last) that separates adjacent
+    /// sections in the grouped grid.
+    private static let groupSpacing: CGFloat = 20
+
     /// Number of columns that fit in a given width, matching the adaptive grid.
     /// Used as a fallback before any cells have reported their frames.
     private func columnCount(for width: CGFloat) -> Int {
@@ -191,7 +195,9 @@ struct BrowserGridView: View {
                                     // A person can appear in several sections, so
                                     // each cell's SwiftUI identity is scoped to
                                     // its group to avoid duplicate-id collisions.
-                                    ForEach(model.groupedDisplayedItems) { group in
+                                    let groups = model.groupedDisplayedItems
+                                    ForEach(Array(groups.enumerated()),
+                                            id: \.element.id) { groupIndex, group in
                                         Section {
                                             // Composite data identity (group +
                                             // item) so a person who appears in
@@ -205,6 +211,14 @@ struct BrowserGridView: View {
                                             }
                                         } header: {
                                             sectionHeader(group)
+                                        } footer: {
+                                            // Gap below every group but the
+                                            // last. A footer spans the full grid
+                                            // width and isn't pinned, so the next
+                                            // header still sticks flush to top.
+                                            if groupIndex < groups.count - 1 {
+                                                Color.clear.frame(height: Self.groupSpacing)
+                                            }
                                         }
                                     }
                                 } else {
