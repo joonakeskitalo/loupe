@@ -33,6 +33,24 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("c", modifiers: .command)
                 .disabled(!hasSelection || viewerOpen)
 
+            // Paste — forwarded to the first responder. Loupe itself is a
+            // read-only browser with nothing to paste into, but replacing the
+            // whole `.pasteboard` group (above) also dropped the standard Paste
+            // item, which is what wires ⌘V to the focused search field. Without
+            // a Paste command in the menu, AppKit has no owner for ⌘V and the
+            // keystroke never reaches the search field. Re-adding Paste as a
+            // relay to the standard `paste:` action restores pasting into the
+            // search field (and any other text field) without re-introducing
+            // the system Cut/Delete items we intentionally removed.
+            Button("Paste") {
+                NSApp.sendAction(
+                    #selector(NSText.paste(_:)),
+                    to: nil,
+                    from: nil
+                )
+            }
+            .keyboardShortcut("v", modifiers: .command)
+
             // Copy the actual picture (pixels), not the file reference, at a
             // chosen size, in a chosen format, and optionally without EXIF. The
             // format + metadata pickers apply to every scale below.
