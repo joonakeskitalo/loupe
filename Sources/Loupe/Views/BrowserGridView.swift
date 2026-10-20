@@ -161,17 +161,37 @@ struct BrowserGridView: View {
     /// frames rather than a width estimate. The adaptive `LazyVGrid` decides the
     /// real column count internally, and an external window-snapping tool can
     /// resize the grid without the width-based `onChange` producing a count that
-    /// matches what SwiftUI laid out. Counting cells that share the first row's
-    /// `minY` reads the layout as it truly is, so Up/Down always jump one real
-    /// row. Falls back to the cached estimate until frames are reported.
+    /// matches what SwiftUI laid out.
+    ///
+    /// We take the *widest* instantiated row — the most cells sharing a single
+    /// `minY` — not simply the topmost row. `cellFrames` only holds the cells
+    /// LazyVGrid has realized (roughly the viewport), and with grouping the top
+    /// realized row is often a partial row: the tail of a section scrolled just
+    /// off the top, or a section's short first/last row. Counting a partial row
+    /// yields too few columns and throws off every Up/Down jump. A full row has
+    /// the true column count, and at least one is almost always realized, so the
+    /// maximum row width is the reliable signal. Falls back to the cached
+    /// estimate until frames are reported.
     private var liveColumnCount: Int {
         guard !cellFrames.isEmpty else { return max(1, model.gridColumnCount) }
-        // The top row is the set of cells with the smallest minY; group with a
-        // tolerance so sub-pixel differences don't split a single row.
-        let minY = cellFrames.values.map(\.minY).min() ?? 0
+        // Bucket cells into rows by shared minY (tolerance absorbs sub-pixel
+        // drift), then take the widest row's cell count.
         let tolerance: CGFloat = 1
-        let topRow = cellFrames.values.filter { abs($0.minY - minY) <= tolerance }
-        return max(1, topRow.count)
+        let sortedMinY = cellFrames.values.map(\.minY).sorted()
+        var widest = 1
+        var rowStartY = sortedMinY[0]
+        var rowCount = 0
+        for y in sortedMinY {
+            if y - rowStartY <= tolerance {
+                rowCount += 1
+            } else {
+                widest = max(widest, rowCount)
+                rowStartY = y
+                rowCount = 1
+            }
+        }
+        widest = max(widest, rowCount)
+        return max(1, widest)
     }
 
     var body: some View {

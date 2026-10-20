@@ -1537,14 +1537,9 @@ final class BrowserModel {
             return
         }
 
-        let target: Int
-        switch direction {
-        case .left:  target = idx - 1
-        case .right: target = idx + 1
-        case .up:    target = idx - cols
-        case .down:  target = idx + cols
+        guard let target = navigationTarget(from: idx, direction: direction, cols: cols) else {
+            return
         }
-        guard target >= 0, target < items.count else { return }
 
         if extend {
             // Establish an anchor the first time we start extending.
@@ -1557,6 +1552,65 @@ final class BrowserModel {
         } else {
             selectOnly(items[target].id)
         }
+    }
+
+    /// Computes the destination index for an arrow-key move, expressed as an
+    /// index into `visualOrderItems`.
+    ///
+    /// Left/Right step one item in reading order and may cross section
+    /// boundaries, matching the flat visual order. Up/Down move a full row, but
+    /// stay *within the item's own section* when grouping is active: each
+    /// section wraps into its own rows (its last row is usually partial, and
+    /// the next section restarts at column 0), so a flat `idx ± cols` jump
+    /// would skip across section edges and land on the wrong tile. Vertical
+    /// moves preserve the current column, clamp to the last item on a shorter
+    /// destination row, and return `nil` when there's no row to move to.
+    private func navigationTarget(from idx: Int, direction: MoveDirection, cols: Int) -> Int? {
+        let count = visualOrderItems.count
+        switch direction {
+        case .left:
+            return idx - 1 >= 0 ? idx - 1 : nil
+        case .right:
+            return idx + 1 < count ? idx + 1 : nil
+        case .up, .down:
+            // Resolve the section the current item lives in, then move by one
+            // row within that section only.
+            let (sectionStart, sectionCount) = sectionBounds(containing: idx)
+            let offsetInSection = idx - sectionStart
+            let column = offsetInSection % cols
+            let row = offsetInSection / cols
+            let targetRow = direction == .up ? row - 1 : row + 1
+            guard targetRow >= 0 else { return nil }
+            let rowStart = targetRow * cols
+            guard rowStart < sectionCount else { return nil }
+            // Clamp to the last item on the destination row (partial last row).
+            let lastOnRow = min(rowStart + cols, sectionCount) - 1
+            let targetInSection = min(rowStart + column, lastOnRow)
+            return sectionStart + targetInSection
+        }
+    }
+
+    /// The `(start, count)` of the section in `visualOrderItems` that contains
+    /// the item at `idx`. With no grouping the whole flat list is one section;
+    /// with grouping active each on-screen group is a section, measured against
+    /// the same de-duplicated order `visualOrderItems` uses.
+    private func sectionBounds(containing idx: Int) -> (start: Int, count: Int) {
+        let items = visualOrderItems
+        guard grouping != .none else { return (0, items.count) }
+        var start = 0
+        var seen: Set<MediaItem.ID> = []
+        for group in groupedDisplayedItems {
+            // Count this group's items the same way `visualOrderItems` flattens
+            // them: each item once, at its first on-screen position.
+            var groupCount = 0
+            for item in group.items where seen.insert(item.id).inserted {
+                groupCount += 1
+            }
+            if idx < start + groupCount { return (start, groupCount) }
+            start += groupCount
+        }
+        // Fallback: treat the whole list as one section.
+        return (0, items.count)
     }
 
     func toggleViewer() {

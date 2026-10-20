@@ -116,7 +116,12 @@ struct MediaViewer: View {
             if canShowFilmStrip && model.isFilmStripVisible {
                 FilmStrip(
                     model: model,
-                    items: model.displayedItems,
+                    // Use the visual (grouped) order, not the flat sort: the
+                    // viewer's Next/Prev step through `visualOrderItems`, so the
+                    // strip must show that same sequence or the highlight jumps
+                    // around instead of walking to the adjacent thumbnail. With
+                    // grouping off the two orders are identical.
+                    items: model.visualOrderItems,
                     selectedIDs: model.selectedItems,
                     currentID: model.selectedItem
                 )
