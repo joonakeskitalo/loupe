@@ -6,6 +6,10 @@ struct ThumbnailView: View {
     let size: Double
     let isSelected: Bool
     var isFlagged: Bool = false
+    /// Whether this item is hidden (shows a dimmed eye.slash badge, next to the
+    /// flag badge). Only ever visible in the "Hidden" Library view, since hidden
+    /// items are filtered out of every other view.
+    var isHidden: Bool = false
     /// The item's color tag, if any (shows a colored swatch in the top-leading
     /// corner, opposite the flag badge).
     var colorTag: ColorTag? = nil
@@ -60,15 +64,25 @@ struct ThumbnailView: View {
             }
             .frame(width: size, height: size)
             .overlay(alignment: .topTrailing) {
-                if isFlagged {
-                    Image(systemName: "flag.fill")
-                        .font(.system(size: max(8, size * 0.09)))
-                        .foregroundStyle(.white)
-                        .padding(3)
-                        .background(Color.orange, in: Circle())
-                        .shadow(radius: 1)
-                        .padding(5)
+                HStack(spacing: 3) {
+                    if isHidden {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: max(8, size * 0.09)))
+                            .foregroundStyle(.white)
+                            .padding(3)
+                            .background(Color.secondary, in: Circle())
+                            .shadow(radius: 1)
+                    }
+                    if isFlagged {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: max(8, size * 0.09)))
+                            .foregroundStyle(.white)
+                            .padding(3)
+                            .background(Color.orange, in: Circle())
+                            .shadow(radius: 1)
+                    }
                 }
+                .padding(5)
             }
             .overlay(alignment: .topLeading) {
                 if let colorTag {

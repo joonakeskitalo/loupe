@@ -87,6 +87,13 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(!hasSelection)
 
+            // Hide / unhide the selection. The ⌫ (backspace) shortcut is owned
+            // by ContentView's hidden hotkey (its single owner, gated on search/
+            // viewer focus so it doesn't hijack text editing); this menu item
+            // carries no key equivalent, only the label.
+            Button(hideTitle) { model?.toggleHidden() }
+                .disabled(!hasSelection)
+
             // Color tags. The ⌃1–⌃5 shortcuts are owned by ContentView's hidden
             // hotkeys (their single owner); the labels only show the key as a
             // hint so there's no competing menu equivalent. Applying the tag an
@@ -201,6 +208,10 @@ struct LoupeCommands: Commands {
             Toggle("Show Flagged Only", isOn: showFlaggedOnlyBinding)
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(model == nil)
+
+            Toggle("Show Hidden Only", isOn: showHiddenOnlyBinding)
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(model == nil || ((model?.hiddenCount ?? 0) == 0 && model?.showHiddenOnly != true))
 
             // How thumbnails are generated. `Native macOS` (Quick Look) is the
             // escape hatch for black .mp4 thumbnails the AVFoundation seek can
@@ -326,6 +337,11 @@ struct LoupeCommands: Commands {
         return count > 1 ? "Flag / Unflag Selection" : "Flag / Unflag"
     }
 
+    private var hideTitle: String {
+        let count = model?.selectedItems.count ?? 0
+        return count > 1 ? "Hide / Unhide Selection" : "Hide / Unhide"
+    }
+
     private var copyTitle: String {
         let count = model?.selectedItems.count ?? 0
         return count > 1 ? "Copy \(count) Files" : "Copy"
@@ -383,6 +399,7 @@ struct LoupeCommands: Commands {
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
+    private var showHiddenOnlyBinding: Binding<Bool> { binding(\.showHiddenOnly, default: false) }
     private var groupingBinding: Binding<GroupingDimension> { binding(\.grouping, default: .none) }
     private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
     private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }

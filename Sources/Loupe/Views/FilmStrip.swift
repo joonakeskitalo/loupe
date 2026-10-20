@@ -40,6 +40,7 @@ struct FilmStrip: View {
                             isSelected: selectedIDs.contains(item.id),
                             isCurrent: item.id == currentID,
                             isFlagged: model.isFlagged(item.id),
+                            isHidden: model.isHidden(item.id),
                             colorTag: model.colorTag(item.id),
                             method: model.thumbnailMethod,
                             videoPosition: model.videoThumbnailPosition
@@ -142,6 +143,8 @@ private struct FilmStripCell: View {
     let isCurrent: Bool
     /// Whether this item is flagged (shows a flag badge, like the grid).
     var isFlagged: Bool = false
+    /// Whether this item is hidden (shows an eye.slash badge next to the flag).
+    var isHidden: Bool = false
     /// The item's color tag, if any (shown opposite the flag badge).
     var colorTag: ColorTag? = nil
     /// The window's active thumbnail-generation method.
@@ -193,15 +196,25 @@ private struct FilmStripCell: View {
         // clearly visible.
         .opacity(isCurrent || isSelected ? 1 : 0.65)
         .overlay(alignment: .topTrailing) {
-            if isFlagged {
-                Image(systemName: "flag.fill")
-                    .font(.system(size: max(8, size * 0.16)))
-                    .foregroundStyle(.white)
-                    .padding(max(2, size * 0.05))
-                    .background(Color.orange, in: Circle())
-                    .shadow(radius: 1)
-                    .padding(3)
+            HStack(spacing: max(2, size * 0.03)) {
+                if isHidden {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: max(8, size * 0.16)))
+                        .foregroundStyle(.white)
+                        .padding(max(2, size * 0.05))
+                        .background(Color.secondary, in: Circle())
+                        .shadow(radius: 1)
+                }
+                if isFlagged {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: max(8, size * 0.16)))
+                        .foregroundStyle(.white)
+                        .padding(max(2, size * 0.05))
+                        .background(Color.orange, in: Circle())
+                        .shadow(radius: 1)
+                }
             }
+            .padding(3)
         }
         .overlay(alignment: .topLeading) {
             if let colorTag {

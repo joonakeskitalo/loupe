@@ -78,6 +78,7 @@ struct BrowserGridView: View {
             size: model.thumbnailSize,
             isSelected: model.selectedItems.contains(item.id),
             isFlagged: model.isFlagged(item.id),
+            isHidden: model.isHidden(item.id),
             colorTag: model.colorTag(item.id),
             aiCategory: model.aiCategory(item.id),
             personCount: model.persons(item.id).count,
@@ -315,6 +316,12 @@ struct BrowserGridView: View {
                 systemImage: "flag",
                 description: Text("Flag files with F to see them here, or turn off the flagged filter.")
             )
+        } else if model.showHiddenOnly {
+            ContentUnavailableView(
+                "No Hidden Files",
+                systemImage: "eye.slash",
+                description: Text("Hide files with ⌫ to see them here, or pick All Media.")
+            )
         } else if let tag = model.colorTagFilter {
             ContentUnavailableView(
                 "No \(tag.displayName) Files",
@@ -431,6 +438,14 @@ struct BrowserGridView: View {
             model.toggleFlag(item)
         }
 
+        // Hide label mirrors the flag item: shows "Unhide" when every target is
+        // already hidden, else "Hide".
+        let targetsHidden = hiddenStateForMenu(item)
+        Button(targetsHidden ? "Unhide\(suffix)" : "Hide\(suffix)",
+               systemImage: targetsHidden ? "eye" : "eye.slash") {
+            model.toggleHidden(item)
+        }
+
         colorTagMenu(for: item, suffix: suffix)
 
         if classifyTargetCount(for: item) > 0 {
@@ -519,6 +534,18 @@ struct BrowserGridView: View {
         }
         let allFlagged = !targets.isEmpty && targets.allSatisfy { model.isFlagged($0) }
         return allFlagged ? .allFlagged : .someOrNone
+    }
+
+    /// Whether every target of a hide action is already hidden, to choose
+    /// between "Hide" and "Unhide" in the menu.
+    private func hiddenStateForMenu(_ item: MediaItem) -> Bool {
+        let targets: [MediaItem.ID]
+        if model.selectedItems.contains(item.id) {
+            targets = Array(model.selectedItems)
+        } else {
+            targets = [item.id]
+        }
+        return !targets.isEmpty && targets.allSatisfy { model.isHidden($0) }
     }
 
     private func flagMenuTitle(_ state: FlagState, suffix: String) -> String {

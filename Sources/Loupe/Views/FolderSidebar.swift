@@ -29,6 +29,7 @@ struct FolderSidebar: View {
             Section("Library") {
                 Button {
                     model.showFlaggedOnly = false
+                    model.showHiddenOnly = false
                     model.colorTagFilter = nil
                     model.aiCategoryFilter = nil
                     model.personFilter = nil
@@ -40,7 +41,8 @@ struct FolderSidebar: View {
                         title: "All Media",
                         systemImage: "square.grid.3x3",
                         count: model.allItems.count > 0 ? model.allItems.count : nil,
-                        isSelected: !model.showFlaggedOnly && model.colorTagFilter == nil
+                        isSelected: !model.showFlaggedOnly && !model.showHiddenOnly
+                            && model.colorTagFilter == nil
                             && model.aiCategoryFilter == nil && model.personFilter == nil
                             && model.mode == .flattened
                     )
@@ -65,6 +67,22 @@ struct FolderSidebar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.flaggedCount == 0 && !model.showFlaggedOnly)
+                .listRowInsets(Self.rowInsets)
+
+                Button {
+                    model.showHiddenOnly = true
+                    focused = true
+                } label: {
+                    SidebarLabel(
+                        title: "Hidden",
+                        systemImage: model.showHiddenOnly ? "eye.slash.fill" : "eye.slash",
+                        count: model.hiddenCount > 0 ? model.hiddenCount : nil,
+                        isSelected: model.showHiddenOnly
+                    )
+                    .padding(.leading, -12)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.hiddenCount == 0 && !model.showHiddenOnly)
                 .listRowInsets(Self.rowInsets)
 
                 // One row per color tag, directly under Flagged. Each filters
@@ -187,7 +205,7 @@ private struct FolderRow: View {
     @State private var isExpanded: Bool = true
 
     private var isSelected: Bool {
-        !model.showFlaggedOnly && model.colorTagFilter == nil
+        !model.showFlaggedOnly && !model.showHiddenOnly && model.colorTagFilter == nil
             && model.aiCategoryFilter == nil && model.personFilter == nil
             && model.mode == .folders && model.selectedFolders.contains(node.url)
     }
@@ -195,6 +213,7 @@ private struct FolderRow: View {
     private var rowLabel: some View {
         Button {
             model.showFlaggedOnly = false
+            model.showHiddenOnly = false
             model.colorTagFilter = nil
             model.aiCategoryFilter = nil
             model.personFilter = nil

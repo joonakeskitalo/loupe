@@ -250,6 +250,34 @@ final class BrowserModel {
     var showFlaggedOnly = false {
         didSet {
             if showFlaggedOnly {
+                if showHiddenOnly { showHiddenOnly = false }
+                if colorTagFilter != nil { colorTagFilter = nil }
+                if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                if personFilter != nil { personFilter = nil }
+            }
+            clampSelection()
+        }
+    }
+
+    /// Items the user has hidden, keyed by item ID. In-session only, exactly
+    /// like `flaggedItems`: cleared when a new folder is opened and gone when
+    /// the window closes (the model is per-window).
+    ///
+    /// Unlike `flaggedItems` (an opt-in display: `showFlaggedOnly` reveals
+    /// them), hidden items are opt-out: they're filtered OUT of the grid, list
+    /// and thumbnail views by default. The "Hidden" Library view
+    /// (`showHiddenOnly`) is the one place they reappear, so the user can
+    /// unhide them.
+    var hiddenItems: Set<MediaItem.ID> = []
+
+    /// When true, the grid shows ONLY hidden items (the "Hidden" Library view),
+    /// so the user can review and unhide them. When false (the normal case),
+    /// hidden items are excluded from every view. Mutually exclusive with the
+    /// other Library filters, like `showFlaggedOnly`.
+    var showHiddenOnly = false {
+        didSet {
+            if showHiddenOnly {
+                if showFlaggedOnly { showFlaggedOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
@@ -269,6 +297,7 @@ final class BrowserModel {
         didSet {
             if colorTagFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
+                if showHiddenOnly { showHiddenOnly = false }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
             }
@@ -292,6 +321,7 @@ final class BrowserModel {
         didSet {
             if aiCategoryFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
+                if showHiddenOnly { showHiddenOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if personFilter != nil { personFilter = nil }
             }
@@ -377,6 +407,7 @@ final class BrowserModel {
         didSet {
             if personFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
+                if showHiddenOnly { showHiddenOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
             }
@@ -677,6 +708,7 @@ final class BrowserModel {
     private func pruneMissingMarks() {
         let present = Set(allItems.map(\.id))
         flaggedItems.formIntersection(present)
+        hiddenItems.formIntersection(present)
         colorTags = colorTags.filter { present.contains($0.key) }
         aiCategories = aiCategories.filter { present.contains($0.key) }
         facePersons = facePersons.filter { present.contains($0.key) }
@@ -771,6 +803,15 @@ final class BrowserModel {
             } else {
                 base = itemsInSelectedFolders()
             }
+        }
+
+        // Hidden items are opt-out: excluded from every normal view. The one
+        // exception is the "Hidden" Library view (`showHiddenOnly`), which
+        // flips the polarity to show only hidden items so they can be unhidden.
+        if showHiddenOnly {
+            base = base.filter { hiddenItems.contains($0.id) }
+        } else if !hiddenItems.isEmpty {
+            base = base.filter { !hiddenItems.contains($0.id) }
         }
 
         if showFlaggedOnly {
@@ -966,6 +1007,9 @@ final class BrowserModel {
     var searchScopeName: String {
         if showFlaggedOnly {
             return "Flagged"
+        }
+        if showHiddenOnly {
+            return "Hidden"
         }
         if let colorTagFilter {
             return "\(colorTagFilter.displayName) Tag"
@@ -1573,6 +1617,59 @@ final class BrowserModel {
     }
 
     var flaggedCount: Int { flaggedItems.count }
+
+    // MARK: - Hidden items
+
+    func isHidden(_ id: MediaItem.ID) -> Bool {
+        hiddenItems.contains(id)
+    }
+
+    /// Toggle the hidden state on the given item, or on the whole current
+    /// selection. Mirrors `toggleFlag`'s targeting: a specific unselected
+    /// `item` acts on just that item; otherwise the action covers the
+    /// selection. If any target is visible, hide them all; otherwise unhide
+    /// them all.
+    func toggleHidden(_ item: MediaItem? = nil) {
+        let targets: [MediaItem.ID]
+        if let item, !selectedItems.contains(item.id) {
+            targets = [item.id]
+        } else if !selectedItems.isEmpty {
+            targets = Array(selectedItems)
+        } else if let item {
+            targets = [item.id]
+        } else {
+            return
+        }
+
+        let anyVisible = targets.contains { !hiddenItems.contains($0) }
+        if anyVisible {
+            hiddenItems.formUnion(targets)
+        } else {
+            hiddenItems.subtract(targets)
+        }
+        clampSelection()
+    }
+
+    /// Toggle the hidden state on exactly one item, regardless of the current
+    /// selection. Parallels `toggleFlag(id:)`.
+    func toggleHidden(id: MediaItem.ID) {
+        if hiddenItems.contains(id) {
+            hiddenItems.remove(id)
+        } else {
+            hiddenItems.insert(id)
+        }
+        clampSelection()
+    }
+
+    /// Unhide every item, and leave the "Hidden" Library view if it's active
+    /// (it would otherwise show an empty list).
+    func clearHidden() {
+        hiddenItems = []
+        if showHiddenOnly { showHiddenOnly = false }
+        clampSelection()
+    }
+
+    var hiddenCount: Int { hiddenItems.count }
 
     // MARK: - Color tags
 

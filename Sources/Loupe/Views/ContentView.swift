@@ -187,6 +187,15 @@ struct ContentView: View {
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
 
+            // ⌫ (backspace) hides/unhides the selection. Kept here (not in the
+            // menu bar) as a modifier-less hotkey, gated on search/viewer focus
+            // so backspace still edits text in the search field and the viewer
+            // owns its own keys. ⌘⌫ remains "Move to Trash" (menu-owned); this
+            // is plain backspace only.
+            Button("Hide Item") { model.toggleHidden() }
+                .keyboardShortcut(.deleteBackspace, modifiers: [])
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused)
+
             // Quick sort presets. Moved off ⌃1–⌃3 (now color-tag keys) to the
             // function row: F2 Name, F3 Size, F4 File Type. (F1 is Reveal in
             // Finder.) NSFxFunctionKey code points: F2 U+F705, F3 U+F706,

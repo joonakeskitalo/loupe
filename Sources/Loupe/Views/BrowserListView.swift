@@ -131,6 +131,12 @@ struct BrowserListView: View {
                 systemImage: "flag",
                 description: Text("Flag files with F to see them here, or turn off the flagged filter.")
             )
+        } else if model.showHiddenOnly {
+            ContentUnavailableView(
+                "No Hidden Files",
+                systemImage: "eye.slash",
+                description: Text("Hide files with ⌫ to see them here, or pick All Media.")
+            )
         } else if let tag = model.colorTagFilter {
             ContentUnavailableView(
                 "No \(tag.displayName) Files",
@@ -251,6 +257,7 @@ struct BrowserListView: View {
             verticalPadding: rowVerticalPadding,
             isSelected: model.selectedItems.contains(item.id),
             isFlagged: model.isFlagged(item.id),
+            isHidden: model.isHidden(item.id),
             colorTag: model.colorTag(item.id),
             aiCategory: model.aiCategory(item.id),
             method: model.thumbnailMethod,
@@ -321,6 +328,12 @@ struct BrowserListView: View {
             model.toggleFlag(item)
         }
 
+        let targetsHidden = hiddenStateForMenu(item)
+        Button(targetsHidden ? "Unhide\(suffix)" : "Hide\(suffix)",
+               systemImage: targetsHidden ? "eye" : "eye.slash") {
+            model.toggleHidden(item)
+        }
+
         colorTagMenu(for: item, suffix: suffix)
 
         if classifyTargetCount(for: item) > 0 {
@@ -388,6 +401,18 @@ struct BrowserListView: View {
         state == .allFlagged ? "Unflag\(suffix)" : "Flag for Later\(suffix)"
     }
 
+    /// Whether every target of a hide action is already hidden, to choose
+    /// between "Hide" and "Unhide" in the menu.
+    private func hiddenStateForMenu(_ item: MediaItem) -> Bool {
+        let targets: [MediaItem.ID]
+        if model.selectedItems.contains(item.id) {
+            targets = Array(model.selectedItems)
+        } else {
+            targets = [item.id]
+        }
+        return !targets.isEmpty && targets.allSatisfy { model.isHidden($0) }
+    }
+
     /// Right-click "Color Tag" submenu, mirroring the grid's.
     @ViewBuilder
     private func colorTagMenu(for item: MediaItem, suffix: String) -> some View {
@@ -422,6 +447,9 @@ private struct ListRowView: View {
     let verticalPadding: Double
     let isSelected: Bool
     var isFlagged: Bool = false
+    /// Whether this item is hidden (shows an eye.slash badge). Only visible in
+    /// the "Hidden" Library view.
+    var isHidden: Bool = false
     var colorTag: ColorTag? = nil
     /// AI-assigned category, if classified. Shown as a small pill after the name.
     var aiCategory: String? = nil
@@ -457,12 +485,21 @@ private struct ListRowView: View {
             thumbnail
                 .frame(width: thumbSize, height: thumbSize)
                 .overlay(alignment: .topTrailing) {
-                    if isFlagged {
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.white)
-                            .padding(2)
-                            .background(Color.orange, in: Circle())
+                    HStack(spacing: 2) {
+                        if isHidden {
+                            Image(systemName: "eye.slash.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.white)
+                                .padding(2)
+                                .background(Color.secondary, in: Circle())
+                        }
+                        if isFlagged {
+                            Image(systemName: "flag.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.white)
+                                .padding(2)
+                                .background(Color.orange, in: Circle())
+                        }
                     }
                 }
                 .overlay(alignment: .topLeading) {
