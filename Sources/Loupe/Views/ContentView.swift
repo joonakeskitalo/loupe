@@ -89,12 +89,24 @@ struct ContentView: View {
                 ProgressView("Scanning \(model.rootName)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                FilterBar(model: model)
-                switch model.viewLayout {
-                case .grid:
-                    BrowserGridView(model: model, canAutoFocus: !searchFocused)
-                case .list:
-                    BrowserListView(model: model, canAutoFocus: !searchFocused)
+                // The info sidebar spans the full height from the toolbar down
+                // to the PathBar, so it sits alongside — not under — the filter
+                // bar. The filter bar and the grid/list share the left column
+                // and therefore end at the sidebar's left edge.
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        FilterBar(model: model)
+                        switch model.viewLayout {
+                        case .grid:
+                            BrowserGridView(model: model, canAutoFocus: !searchFocused)
+                        case .list:
+                            BrowserListView(model: model, canAutoFocus: !searchFocused)
+                        }
+                    }
+                    if model.showInfoSidebar {
+                        ItemInfoSidebar(model: model)
+                            .transition(.move(edge: .trailing))
+                    }
                 }
                 PathBar(model: model)
             }
@@ -290,20 +302,25 @@ struct ContentView: View {
             }
         }
 
-        // Progress while a multi-image "Copy Image As" render runs. Shown only
-        // during the copy; a single-image copy is instant and never appears.
-        ToolbarItem(id: "copyProgress") {
+        // Progress while a multi-image "Copy Image As" render or an "Export
+        // Images As" render runs. The two never overlap (export is gated on
+        // `!isExportingImages`, and a single-image copy is instant), so one
+        // slot serves both.
+        ToolbarItem(id: "imageProgress") {
             if model.isCopyingImages {
-                HStack(spacing: 6) {
-                    ProgressView(value: Double(model.copyProgress),
-                                 total: Double(max(1, model.copyTotal)))
-                        .progressViewStyle(.circular)
-                        .controlSize(.small)
-                    Text("Copying \(model.copyProgress)/\(model.copyTotal)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .help("Rendering images to copy…")
+                progressReadout(
+                    label: "Copying",
+                    done: model.copyProgress,
+                    total: model.copyTotal,
+                    help: "Rendering images to copy…"
+                )
+            } else if model.isExportingImages {
+                progressReadout(
+                    label: "Exporting",
+                    done: model.exportProgress,
+                    total: model.exportTotal,
+                    help: "Exporting images to the chosen folder…"
+                )
             }
         }
 
@@ -365,6 +382,29 @@ struct ContentView: View {
             .disabled(model.displayedItems.isEmpty)
             .help("Open selected item in viewer (Space or Return)")
         }
+
+        ToolbarItem {
+            Button {
+                withAnimation { model.toggleInfoSidebar() }
+            } label: {
+                Label("Info", systemImage: "sidebar.right")
+            }
+            .help("Show item info and metadata (⌥⌘I)")
+        }
+    }
+
+    /// A small circular-progress + count readout used by the shared
+    /// copy/export toolbar slot.
+    private func progressReadout(label: String, done: Int, total: Int, help: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView(value: Double(done), total: Double(max(1, total)))
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+            Text("\(label) \(done)/\(total)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .help(help)
     }
 
     /// Toggles the sidebar between hidden and shown (⌘S).

@@ -1,0 +1,303 @@
+import SwiftUI
+
+/// A right-hand sidebar showing information and metadata about the current
+/// selection. For a single selected item it lists its name, kind, size, pixel
+/// dimensions (and video codec), dates, color tag / flag status, and full
+/// path. For a multi-selection it summarizes the count and combined size.
+///
+/// Pixel dimensions / codec come from the same lazy metadata pipeline the list
+/// view uses (`MediaMetadataCache` for an already-resolved value, falling back
+/// to a `VideoMetadataProvider` probe), so opening the sidebar on an image or
+/// video resolves its dimensions without decoding pixels.
+struct ItemInfoSidebar: View {
+    var model: BrowserModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+                .frame(maxHeight: .infinity)
+        }
+        .frame(width: 260)
+        .frame(maxHeight: .infinity)
+        .background(.bar)
+        .overlay(alignment: .leading) { Divider() }
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        HStack {
+            Text("Info")
+                .font(.headline)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        let selected = model.selectedMediaItems
+        if selected.count > 1 {
+            multiSelection(selected)
+        } else if let item = model.primarySelectedItem {
+            SingleItemInfo(model: model, item: item)
+        } else {
+            emptyState
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "sidebar.right")
+                .font(.largeTitle)
+                .foregroundStyle(.tertiary)
+            Text("No selection")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func multiSelection(_ items: [MediaItem]) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                thumbnailStack(items)
+
+                InfoSection(title: "Selection") {
+                    InfoRow(label: "Items", value: "\(items.count)")
+                    InfoRow(
+                        label: "Total Size",
+                        value: ByteCountFormatter.string(
+                            fromByteCount: model.selectedItemsByteCount, countStyle: .file
+                        )
+                    )
+                    ForEach(kindBreakdown(items), id: \.0) { kind, count in
+                        InfoRow(label: kind.displayName, value: "\(count)")
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// A small stacked thumbnail motif for a multi-selection, hinting at how
+    /// many items are selected without rendering a full gallery.
+    @ViewBuilder
+    private func thumbnailStack(_ items: [MediaItem]) -> some View {
+        ZStack {
+            ForEach(Array(items.prefix(3).enumerated().reversed()), id: \.element.id) { index, item in
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(0.12))
+                    .overlay {
+                        Image(systemName: item.kind.fallbackSymbol)
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(width: 120, height: 120)
+                    .offset(x: CGFloat(index) * 10, y: CGFloat(index) * 10)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 150)
+    }
+
+    /// Counts of each media kind in the selection, in a stable order, omitting
+    /// kinds not present.
+    private func kindBreakdown(_ items: [MediaItem]) -> [(MediaKind, Int)] {
+        var counts: [MediaKind: Int] = [:]
+        for item in items { counts[item.kind, default: 0] += 1 }
+        let order: [MediaKind] = [.image, .video, .pdf, .audio, .markdown, .text, .other]
+        return order.compactMap { kind in
+            guard let c = counts[kind], c > 0 else { return nil }
+            return (kind, c)
+        }
+    }
+}
+
+/// The single-item detail body. Split into its own view so it can own the
+/// metadata-probe `@State` and task lifecycle keyed to the item.
+private struct SingleItemInfo: View {
+    var model: BrowserModel
+    let item: MediaItem
+
+    @State private var metadata: MediaMetadata = .empty
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                preview
+
+                InfoSection(title: "General") {
+                    InfoRow(label: "Name", value: item.name)
+                    InfoRow(label: "Kind", value: kindLabel)
+                    InfoRow(
+                        label: "Size",
+                        value: ByteCountFormatter.string(fromByteCount: item.fileSize, countStyle: .file)
+                    )
+                    if let dimensions = metadata.pixelSize?.displayString {
+                        InfoRow(label: "Dimensions", value: dimensions)
+                    }
+                    if item.kind == .video, let codec = metadata.codec {
+                        InfoRow(label: "Codec", value: codec.uppercased())
+                    }
+                }
+
+                InfoSection(title: "Dates") {
+                    InfoRow(label: "Created", value: dateString(item.creationDate))
+                    InfoRow(label: "Modified", value: dateString(item.modificationDate))
+                }
+
+                if hasAnnotations {
+                    InfoSection(title: "Tags") {
+                        if model.isFlagged(item.id) {
+                            InfoRow(label: "Flagged", value: "Yes")
+                        }
+                        if let tag = model.colorTag(item.id) {
+                            HStack {
+                                Text("Color")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                HStack(spacing: 5) {
+                                    Image(systemName: tag.symbol)
+                                        .foregroundStyle(tag.color)
+                                    Text(tag.displayName)
+                                }
+                            }
+                            .font(.callout)
+                        }
+                    }
+                }
+
+                InfoSection(title: "Location") {
+                    Text(item.url.path)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Reveal in Finder") { model.revealInFinder(item) }
+                        .controlSize(.small)
+                        .padding(.top, 2)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Resolve metadata the same way list rows do: read any cached value
+        // synchronously, then probe only when it's an image/video and missing.
+        .onChange(of: item.id, initial: true) { _, _ in
+            metadata = MediaMetadataCache.cached(for: item.url) ?? .empty
+            thumbnail = nil
+        }
+        .task(id: metadataNeedsProbe ? item.id : nil) { await probeMetadata() }
+        .task(id: item.id) { await loadThumbnail() }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.12))
+            if let thumbnail {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .padding(4)
+            } else {
+                Image(systemName: item.kind.fallbackSymbol)
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+            }
+            if item.kind == .video {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.white, .black.opacity(0.5))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 180)
+    }
+
+    private var kindLabel: String {
+        // `displayName` is plural ("Images"); singularize the common case.
+        let ext = item.url.pathExtension.uppercased()
+        let base: String
+        switch item.kind {
+        case .image: base = "Image"
+        case .video: base = "Video"
+        case .pdf: base = "PDF"
+        case .audio: base = "Audio"
+        case .markdown: base = "Markdown"
+        case .text: base = "Text"
+        case .other: base = "File"
+        }
+        return ext.isEmpty ? base : "\(base) · \(ext)"
+    }
+
+    private var hasAnnotations: Bool {
+        model.isFlagged(item.id) || model.colorTag(item.id) != nil
+    }
+
+    private var metadataNeedsProbe: Bool {
+        guard item.kind == .video || item.kind == .image else { return false }
+        return MediaMetadataCache.cached(for: item.url) == nil
+    }
+
+    private func probeMetadata() async {
+        guard item.kind == .video || item.kind == .image else { return }
+        metadata = await VideoMetadataProvider.shared.metadata(for: item.url, kind: item.kind)
+    }
+
+    private func loadThumbnail() async {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let target = CGSize(width: 240, height: 240)
+        if let result = await ThumbnailProvider.shared.thumbnail(
+            for: item.url, size: target, scale: scale,
+            method: model.thumbnailMethod, videoPosition: model.videoThumbnailPosition
+        ) {
+            thumbnail = result
+        }
+    }
+
+    private func dateString(_ date: Date) -> String {
+        guard date != .distantPast else { return "—" }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+/// A titled group of info rows with consistent spacing.
+private struct InfoSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            content
+        }
+    }
+}
+
+/// A single label/value row: muted label on the left, value on the right.
+private struct InfoRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .font(.callout)
+    }
+}

@@ -120,6 +120,13 @@ final class BrowserModel {
     /// Whether files are shown as a thumbnail grid or a detailed list.
     var viewLayout: ViewLayout = .grid
 
+    /// Whether the right-hand info sidebar (file info + metadata for the
+    /// selection) is shown. Window-scoped and in-session only.
+    var showInfoSidebar = false
+
+    /// Toggles the info sidebar on/off (⌥⌘I / toolbar button).
+    func toggleInfoSidebar() { showInfoSidebar.toggle() }
+
     /// When true, the grid hides the filename caption under each thumbnail for
     /// a denser, image-only layout.
     var hideFilenames = false
@@ -1287,6 +1294,13 @@ final class BrowserModel {
     /// All selected items in display order (used by the multi-item viewer).
     var selectedMediaItems: [MediaItem] {
         displayedItems.filter { selectedItems.contains($0.id) }
+    }
+
+    /// Combined on-disk size, in bytes, of every selected item. Zero when
+    /// nothing is selected. Used by the bottom size indicator and the info
+    /// sidebar.
+    var selectedItemsByteCount: Int64 {
+        selectedMediaItems.reduce(Int64(0)) { $0 + $1.fileSize }
     }
 
     func selectFirstIfNeeded() {
@@ -2592,6 +2606,92 @@ final class BrowserModel {
     /// Images rendered so far in the running copy, and the total requested.
     private(set) var copyProgress = 0
     private(set) var copyTotal = 0
+
+    // MARK: - Image export
+
+    /// The scale applied to exported images. Window-scoped and in-session only,
+    /// like the copy prefs. Defaults to the original resolution.
+    var exportScale: ImageCopyScale = .original
+
+    /// The encoding format for exported images (JPEG or PNG). Defaults to JPEG,
+    /// matching the copy default.
+    var exportFormat: ImageCopyFormat = .defaultFormat
+
+    /// Whether exported images drop their EXIF/GPS metadata. Mirrors the copy
+    /// toggle; only meaningful for formats that can carry metadata (JPEG).
+    var exportStripsMetadata = true
+
+    /// True while an export render is running, so the UI can show progress.
+    private(set) var isExportingImages = false
+    /// Images written so far in the running export, and the total requested.
+    private(set) var exportProgress = 0
+    private(set) var exportTotal = 0
+
+    /// Whether the current selection (or `item`) contains at least one image,
+    /// so the "Export Images" menu can enable/disable itself. Export only
+    /// operates on images, exactly like "Copy Image".
+    var canExportSelection: Bool { canCopyImageSelection }
+
+    /// Exports the selected image(s) (or `item`) into `directory`, re-encoded
+    /// at `scale` in `format`, optionally stripping metadata. Non-image items
+    /// are ignored. Returns immediately; the render runs in the background and
+    /// drives `isExportingImages`/`exportProgress`/`exportTotal` so the toolbar
+    /// can show progress.
+    ///
+    /// Falls back to the persisted export prefs when the caller doesn't pass an
+    /// override. Output files are named after the source (de-duped within the
+    /// destination so an export never clobbers an existing file).
+    func exportImages(
+        toDirectory directory: URL,
+        item: MediaItem? = nil,
+        scale: ImageCopyScale? = nil,
+        format: ImageCopyFormat? = nil,
+        stripMetadata: Bool? = nil
+    ) {
+        let urls = imageURLs(preferring: item)
+        guard !urls.isEmpty, !isExportingImages else { return }
+
+        let resolvedScale = scale ?? exportScale
+        let fmt = format ?? exportFormat
+        let strip = stripMetadata ?? exportStripsMetadata
+
+        isExportingImages = true
+        exportProgress = 0
+        exportTotal = urls.count
+
+        Task { @MainActor in
+            defer { isExportingImages = false }
+            await ImageExporter.export(
+                urls: urls,
+                toDirectory: directory,
+                scale: resolvedScale,
+                format: fmt,
+                stripMetadata: strip
+            ) { [weak self] completed, total in
+                self?.exportProgress = completed
+                self?.exportTotal = total
+            }
+        }
+    }
+
+    /// Prompts for a destination folder with an `NSOpenPanel`, then exports the
+    /// selected image(s) (or `item`) into it using the current export prefs.
+    /// No-op if nothing exportable is targeted or the user cancels. Shared by
+    /// the menu-bar command and the grid/list context menus.
+    func exportImagesToChosenFolder(_ item: MediaItem? = nil) {
+        guard !imageURLs(preferring: item).isEmpty else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        panel.message = "Choose a folder to export the selected image(s) into."
+
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        exportImages(toDirectory: directory, item: item)
+    }
 
     /// Whether a trash action currently has any target (used to enable/disable
     /// the menu item and keyboard shortcut).

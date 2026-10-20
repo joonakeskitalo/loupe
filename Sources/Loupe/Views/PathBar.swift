@@ -70,8 +70,7 @@ struct PathBar: View {
     private var sizeText: String? {
         let selected = model.selectedMediaItems
         if selected.count > 1 {
-            let total = selected.reduce(Int64(0)) { $0 + $1.fileSize }
-            return "\(selected.count) items — \(formattedSize(total))"
+            return "\(selected.count) items — \(formattedSize(model.selectedItemsByteCount))"
         }
         if let item = model.primarySelectedItem {
             return formattedSize(item.fileSize)

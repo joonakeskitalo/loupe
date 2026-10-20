@@ -140,10 +140,10 @@ enum ImageClipboard {
         progress(0, total)
 
         let rendered = await Task.detached(priority: .userInitiated) {
-            var out: [RenderedData] = []
+            var out: [ImageRenderer.Rendered] = []
             out.reserveCapacity(urls.count)
             for (index, url) in urls.enumerated() {
-                if let r = renderedData(url: url, scale: scale, format: format, stripMetadata: stripMetadata) {
+                if let r = ImageRenderer.render(url: url, scale: scale, format: format, stripMetadata: stripMetadata) {
                     out.append(r)
                 }
                 let completed = index + 1
@@ -163,8 +163,8 @@ enum ImageClipboard {
         scale: ImageCopyScale,
         format: ImageCopyFormat,
         stripMetadata: Bool
-    ) -> [RenderedData] {
-        urls.compactMap { renderedData(url: $0, scale: scale, format: format, stripMetadata: stripMetadata) }
+    ) -> [ImageRenderer.Rendered] {
+        urls.compactMap { ImageRenderer.render(url: $0, scale: scale, format: format, stripMetadata: stripMetadata) }
     }
 
     /// Writes already-rendered image data to the pasteboard. Returns the number
@@ -184,7 +184,7 @@ enum ImageClipboard {
     ///     touch disk) and their URLs go on the pasteboard, exactly like
     ///     copying several real files.
     @MainActor
-    private static func write(_ rendered: [RenderedData]) -> Int {
+    private static func write(_ rendered: [ImageRenderer.Rendered]) -> Int {
         guard !rendered.isEmpty else { return 0 }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -212,7 +212,7 @@ enum ImageClipboard {
     /// (which the OS reclaims); each file's name comes from its source so a
     /// paste into Finder keeps recognizable names, de-duped within the batch.
     @MainActor
-    private static func writeTempFile(_ r: RenderedData) -> URL? {
+    private static func writeTempFile(_ r: ImageRenderer.Rendered) -> URL? {
         let ext = r.imageType == .png ? "png" : "jpg"
         var name = "\(r.baseName).\(ext)"
         var n = 2
@@ -242,115 +242,4 @@ enum ImageClipboard {
     /// Names already used in `tempDirectory`, so repeated copies don't clobber
     /// each other and in-batch duplicates get a suffix.
     @MainActor private static var usedTempNames = Set<String>()
-
-    /// Encoded result of rendering one image: the primary image bytes (PNG or
-    /// JPEG), the UTI they're in, and an optional TIFF bitmap. All `Data`, so a
-    /// batch can cross actor boundaries (rendered off-main, written on-main).
-    private struct RenderedData: Sendable {
-        let data: Data
-        let imageType: UTType
-        let tiff: Data?
-        /// The source file's base name (no extension), used to name the
-        /// promised file when copying multiple images.
-        let baseName: String
-    }
-
-    /// Decodes `url`, applies `scale`, and encodes to pasteboard data in
-    /// `format`, keeping the source metadata only when the format can carry it
-    /// and the caller didn't ask to strip it. EXIF orientation is baked into
-    /// the pixels by the decoder, so the result is upright either way.
-    /// `nonisolated` so the heavy decode/encode can run off the main actor
-    /// (driven from a detached task in the progress-reporting `copy`). It only
-    /// touches read-only image APIs and produces `Data`, which is `Sendable`.
-    nonisolated private static func renderedData(
-        url: URL,
-        scale: ImageCopyScale,
-        format: ImageCopyFormat,
-        stripMetadata: Bool
-    ) -> RenderedData? {
-        // Find the source's pixel dimensions so percentage scales are relative
-        // to the real image and "Fit N" never upscales.
-        guard let sourceLongest = longestEdge(of: url) else { return nil }
-        let target = scale.targetLongestEdge(sourceLongestEdge: sourceLongest)
-
-        // Reuse the shared decoder (handles RAW/HEIF and bakes in orientation),
-        // capping the longest edge to the requested target. For `.original`
-        // this is the source's own longest edge, i.e. full resolution.
-        guard let cg = ImageDecoding.decodeCGImage(
-            url: url,
-            maxPixelSize: target,
-            alwaysDecodeFromFullImage: true
-        ) else {
-            return nil
-        }
-
-        // TIFF bitmap for consumers that only read generic image data. Built
-        // from the CGImage (read-only, no main-thread AppKit state), so it's
-        // safe to produce off the main actor.
-        let tiff = NSBitmapImageRep(cgImage: cg).tiffRepresentation
-        let baseName = url.deletingPathExtension().lastPathComponent
-        let type = format.utType
-
-        // Keep metadata only when the user didn't ask to strip it AND the chosen
-        // format can actually hold it (PNG has no EXIF container, so a PNG copy
-        // is always metadata-free regardless of the toggle).
-        let keepMetadata = !stripMetadata && format.canCarryMetadata
-        if keepMetadata {
-            // Attach the source's EXIF/GPS/TIFF properties. The orientation was
-            // baked into the pixels during decode, so reset the stored tag so a
-            // viewer doesn't rotate the already-upright image a second time.
-            var properties = sourceProperties(of: url) ?? [:]
-            properties[kCGImagePropertyOrientation] = 1
-            if let data = encode(cg, as: type, properties: properties) {
-                return RenderedData(data: data, imageType: type, tiff: tiff, baseName: baseName)
-            }
-            // Attaching properties failed — fall through to a plain encode.
-        }
-
-        guard let data = encode(cg, as: type, properties: nil) else { return nil }
-        return RenderedData(data: data, imageType: type, tiff: tiff, baseName: baseName)
-    }
-
-    /// Encodes a `CGImage` to the given type, optionally attaching metadata
-    /// properties (EXIF/GPS/TIFF dictionaries). Returns nil if encoding fails.
-    private static func encode(
-        _ image: CGImage,
-        as type: UTType,
-        properties: [CFString: Any]?
-    ) -> Data? {
-        let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(
-            data as CFMutableData, type.identifier as CFString, 1, nil
-        ) else {
-            return nil
-        }
-        CGImageDestinationAddImage(dest, image, properties as CFDictionary?)
-        guard CGImageDestinationFinalize(dest) else { return nil }
-        return data as Data
-    }
-
-    /// The source file's full image properties (EXIF/GPS/TIFF dictionaries),
-    /// read without decoding pixels, for re-attaching when metadata is kept.
-    private static func sourceProperties(of url: URL) -> [CFString: Any]? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else {
-            return nil
-        }
-        return props
-    }
-
-    /// The longest edge, in pixels, of the image at `url` — read cheaply from
-    /// the image source header without decoding the pixels.
-    private static func longestEdge(of url: URL) -> Int? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else {
-            return nil
-        }
-        let width = (props[kCGImagePropertyPixelWidth] as? Int) ?? 0
-        let height = (props[kCGImagePropertyPixelHeight] as? Int) ?? 0
-        let longest = max(width, height)
-        return longest > 0 ? longest : nil
-    }
 }

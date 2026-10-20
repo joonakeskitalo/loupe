@@ -61,6 +61,36 @@ struct LoupeCommands: Commands {
                 }
             }
             .disabled(!canCopyImage)
+
+            // Export the selected image(s) to a chosen folder, re-encoded at a
+            // picked resolution and format (optionally without EXIF). Mirrors
+            // "Copy Image As" but writes files to disk instead of the clipboard.
+            // Format/resolution/metadata pickers set the defaults; the final
+            // button prompts for a destination directory and runs the export.
+            Menu("Export Images As") {
+                Picker("Format", selection: exportFormatBinding) {
+                    ForEach(ImageCopyFormat.allCases, id: \.self) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+                .pickerStyle(.inline)
+
+                Picker("Resolution", selection: exportScaleBinding) {
+                    ForEach(ImageCopyScale.allCases, id: \.self) { scale in
+                        Text(scale.displayName).tag(scale)
+                    }
+                }
+                .pickerStyle(.inline)
+
+                // PNG has no EXIF container, so stripping is moot for it.
+                Toggle("Remove EXIF / Metadata", isOn: exportStripMetadataBinding)
+                    .disabled(!(model?.exportFormat.canCarryMetadata ?? true))
+
+                Divider()
+
+                Button("Export to Folder…") { exportToChosenFolder() }
+            }
+            .disabled(!canExportImage || (model?.isExportingImages ?? false))
         }
 
         // MARK: Item actions — placed after the Edit menu's pasteboard group.
@@ -170,6 +200,13 @@ struct LoupeCommands: Commands {
         // the `.sidebar` placement) rather than a second `CommandMenu("View")`,
         // which would create a duplicate menu with the same name.
         CommandGroup(after: .sidebar) {
+            Divider()
+
+            // Right-hand info sidebar (file info + metadata for the selection).
+            Button(infoSidebarToggleTitle) { model?.toggleInfoSidebar() }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(model == nil)
+
             Divider()
 
             // Layout: Grid / List.
@@ -332,6 +369,10 @@ struct LoupeCommands: Commands {
     /// the viewer's own copy handler.
     private var canCopyImage: Bool { model?.canCopyImageSelection ?? false }
 
+    /// Enabled when the selection has at least one image to export. Export only
+    /// operates on images, exactly like "Copy Image".
+    private var canExportImage: Bool { model?.canExportSelection ?? false }
+
     private var flagTitle: String {
         let count = model?.selectedItems.count ?? 0
         return count > 1 ? "Flag / Unflag Selection" : "Flag / Unflag"
@@ -373,6 +414,10 @@ struct LoupeCommands: Commands {
         return "Find Faces in All Images"
     }
 
+    private var infoSidebarToggleTitle: String {
+        (model?.showInfoSidebar ?? false) ? "Hide Info Sidebar" : "Show Info Sidebar"
+    }
+
     private var groupByFolderToggleTitle: String {
         model?.grouping == .folder ? "Ungroup" : "Group by Folder"
     }
@@ -408,5 +453,18 @@ struct LoupeCommands: Commands {
         binding(\.videoThumbnailPosition, default: .defaultPosition)
     }
     private var stripMetadataBinding: Binding<Bool> { binding(\.imageCopyStripsMetadata, default: true) }
+    private var exportFormatBinding: Binding<ImageCopyFormat> { binding(\.exportFormat, default: .defaultFormat) }
+    private var exportScaleBinding: Binding<ImageCopyScale> { binding(\.exportScale, default: .original) }
+    private var exportStripMetadataBinding: Binding<Bool> { binding(\.exportStripsMetadata, default: true) }
     private var formatBinding: Binding<ImageCopyFormat> { binding(\.imageCopyFormat, default: .defaultFormat) }
+
+    // MARK: - Export
+
+    /// Prompts for a destination folder and exports the current image
+    /// selection into it using the model's current export prefs (format,
+    /// resolution, metadata). No-op if nothing exportable is selected or the
+    /// user cancels the folder picker.
+    private func exportToChosenFolder() {
+        model?.exportImagesToChosenFolder()
+    }
 }

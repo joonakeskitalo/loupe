@@ -491,6 +491,29 @@ struct BrowserGridView: View {
                     }
                 }
             }
+            // Export the picture(s) to a chosen folder, re-encoded at a picked
+            // resolution and format (optionally without EXIF).
+            Menu("Export Image As") {
+                Picker("Format", selection: $model.exportFormat) {
+                    ForEach(ImageCopyFormat.allCases, id: \.self) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+                .pickerStyle(.inline)
+                Picker("Resolution", selection: $model.exportScale) {
+                    ForEach(ImageCopyScale.allCases, id: \.self) { scale in
+                        Text(scale.displayName).tag(scale)
+                    }
+                }
+                .pickerStyle(.inline)
+                Toggle("Remove EXIF / Metadata", isOn: $model.exportStripsMetadata)
+                    .disabled(!model.exportFormat.canCarryMetadata)
+                Divider()
+                Button("Export to Folder…") {
+                    model.exportImagesToChosenFolder(item)
+                }
+            }
+            .disabled(model.isExportingImages)
         }
         Button("Open with Default App\(suffix)") {
             model.openInDefaultApp(item)
