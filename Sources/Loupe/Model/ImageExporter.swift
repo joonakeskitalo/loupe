@@ -30,6 +30,7 @@ enum ImageExporter {
         scale: ImageCopyScale,
         format: ImageCopyFormat,
         stripMetadata: Bool,
+        maxLongEdge: Int? = nil,
         progress: @escaping @MainActor (_ completed: Int, _ total: Int) -> Void
     ) async -> Result {
         let total = urls.count
@@ -58,6 +59,7 @@ enum ImageExporter {
                     scale: scale,
                     format: format,
                     stripMetadata: stripMetadata,
+                    maxLongEdge: maxLongEdge,
                     includeTIFF: false
                 ) else { continue }
 

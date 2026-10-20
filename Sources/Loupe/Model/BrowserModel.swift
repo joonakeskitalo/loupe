@@ -2621,11 +2621,38 @@ final class BrowserModel {
     /// toggle; only meaningful for formats that can carry metadata (JPEG).
     var exportStripsMetadata = true
 
+    /// When true, a manually-entered long-edge pixel width (`exportCustomLongEdge`)
+    /// overrides `exportScale`. Lets the user cap the output to an exact size
+    /// instead of a preset percentage / fit option.
+    var exportUseCustomLongEdge = false
+
+    /// The user-entered longest-edge cap, in pixels, used when
+    /// `exportUseCustomLongEdge` is on. Never upscales a smaller source.
+    var exportCustomLongEdge = 1920
+
+    /// The last folder an export was sent to, remembered so "Quick Export" can
+    /// reuse it without prompting again. Window-scoped and in-session only.
+    private(set) var lastExportDirectory: URL?
+
     /// True while an export render is running, so the UI can show progress.
     private(set) var isExportingImages = false
     /// Images written so far in the running export, and the total requested.
     private(set) var exportProgress = 0
     private(set) var exportTotal = 0
+
+    /// The custom long-edge value to apply to an export, or `nil` when the
+    /// custom cap is off or not a usable positive number (so the scale preset
+    /// is used instead).
+    private var activeCustomLongEdge: Int? {
+        guard exportUseCustomLongEdge, exportCustomLongEdge > 0 else { return nil }
+        return exportCustomLongEdge
+    }
+
+    /// Whether a quick re-export is possible: there's a remembered destination
+    /// and the target contains at least one image.
+    func canQuickExport(_ item: MediaItem? = nil) -> Bool {
+        lastExportDirectory != nil && !imageURLs(preferring: item).isEmpty
+    }
 
     /// Whether the current selection (or `item`) contains at least one image,
     /// so the "Export Images" menu can enable/disable itself. Export only
@@ -2654,6 +2681,10 @@ final class BrowserModel {
         let resolvedScale = scale ?? exportScale
         let fmt = format ?? exportFormat
         let strip = stripMetadata ?? exportStripsMetadata
+        let longEdge = activeCustomLongEdge
+
+        // Remember the destination so "Quick Export" can reuse it this session.
+        lastExportDirectory = directory
 
         isExportingImages = true
         exportProgress = 0
@@ -2666,12 +2697,22 @@ final class BrowserModel {
                 toDirectory: directory,
                 scale: resolvedScale,
                 format: fmt,
-                stripMetadata: strip
+                stripMetadata: strip,
+                maxLongEdge: longEdge
             ) { [weak self] completed, total in
                 self?.exportProgress = completed
                 self?.exportTotal = total
             }
         }
+    }
+
+    /// Re-exports the selected image(s) (or `item`) into the previously-chosen
+    /// folder without prompting again. No-op if no folder has been chosen yet
+    /// this session or there's nothing exportable. Uses the current export
+    /// prefs, exactly like a full export.
+    func quickExport(_ item: MediaItem? = nil) {
+        guard let directory = lastExportDirectory else { return }
+        exportImages(toDirectory: directory, item: item)
     }
 
     /// Prompts for a destination folder with an `NSOpenPanel`, then exports the

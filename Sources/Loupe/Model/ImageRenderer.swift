@@ -30,17 +30,27 @@ enum ImageRenderer {
     /// `nonisolated` and only touches read-only image APIs, producing `Data`
     /// (which is `Sendable`), so the heavy decode/encode can run off the main
     /// actor from a detached task.
+    /// When `maxLongEdge` is non-nil it overrides `scale`, capping the output's
+    /// longest edge at that pixel count (never upscaling a smaller source) —
+    /// used by the export UI's custom long-edge field.
     nonisolated static func render(
         url: URL,
         scale: ImageCopyScale,
         format: ImageCopyFormat,
         stripMetadata: Bool,
+        maxLongEdge: Int? = nil,
         includeTIFF: Bool = true
     ) -> Rendered? {
         // Find the source's pixel dimensions so percentage scales are relative
         // to the real image and "Fit N" never upscales.
         guard let sourceLongest = longestEdge(of: url) else { return nil }
-        let target = scale.targetLongestEdge(sourceLongestEdge: sourceLongest)
+        let target: Int
+        if let maxLongEdge, maxLongEdge > 0 {
+            // Custom cap: never upscale past the source's own longest edge.
+            target = min(sourceLongest, maxLongEdge)
+        } else {
+            target = scale.targetLongestEdge(sourceLongestEdge: sourceLongest)
+        }
 
         // Reuse the shared decoder (handles RAW/HEIF and bakes in orientation),
         // capping the longest edge to the requested target. For `.original`

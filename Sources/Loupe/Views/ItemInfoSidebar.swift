@@ -307,6 +307,32 @@ private struct ExportSection: View {
             }
             .pickerStyle(.menu)
             .controlSize(.small)
+            // The preset is ignored when a custom long edge is in effect, so
+            // dim it to make the override obvious.
+            .disabled(model.exportUseCustomLongEdge)
+
+            // Custom long-edge override: cap the longest edge to an exact pixel
+            // width the user types. Never upscales a smaller source.
+            Toggle("Custom Long Edge", isOn: $model.exportUseCustomLongEdge)
+                .controlSize(.small)
+
+            if model.exportUseCustomLongEdge {
+                HStack(spacing: 6) {
+                    TextField(
+                        "px",
+                        value: $model.exportCustomLongEdge,
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 90)
+                    Text("px")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
 
             // PNG has no EXIF container, so stripping is moot for it.
             Toggle("Remove EXIF / Metadata", isOn: $model.exportStripsMetadata)
@@ -332,6 +358,22 @@ private struct ExportSection: View {
                 }
                 .controlSize(.small)
                 .padding(.top, 2)
+
+                // Quick re-export to the last-used folder, no prompt. Only
+                // enabled once a folder has been chosen this session.
+                if model.canQuickExport(item), let dir = model.lastExportDirectory {
+                    Button {
+                        model.quickExport(item)
+                    } label: {
+                        Label("Quick Export to \(dir.lastPathComponent)",
+                              systemImage: "bolt")
+                            .frame(maxWidth: .infinity)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .controlSize(.small)
+                    .help("Export again to \(dir.path) without choosing a folder.")
+                }
             }
         }
     }
