@@ -2496,7 +2496,11 @@ final class BrowserModel {
         guard !urls.isEmpty else { return 0 }
 
         // Remember where the cursor was so we can land on the next item.
-        let order = displayedItems.map(\.id)
+        // Use the on-screen (grouping-aware) order so the cursor advances to the
+        // item that visually follows the deleted one, matching keyboard nav. The
+        // flat `displayedItems` order would land on an unrelated item whenever a
+        // grouping is active, since its index positions differ from what's drawn.
+        let order = visualOrderItems.map(\.id)
         let trashedSet = Set(urls)
         let firstTrashedIndex = order.firstIndex { trashedSet.contains($0) }
         // How many items the viewer was showing before this trash, so a
@@ -2522,7 +2526,8 @@ final class BrowserModel {
 
         // Choose a new primary selection: the item that now occupies the first
         // trashed slot, or the last surviving item if we trashed the tail.
-        let survivors = displayedItems.map(\.id)
+        // Index against the same visual order used to record `firstTrashedIndex`.
+        let survivors = visualOrderItems.map(\.id)
         if survivors.isEmpty {
             clearSelection()
             isViewerPresented = false
