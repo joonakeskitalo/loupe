@@ -55,7 +55,10 @@ struct MediaViewer: View {
             // never overlaps content.
             toolbar
 
-            // Media area.
+            // Media area, with the optional info sidebar trailing it so the
+            // sidebar sits beside the content (never over it) and spans the
+            // same vertical band as the media.
+            HStack(spacing: 0) {
             ZStack {
                 Color.black
                 if items.isEmpty {
@@ -108,6 +111,14 @@ struct MediaViewer: View {
                         onNext: { model.moveSelection(by: 1) }
                     )
                 }
+            }
+
+            // Info sidebar beside the media (same flag the grid uses, so the
+            // visibility is shared between the grid and the viewer).
+            if model.showInfoSidebar {
+                ItemInfoSidebar(model: model)
+                    .transition(.move(edge: .trailing))
+            }
             }
 
             // Film strip of thumbnails for quick navigation between items.
@@ -396,10 +407,30 @@ struct MediaViewer: View {
                 }
                 filmStripToggle
             }
+
+            Divider().frame(height: 16).overlay(Color.white.opacity(0.2))
+            infoSidebarToggle
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(white: 0.08))
+    }
+
+    /// Toggle button for the info sidebar's visibility (shared with the grid).
+    private var infoSidebarToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.toggleInfoSidebar()
+            }
+        } label: {
+            Image(systemName: "sidebar.right")
+                .font(.body)
+                .foregroundStyle(model.showInfoSidebar ? Color.accentColor : .white)
+                .padding(6)
+                .background(.white.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(model.showInfoSidebar ? "Hide info sidebar (⌥⌘I)" : "Show info sidebar (⌥⌘I)")
     }
 
     /// Toggle button for the film strip's visibility.
