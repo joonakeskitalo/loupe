@@ -6,34 +6,26 @@ import Foundation
 /// access to the chosen folder (required under the sandbox, same as image
 /// export), de-duping output names, and reporting progress.
 enum VideoExporter {
-    struct Result: Sendable {
-        let written: Int
-        let total: Int
-    }
-
-    /// Transcodes every video in `urls` into `directory` at `resolution`,
-    /// writing `.mp4` outputs. `progress` is called on the main actor with the
-    /// number completed, the total, and the current file's 0...1 fraction so a
-    /// combined progress bar can advance smoothly within and across files.
+    /// Transcodes a single video into `destinationDirectory` at `resolution` /
+    /// `codec` / `rateControl`, writing an `.mp4` named after the source
+    /// (de-duped against the folder). Runs the CPU-heavy transcode on a
+    /// detached task; `progress` is called on the main actor with the file's
+    /// 0...1 fraction. Returns true on success.
     ///
-    /// The transcode is CPU-heavy, so it runs on a detached task to keep the UI
-    /// responsive.
-    @discardableResult
+    /// This is the per-job primitive the model's video-export queue calls once
+    /// for each queued video, so the queue controls ordering/concurrency.
     @MainActor
-    static func export(
-        urls: [URL],
-        toDirectory directory: URL,
+    static func transcodeOne(
+        sourceURL: URL,
+        destinationDirectory directory: URL,
         resolution: VideoTranscoder.Resolution,
         codec: VideoTranscoder.Codec,
         rateControl: VideoTranscoder.RateControl,
-        progress: @escaping @MainActor (_ completed: Int, _ total: Int, _ fraction: Double) -> Void
-    ) async -> Result {
-        let total = urls.count
-        progress(0, total, 0)
+        progress: @escaping @MainActor (_ fraction: Double) -> Void
+    ) async -> Bool {
+        progress(0)
 
-        let written = await Task.detached(priority: .userInitiated) {
-            var usedNames = Set<String>()
-            var count = 0
+        return await Task.detached(priority: .userInitiated) {
             let fm = FileManager.default
 
             // Claim security-scoped access to the chosen folder before writing,
@@ -41,62 +33,54 @@ enum VideoExporter {
             let scoped = directory.startAccessingSecurityScopedResource()
             defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
 
-            for (index, url) in urls.enumerated() {
-                let baseName = url.deletingPathExtension().lastPathComponent
-                let dest = Self.uniqueDestination(
-                    directory: directory,
-                    baseName: baseName,
-                    ext: "mp4",
-                    usedNames: &usedNames,
-                    fileManager: fm
-                )
+            let baseName = sourceURL.deletingPathExtension().lastPathComponent
+            let dest = Self.uniqueDestination(
+                directory: directory,
+                baseName: baseName,
+                ext: "mp4",
+                fileManager: fm
+            )
 
-                let completedBefore = index
-                do {
-                    try VideoTranscoder.transcode(
-                        input: url,
-                        output: dest,
-                        resolution: resolution,
-                        codec: codec,
-                        rateControl: rateControl
-                    ) { fraction in
-                        Task { @MainActor in progress(completedBefore, total, fraction) }
-                    }
-                    count += 1
-                } catch {
-                    NSLog("Loupe: failed to transcode \(url.path) → \(dest.path): \(error)")
-                    // Remove any partial output so a failed export doesn't leave
-                    // a broken file behind.
-                    try? fm.removeItem(at: dest)
+            do {
+                try VideoTranscoder.transcode(
+                    input: sourceURL,
+                    output: dest,
+                    resolution: resolution,
+                    codec: codec,
+                    rateControl: rateControl
+                ) { fraction in
+                    Task { @MainActor in progress(fraction) }
                 }
-
-                let completed = index + 1
-                await MainActor.run { progress(completed, total, 1.0) }
+                await MainActor.run { progress(1.0) }
+                return true
+            } catch {
+                NSLog("Loupe: failed to transcode \(sourceURL.path) → \(dest.path): \(error)")
+                // Remove any partial output so a failed export doesn't leave a
+                // broken file behind.
+                try? fm.removeItem(at: dest)
+                return false
             }
-            return count
         }.value
-
-        return Result(written: written, total: total)
     }
 
     /// Builds a destination URL in `directory` for `baseName`.`ext`, appending
-    /// a numeric suffix until it finds a free name (matching ImageExporter).
+    /// a numeric suffix until it finds a name free on disk (matching
+    /// ImageExporter). Since the queue runs jobs serially, a filesystem check
+    /// alone keeps successive outputs from colliding.
     nonisolated private static func uniqueDestination(
         directory: URL,
         baseName: String,
         ext: String,
-        usedNames: inout Set<String>,
         fileManager fm: FileManager
     ) -> URL {
         var name = "\(baseName).\(ext)"
         var candidate = directory.appendingPathComponent(name)
         var n = 2
-        while usedNames.contains(name) || fm.fileExists(atPath: candidate.path) {
+        while fm.fileExists(atPath: candidate.path) {
             name = "\(baseName) \(n).\(ext)"
             candidate = directory.appendingPathComponent(name)
             n += 1
         }
-        usedNames.insert(name)
         return candidate
     }
 }

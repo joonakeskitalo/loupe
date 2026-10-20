@@ -2851,13 +2851,59 @@ final class BrowserModel {
             : .automaticBitrate
     }
 
-    /// True while a video transcode is running, so the UI can show progress.
-    private(set) var isExportingVideo = false
-    /// 0...1 progress of the running transcode (best-effort), and how many of
-    /// the batch have finished / the total requested.
-    private(set) var videoExportFraction: Double = 0
-    private(set) var videoExportCompleted = 0
-    private(set) var videoExportTotal = 0
+    // MARK: Video export queue
+
+    /// A single queued/running/finished video transcode. Each selected video
+    /// becomes one job; the queue processes them one at a time so the machine
+    /// isn't swamped and the UI can report exactly which file is encoding.
+    struct VideoExportJob: Identifiable, Sendable {
+        enum Status: Sendable, Equatable {
+            case queued
+            case transcoding(fraction: Double)
+            case completed
+            case failed
+
+            var isActive: Bool {
+                if case .transcoding = self { return true }
+                return false
+            }
+            var isFinished: Bool { self == .completed || self == .failed }
+        }
+
+        let id = UUID()
+        let sourceURL: URL
+        let destinationDirectory: URL
+        let resolution: VideoTranscoder.Resolution
+        let codec: VideoTranscoder.Codec
+        let rateControl: VideoTranscoder.RateControl
+        var status: Status = .queued
+
+        /// The source file's display name (for the queue list).
+        var name: String { sourceURL.lastPathComponent }
+    }
+
+    /// The transcode queue, in processing order. Jobs are appended by the
+    /// export actions and drained one at a time by `drainVideoExportQueue`.
+    /// Finished jobs stay in the list (so the user sees results) until cleared.
+    private(set) var videoExportQueue: [VideoExportJob] = []
+
+    /// True while the queue worker is actively draining jobs.
+    private(set) var isDrainingVideoQueue = false
+
+    /// Whether anything in the queue is still queued or transcoding.
+    var hasPendingVideoExports: Bool {
+        videoExportQueue.contains { !$0.status.isFinished }
+    }
+
+    /// The job currently being transcoded, if any.
+    var activeVideoExportJob: VideoExportJob? {
+        videoExportQueue.first { $0.status.isActive }
+    }
+
+    /// Number of jobs still waiting (not yet started).
+    var queuedVideoExportCount: Int {
+        videoExportQueue.filter { $0.status == .queued }.count
+    }
 
     /// Video URLs among the given items (or the current selection), in display
     /// order. The video counterpart to `imageURLs`.
@@ -2884,17 +2930,17 @@ final class BrowserModel {
         lastExportDirectory != nil && !videoURLs(preferring: item).isEmpty
     }
 
-    /// Transcodes the selected video(s) (or `item`) into `directory` at
-    /// `exportVideoResolution`, copying the audio stream. Non-video items are
-    /// ignored. Returns immediately; the transcode runs on a detached task and
-    /// drives `isExportingVideo` / `videoExportFraction` /
-    /// `videoExportCompleted` / `videoExportTotal` so the UI can show progress.
+    /// Enqueues the selected video(s) (or `item`) for transcoding into
+    /// `directory` at the current resolution/codec/quality prefs, copying the
+    /// audio stream. Non-video items are ignored. One job is added per video;
+    /// the queue drains them one at a time in the background, so this returns
+    /// immediately and multiple exports can be queued up.
     ///
     /// Output files are MP4s named after the source, de-duped against the
     /// destination so an export never clobbers an existing file.
     func exportVideos(toDirectory directory: URL, item: MediaItem? = nil) {
         let urls = videoURLs(preferring: item)
-        guard !urls.isEmpty, !isExportingVideo else { return }
+        guard !urls.isEmpty else { return }
 
         let resolution = exportVideoResolution
         let codec = exportVideoCodec
@@ -2903,25 +2949,73 @@ final class BrowserModel {
         // Remember the destination so "Quick Export" can reuse it this session.
         lastExportDirectory = directory
 
-        isExportingVideo = true
-        videoExportFraction = 0
-        videoExportCompleted = 0
-        videoExportTotal = urls.count
+        for url in urls {
+            videoExportQueue.append(
+                VideoExportJob(
+                    sourceURL: url,
+                    destinationDirectory: directory,
+                    resolution: resolution,
+                    codec: codec,
+                    rateControl: rateControl
+                )
+            )
+        }
+
+        startVideoExportQueueIfNeeded()
+    }
+
+    /// Starts the serial queue worker if it isn't already running. The worker
+    /// processes jobs in order, transcoding each on a detached task and
+    /// publishing per-job progress back onto the queue so the UI updates.
+    private func startVideoExportQueueIfNeeded() {
+        guard !isDrainingVideoQueue else { return }
+        isDrainingVideoQueue = true
 
         Task { @MainActor in
-            defer { isExportingVideo = false }
-            await VideoExporter.export(
-                urls: urls,
-                toDirectory: directory,
-                resolution: resolution,
-                codec: codec,
-                rateControl: rateControl
-            ) { [weak self] completed, total, fraction in
-                self?.videoExportCompleted = completed
-                self?.videoExportTotal = total
-                self?.videoExportFraction = fraction
+            defer { isDrainingVideoQueue = false }
+            await drainVideoExportQueue()
+        }
+    }
+
+    /// Processes every still-queued job in order, one at a time.
+    private func drainVideoExportQueue() async {
+        while let index = videoExportQueue.firstIndex(where: { $0.status == .queued }) {
+            let job = videoExportQueue[index]
+            videoExportQueue[index].status = .transcoding(fraction: 0)
+            let jobID = job.id
+
+            let succeeded = await VideoExporter.transcodeOne(
+                sourceURL: job.sourceURL,
+                destinationDirectory: job.destinationDirectory,
+                resolution: job.resolution,
+                codec: job.codec,
+                rateControl: job.rateControl
+            ) { [weak self] fraction in
+                guard let self else { return }
+                if let i = self.videoExportQueue.firstIndex(where: { $0.id == jobID }) {
+                    self.videoExportQueue[i].status = .transcoding(fraction: fraction)
+                }
+            }
+
+            if let i = videoExportQueue.firstIndex(where: { $0.id == jobID }) {
+                videoExportQueue[i].status = succeeded ? .completed : .failed
             }
         }
+    }
+
+    /// Removes a job from the queue. A job that's currently transcoding can't
+    /// be removed (its work is already in flight); only queued or finished jobs
+    /// can be dropped.
+    func removeVideoExportJob(_ id: VideoExportJob.ID) {
+        guard let index = videoExportQueue.firstIndex(where: { $0.id == id }),
+              !videoExportQueue[index].status.isActive else { return }
+        videoExportQueue.remove(at: index)
+    }
+
+    /// Clears all finished (completed/failed) jobs from the queue, leaving any
+    /// queued or in-flight ones.
+    func clearFinishedVideoExports() {
+        videoExportQueue.removeAll { $0.status.isFinished }
     }
 
     /// Re-transcodes the selected video(s) into the previously-chosen folder

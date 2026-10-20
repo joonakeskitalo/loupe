@@ -18,6 +18,13 @@ struct ItemInfoSidebar: View {
             Divider()
             content
                 .frame(maxHeight: .infinity)
+            // The transcode queue is pinned to the bottom, independent of the
+            // current selection, so switching videos never misattributes an
+            // in-flight export. Shown only while the queue has entries.
+            if !model.videoExportQueue.isEmpty {
+                Divider()
+                VideoExportQueueView(model: model)
+            }
         }
         .frame(width: 260)
         .frame(maxHeight: .infinity)
@@ -469,47 +476,37 @@ private struct VideoExportSection: View {
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if model.isExportingVideo {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: perFileProgress)
-                        .progressViewStyle(.linear)
-                    Text("Transcoding \(min(model.videoExportCompleted + 1, model.videoExportTotal))/\(model.videoExportTotal)…")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.top, 2)
-            } else {
+            // The buttons always enqueue — transcodes run in the queue (shown
+            // at the bottom of the sidebar), so you can keep adding videos
+            // while others encode.
+            Button {
+                model.exportVideosToChosenFolder(item)
+            } label: {
+                Label(addLabel, systemImage: "square.and.arrow.down")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.small)
+            .padding(.top, 2)
+
+            if model.canQuickExportVideo(item), let dir = model.lastExportDirectory {
                 Button {
-                    model.exportVideosToChosenFolder(item)
+                    model.quickExportVideo(item)
                 } label: {
-                    Label("Export to Folder…", systemImage: "square.and.arrow.down")
+                    Label("Quick Add to \(dir.lastPathComponent)", systemImage: "bolt")
                         .frame(maxWidth: .infinity)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 .controlSize(.small)
-                .padding(.top, 2)
-
-                if model.canQuickExportVideo(item), let dir = model.lastExportDirectory {
-                    Button {
-                        model.quickExportVideo(item)
-                    } label: {
-                        Label("Quick Export to \(dir.lastPathComponent)", systemImage: "bolt")
-                            .frame(maxWidth: .infinity)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .controlSize(.small)
-                    .help("Transcode again to \(dir.path) without choosing a folder.")
-                }
+                .help("Queue a transcode to \(dir.path) without choosing a folder.")
             }
         }
     }
 
-    /// Combined progress across the batch: completed files plus the current
-    /// file's fraction, over the total count.
-    private var perFileProgress: Double {
-        guard model.videoExportTotal > 0 else { return 0 }
-        let done = Double(model.videoExportCompleted) + model.videoExportFraction
-        return min(1.0, done / Double(model.videoExportTotal))
+    /// The primary button's label: "Add to Queue" when something is already
+    /// transcoding/queued, else the plain "Export to Folder…".
+    private var addLabel: String {
+        model.hasPendingVideoExports ? "Add to Export Queue…" : "Export to Folder…"
     }
 
     /// A one-line description of the selected codec, so the user understands
@@ -520,6 +517,116 @@ private struct VideoExportSection: View {
             return "Rescales video, copies audio. MP4 / H.264 — widely compatible, software encode (slower)."
         case .hevcVideoToolbox:
             return "Rescales video, copies audio. MP4 / H.265 — hardware encode (much faster), smaller files."
+        }
+    }
+}
+
+/// The transcode queue, pinned to the bottom of the sidebar. Lists every
+/// queued / in-progress / finished job with its source name and status, so the
+/// user always sees exactly which video is being transcoded — independent of
+/// whatever is currently selected. Scrolls when the queue is long.
+private struct VideoExportQueueView: View {
+    @Bindable var model: BrowserModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Transcode Queue")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if model.hasPendingVideoExports {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Spacer()
+                Text(summary)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(model.videoExportQueue) { job in
+                        VideoExportQueueRow(job: job) {
+                            model.removeVideoExportJob(job.id)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 160)
+
+            if model.videoExportQueue.contains(where: { $0.status.isFinished }) {
+                Button("Clear Finished") { model.clearFinishedVideoExports() }
+                    .controlSize(.small)
+                    .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// "1 of 3" while draining, else a finished count.
+    private var summary: String {
+        let total = model.videoExportQueue.count
+        let finished = model.videoExportQueue.filter { $0.status.isFinished }.count
+        if model.hasPendingVideoExports {
+            return "\(finished + 1) of \(total)"
+        }
+        return "\(finished)/\(total) done"
+    }
+}
+
+/// A single row in the transcode queue: a status glyph (or spinner), the
+/// source file name, an inline progress bar while it's encoding, and a remove
+/// button for queued/finished jobs.
+private struct VideoExportQueueRow: View {
+    let job: BrowserModel.VideoExportJob
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 6) {
+                statusGlyph
+                Text(job.name)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                // Queued or finished jobs can be removed; an active one can't.
+                if !job.status.isActive {
+                    Button {
+                        onRemove()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove from queue")
+                }
+            }
+            if case .transcoding(let fraction) = job.status {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .controlSize(.mini)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusGlyph: some View {
+        switch job.status {
+        case .queued:
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+        case .transcoding:
+            ProgressView()
+                .controlSize(.mini)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
         }
     }
 }
