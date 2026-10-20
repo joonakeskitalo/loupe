@@ -2834,6 +2834,23 @@ final class BrowserModel {
     /// or hardware H.265 via VideoToolbox (much faster, smaller files).
     var exportVideoCodec: VideoTranscoder.Codec = .h264
 
+    /// When true, a video export targets a fixed perceptual quality
+    /// (`exportVideoConstantQuality`) rather than an automatic bitrate. On by
+    /// default.
+    var exportVideoUseConstantQuality = true
+
+    /// The constant-quality (CQ) value for a video export, on a 0...100 scale
+    /// (higher = better quality, larger file). Defaults to 60.
+    var exportVideoConstantQuality = 60
+
+    /// The rate-control mode derived from the two prefs above, passed to the
+    /// transcoder.
+    var exportVideoRateControl: VideoTranscoder.RateControl {
+        exportVideoUseConstantQuality
+            ? .constantQuality(exportVideoConstantQuality)
+            : .automaticBitrate
+    }
+
     /// True while a video transcode is running, so the UI can show progress.
     private(set) var isExportingVideo = false
     /// 0...1 progress of the running transcode (best-effort), and how many of
@@ -2881,6 +2898,7 @@ final class BrowserModel {
 
         let resolution = exportVideoResolution
         let codec = exportVideoCodec
+        let rateControl = exportVideoRateControl
 
         // Remember the destination so "Quick Export" can reuse it this session.
         lastExportDirectory = directory
@@ -2896,7 +2914,8 @@ final class BrowserModel {
                 urls: urls,
                 toDirectory: directory,
                 resolution: resolution,
-                codec: codec
+                codec: codec,
+                rateControl: rateControl
             ) { [weak self] completed, total, fraction in
                 self?.videoExportCompleted = completed
                 self?.videoExportTotal = total

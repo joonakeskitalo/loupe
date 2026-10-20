@@ -430,6 +430,40 @@ private struct VideoExportSection: View {
             .pickerStyle(.menu)
             .controlSize(.small)
 
+            // Rate control: constant quality (fixed perceptual quality, varies
+            // file size) vs. an automatic bitrate.
+            Toggle("Constant Quality", isOn: $model.exportVideoUseConstantQuality)
+                .controlSize(.small)
+
+            if model.exportVideoUseConstantQuality {
+                HStack(spacing: 6) {
+                    Text("CQ")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        "CQ",
+                        value: $model.exportVideoConstantQuality,
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 56)
+                    Stepper(
+                        "",
+                        value: $model.exportVideoConstantQuality,
+                        in: 0...100,
+                        step: 5
+                    )
+                    .labelsHidden()
+                    .controlSize(.small)
+                    Spacer()
+                }
+                Text("0–100, higher is better quality and larger files.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             Text(codecHint)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)

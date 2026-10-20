@@ -84,6 +84,24 @@ enum VideoTranscoder {
         var isVideoToolbox: Bool { self == .hevcVideoToolbox }
     }
 
+    /// How the encoder decides bit allocation.
+    ///
+    /// `.constantQuality(cq)` targets a fixed perceptual quality rather than a
+    /// fixed size — the encoder spends whatever bits each frame needs to hit
+    /// that quality. The `cq` scale is 0...100 (higher = better quality, bigger
+    /// file), matching VideoToolbox's quality scale; for the software x264
+    /// encoder it's mapped onto CRF.
+    ///
+    /// `.automaticBitrate` targets a bitrate derived from the output resolution
+    /// and frame rate (the original behavior).
+    enum RateControl: Sendable, Equatable {
+        case constantQuality(Int)
+        case automaticBitrate
+
+        /// The default: constant quality at CQ 60.
+        static let `default`: RateControl = .constantQuality(60)
+    }
+
     enum TranscodeError: Error {
         case openInput
         case streamInfo
@@ -111,6 +129,7 @@ enum VideoTranscoder {
         output: URL,
         resolution: Resolution,
         codec: Codec = .h264,
+        rateControl: RateControl = .default,
         progress: (@Sendable (Double) -> Void)? = nil
     ) throws {
         // MARK: Open input
@@ -193,22 +212,43 @@ enum VideoTranscoder {
         var opts: OpaquePointer? = nil // AVDictionary*
         defer { av_dict_free(&opts) }
 
+        // Average bitrate used by `.automaticBitrate` (and as a VideoToolbox
+        // ceiling in constant-quality mode): scaled to the output pixels/sec
+        // for roughly visually-transparent HEVC (~0.07 bits per pixel/frame).
+        let fps = frameRate.den > 0 ? Double(frameRate.num) / Double(frameRate.den) : 30
+        let autoBitrate = Int64(max(1_000_000.0, Double(dstW * evenDstH) * fps * 0.07))
+
         if chosenCodec.isVideoToolbox {
-            // VideoToolbox doesn't honor x264-style CRF. Target a bitrate
-            // scaled to the output resolution and frame rate for roughly
-            // visually-transparent HEVC (~0.07 bits per pixel per frame). Also
-            // allow the software fallback so machines without the hardware
-            // path still succeed.
-            let fps = frameRate.den > 0 ? Double(frameRate.num) / Double(frameRate.den) : 30
-            let pixelsPerSecond = Double(dstW * evenDstH) * fps
-            let bitrate = Int64(max(1_000_000.0, pixelsPerSecond * 0.07))
-            encCtx.pointee.bit_rate = bitrate
+            // Allow the software fallback so machines without the hardware path
+            // still succeed.
             av_dict_set(&opts, "allow_sw", "1", 0)
             av_dict_set(&opts, "realtime", "0", 0)
+
+            switch rateControl {
+            case .constantQuality(let cq):
+                // VideoToolbox constant quality. FFmpeg's `-q:v N` convention is
+                // `global_quality = N * FF_QP2LAMBDA` with the QSCALE flag set;
+                // the encoder reads it back on its 0...100 quality scale (higher
+                // is better). Clamp to that range.
+                let q = max(0, min(100, cq))
+                encCtx.pointee.flags |= AV_CODEC_FLAG_QSCALE
+                encCtx.pointee.global_quality = Int32(q) * FF_QP2LAMBDA
+            case .automaticBitrate:
+                encCtx.pointee.bit_rate = autoBitrate
+            }
         } else {
-            // x264: reasonable speed/quality default (constant-quality CRF).
+            // Software x264.
             av_dict_set(&opts, "preset", "medium", 0)
-            av_dict_set(&opts, "crf", "20", 0)
+            switch rateControl {
+            case .constantQuality(let cq):
+                // Map the 0...100 quality scale onto x264 CRF (0...51, lower is
+                // better): CQ 100 → CRF 0 (near-lossless), CQ 0 → CRF 51.
+                let q = max(0, min(100, cq))
+                let crf = Int((Double(100 - q) / 100.0 * 51.0).rounded())
+                av_dict_set(&opts, "crf", String(crf), 0)
+            case .automaticBitrate:
+                encCtx.pointee.bit_rate = autoBitrate
+            }
         }
 
         // MARK: Output context (MP4)
