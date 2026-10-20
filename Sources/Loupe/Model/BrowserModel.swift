@@ -897,11 +897,56 @@ final class BrowserModel {
         return result
     }
 
-    /// Clears the memoized `displayedItems` so the next read rebuilds it, and
-    /// bumps the observed revision so views re-render. Called whenever anything
-    /// the sort/filter/scope depends on changes.
+    /// Each displayed item's position in `displayedItems`, keyed by item ID.
+    /// The grouped grid uses this to drive thumbnail prefetch off a cell's
+    /// position in the full display order rather than its index within a
+    /// section. Memoized off `displayRevision` so it's built once per display
+    /// change instead of once per rendered cell (the grid reads it per cell).
+    var displayedItemIndex: [MediaItem.ID: Int] {
+        _ = displayRevision
+        if cachedIndexRevision == displayRevision, let cachedDisplayedItemIndex {
+            return cachedDisplayedItemIndex
+        }
+        var map: [MediaItem.ID: Int] = [:]
+        for (i, item) in displayedItems.enumerated() { map[item.id] = i }
+        cachedDisplayedItemIndex = map
+        cachedIndexRevision = displayRevision
+        return map
+    }
+
+    /// Memoized result of `groupedDisplayedItems` and the flattened
+    /// `visualOrderItems`, keyed off `cachedGroupRevision`. Both are O(n) to
+    /// build when grouping is active (bucketing every item, a key sort for
+    /// folders, and a flatten+dedupe pass), and they're read repeatedly per
+    /// selection change — every selection setter reads `visualOrderItems`, and
+    /// the grid body re-reads `groupedDisplayedItems` on each re-render. Without
+    /// a cache that rebuild ran on every keystroke under grouping, which is the
+    /// slowdown. The caches depend on the same inputs as `displayedItems` plus
+    /// the grouping dimension and the category/person maps — all of which bump
+    /// `displayRevision` via `invalidateDisplayCache` when they change, so we
+    /// reuse that token to decide when the group caches are stale.
+    @ObservationIgnored private var cachedGroupedDisplayedItems: [CategoryGroup]?
+    @ObservationIgnored private var cachedVisualOrderItems: [MediaItem]?
+    /// The `displayRevision` value the group caches were built against. A
+    /// mismatch means the inputs changed and the caches must be rebuilt.
+    @ObservationIgnored private var cachedGroupRevision: Int?
+
+    /// Memoized `displayedItemIndex`, keyed off `cachedIndexRevision` against
+    /// `displayRevision` (same scheme as the group caches).
+    @ObservationIgnored private var cachedDisplayedItemIndex: [MediaItem.ID: Int]?
+    @ObservationIgnored private var cachedIndexRevision: Int?
+
+    /// Clears the memoized `displayedItems` (and the derived group caches) so
+    /// the next read rebuilds them, and bumps the observed revision so views
+    /// re-render. Called whenever anything the sort/filter/scope/grouping
+    /// depends on changes.
     private func invalidateDisplayCache() {
         cachedDisplayedItems = nil
+        cachedGroupedDisplayedItems = nil
+        cachedVisualOrderItems = nil
+        cachedGroupRevision = nil
+        cachedDisplayedItemIndex = nil
+        cachedIndexRevision = nil
         displayRevision &+= 1
     }
 
@@ -1940,11 +1985,21 @@ final class BrowserModel {
     /// same photo under several people (it may contain several); the other
     /// dimensions place each item in exactly one bucket.
     var groupedDisplayedItems: [CategoryGroup] {
-        switch grouping {
-        case .person:   return groupedByPerson
-        case .folder:   return groupedByFolder
-        case .category, .none: return groupedByCategoryGroups
+        // Establish the observation dependency and reuse the cache when the
+        // revision still matches (see `cachedGroupedDisplayedItems`).
+        _ = displayRevision
+        if cachedGroupRevision == displayRevision,
+           let cachedGroupedDisplayedItems {
+            return cachedGroupedDisplayedItems
         }
+        let result: [CategoryGroup]
+        switch grouping {
+        case .person:   result = groupedByPerson
+        case .folder:   result = groupedByFolder
+        case .category, .none: result = groupedByCategoryGroups
+        }
+        cacheGroups(result, at: displayRevision)
+        return result
     }
 
     /// The items in the exact order the grid/list draws them. With no grouping
@@ -1958,14 +2013,32 @@ final class BrowserModel {
     /// stepping stay well defined (selection is keyed by item regardless).
     var visualOrderItems: [MediaItem] {
         guard grouping != .none else { return displayedItems }
+        // Reuse the flattened order when the group cache is current. Reading
+        // `groupedDisplayedItems` below fills/validates the shared revision, so
+        // check the flattened cache against the same token afterward.
+        if cachedGroupRevision == displayRevision,
+           let cachedVisualOrderItems {
+            return cachedVisualOrderItems
+        }
+        let groups = groupedDisplayedItems
         var seen: Set<MediaItem.ID> = []
         var out: [MediaItem] = []
-        for group in groupedDisplayedItems {
+        for group in groups {
             for item in group.items where seen.insert(item.id).inserted {
                 out.append(item)
             }
         }
+        cachedVisualOrderItems = out
         return out
+    }
+
+    /// Stores a freshly built `groupedDisplayedItems` result and records the
+    /// revision it was built against, dropping any stale flattened order so
+    /// `visualOrderItems` rebuilds it lazily on its next read.
+    private func cacheGroups(_ groups: [CategoryGroup], at revision: Int) {
+        cachedGroupedDisplayedItems = groups
+        cachedGroupRevision = revision
+        cachedVisualOrderItems = nil
     }
 
     private var groupedByCategoryGroups: [CategoryGroup] {

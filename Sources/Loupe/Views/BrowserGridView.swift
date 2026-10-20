@@ -59,12 +59,11 @@ struct BrowserGridView: View {
     /// Position of each item in the full display order, so a grouped layout can
     /// still warm neighbors across section boundaries (prefetch is driven by a
     /// cell's index into the flat `displayedItems`, not its index within a
-    /// section). Rebuilt only when grouping is active.
-    private var globalIndex: [URL: Int] {
+    /// section). Backed by the model's memoized `displayedItemIndex`, so it's
+    /// built once per display change rather than once per rendered cell.
+    private var globalIndex: [MediaItem.ID: Int] {
         guard model.grouping != .none else { return [:] }
-        var map: [URL: Int] = [:]
-        for (i, item) in model.displayedItems.enumerated() { map[item.id] = i }
-        return map
+        return model.displayedItemIndex
     }
 
     /// A single grid cell: the thumbnail plus all its selection, drag, prefetch
