@@ -2830,6 +2830,10 @@ final class BrowserModel {
     /// and in-session only, like the image export prefs.
     var exportVideoResolution: VideoTranscoder.Resolution = .p1080
 
+    /// The encoder used for a video export — software H.264 (max compatibility)
+    /// or hardware H.265 via VideoToolbox (much faster, smaller files).
+    var exportVideoCodec: VideoTranscoder.Codec = .h264
+
     /// True while a video transcode is running, so the UI can show progress.
     private(set) var isExportingVideo = false
     /// 0...1 progress of the running transcode (best-effort), and how many of
@@ -2876,6 +2880,7 @@ final class BrowserModel {
         guard !urls.isEmpty, !isExportingVideo else { return }
 
         let resolution = exportVideoResolution
+        let codec = exportVideoCodec
 
         // Remember the destination so "Quick Export" can reuse it this session.
         lastExportDirectory = directory
@@ -2890,7 +2895,8 @@ final class BrowserModel {
             await VideoExporter.export(
                 urls: urls,
                 toDirectory: directory,
-                resolution: resolution
+                resolution: resolution,
+                codec: codec
             ) { [weak self] completed, total, fraction in
                 self?.videoExportCompleted = completed
                 self?.videoExportTotal = total

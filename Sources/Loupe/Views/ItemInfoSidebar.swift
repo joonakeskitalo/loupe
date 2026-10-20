@@ -422,7 +422,15 @@ private struct VideoExportSection: View {
             .pickerStyle(.menu)
             .controlSize(.small)
 
-            Text("Rescales video and copies the audio track. Output is MP4 (H.264).")
+            Picker("Codec", selection: $model.exportVideoCodec) {
+                ForEach(VideoTranscoder.Codec.allCases, id: \.self) { codec in
+                    Text(codec.displayName).tag(codec)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+
+            Text(codecHint)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -468,6 +476,17 @@ private struct VideoExportSection: View {
         guard model.videoExportTotal > 0 else { return 0 }
         let done = Double(model.videoExportCompleted) + model.videoExportFraction
         return min(1.0, done / Double(model.videoExportTotal))
+    }
+
+    /// A one-line description of the selected codec, so the user understands
+    /// the compatibility/speed tradeoff. Rescaling + audio copy applies to both.
+    private var codecHint: String {
+        switch model.exportVideoCodec {
+        case .h264:
+            return "Rescales video, copies audio. MP4 / H.264 — widely compatible, software encode (slower)."
+        case .hevcVideoToolbox:
+            return "Rescales video, copies audio. MP4 / H.265 — hardware encode (much faster), smaller files."
+        }
     }
 }
 

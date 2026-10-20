@@ -24,6 +24,7 @@ enum VideoExporter {
         urls: [URL],
         toDirectory directory: URL,
         resolution: VideoTranscoder.Resolution,
+        codec: VideoTranscoder.Codec,
         progress: @escaping @MainActor (_ completed: Int, _ total: Int, _ fraction: Double) -> Void
     ) async -> Result {
         let total = urls.count
@@ -54,7 +55,8 @@ enum VideoExporter {
                     try VideoTranscoder.transcode(
                         input: url,
                         output: dest,
-                        resolution: resolution
+                        resolution: resolution,
+                        codec: codec
                     ) { fraction in
                         Task { @MainActor in progress(completedBefore, total, fraction) }
                     }

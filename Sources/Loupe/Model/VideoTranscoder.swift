@@ -57,6 +57,33 @@ enum VideoTranscoder {
         }
     }
 
+    /// Which encoder to use for the output video stream.
+    ///
+    /// `.h264` is the software x264 encoder — maximum compatibility, slower.
+    /// `.hevcVideoToolbox` is Apple's hardware H.265 encoder (VideoToolbox),
+    /// which is dramatically faster (and more power-efficient) on Apple Silicon
+    /// and recent Intel Macs, at a smaller file size for similar quality. Its
+    /// output is tagged `hvc1` so QuickTime / Finder preview it correctly.
+    enum Codec: String, CaseIterable, Sendable {
+        case h264 = "H.264 (x264)"
+        case hevcVideoToolbox = "H.265 (VideoToolbox)"
+
+        var displayName: String { rawValue }
+
+        /// The FFmpeg encoder's registered name, looked up with
+        /// `avcodec_find_encoder_by_name`.
+        var encoderName: String {
+            switch self {
+            case .h264: return "libx264"
+            case .hevcVideoToolbox: return "hevc_videotoolbox"
+            }
+        }
+
+        /// Whether this is a hardware VideoToolbox encoder (affects which
+        /// quality options apply).
+        var isVideoToolbox: Bool { self == .hevcVideoToolbox }
+    }
+
     enum TranscodeError: Error {
         case openInput
         case streamInfo
@@ -72,16 +99,18 @@ enum VideoTranscoder {
     }
 
     /// Transcodes `input` to `output` (an MP4), scaling the video to
-    /// `resolution`'s height and copying the audio stream unchanged. Throws on
-    /// any failure. `progress` is called periodically with a 0...1 fraction
-    /// based on decoded-frame timestamps vs. the clip duration (best-effort;
-    /// may stay at 0 for streams with no known duration/PTS).
+    /// `resolution`'s height, encoding with `codec`, and copying the audio
+    /// stream unchanged. Throws on any failure. `progress` is called
+    /// periodically with a 0...1 fraction based on decoded-frame timestamps vs.
+    /// the clip duration (best-effort; may stay at 0 for streams with no known
+    /// duration/PTS).
     ///
     /// Synchronous and `nonisolated`: run it from a detached task.
     nonisolated static func transcode(
         input: URL,
         output: URL,
         resolution: Resolution,
+        codec: Codec = .h264,
         progress: (@Sendable (Double) -> Void)? = nil
     ) throws {
         // MARK: Open input
@@ -131,10 +160,19 @@ enum VideoTranscoder {
         let dstW = max(2, scaledW - (scaledW % 2))
         let evenDstH = max(2, dstH - (dstH % 2))
 
-        // MARK: Encoder (H.264)
-        guard let encoder = avcodec_find_encoder(AV_CODEC_ID_H264) else {
-            throw TranscodeError.encoderUnavailable
+        // MARK: Encoder (selected codec)
+        // Look up by name so we can pick the hardware VideoToolbox HEVC encoder
+        // when requested. If an encoder isn't available (e.g. VideoToolbox
+        // missing), fall back to software H.264 so an export never hard-fails.
+        var chosenCodec = codec
+        var encoder = avcodec_find_encoder_by_name(codec.encoderName)
+        if encoder == nil {
+            chosenCodec = .h264
+            encoder = avcodec_find_encoder_by_name(Codec.h264.encoderName)
+                ?? avcodec_find_encoder(AV_CODEC_ID_H264)
         }
+        guard let encoder else { throw TranscodeError.encoderUnavailable }
+
         guard let encCtx = avcodec_alloc_context3(encoder) else { throw TranscodeError.encoderInit }
         var encCtxOpt: UnsafeMutablePointer<AVCodecContext>? = encCtx
         defer { avcodec_free_context(&encCtxOpt) }
@@ -148,17 +186,30 @@ enum VideoTranscoder {
         let frameRate = (srcFrameRate.num > 0 && srcFrameRate.den > 0) ? srcFrameRate : AVRational(num: 30, den: 1)
         encCtx.pointee.time_base = AVRational(num: frameRate.den, den: frameRate.num)
         encCtx.pointee.framerate = frameRate
-        // A moderate CRF-like quality via x264 preset/crf options below.
 
-        // Some muxers require the global-header flag.
         encCtx.pointee.gop_size = 12
         encCtx.pointee.max_b_frames = 2
 
-        // x264 options: reasonable speed/quality default.
         var opts: OpaquePointer? = nil // AVDictionary*
-        av_dict_set(&opts, "preset", "medium", 0)
-        av_dict_set(&opts, "crf", "20", 0)
         defer { av_dict_free(&opts) }
+
+        if chosenCodec.isVideoToolbox {
+            // VideoToolbox doesn't honor x264-style CRF. Target a bitrate
+            // scaled to the output resolution and frame rate for roughly
+            // visually-transparent HEVC (~0.07 bits per pixel per frame). Also
+            // allow the software fallback so machines without the hardware
+            // path still succeed.
+            let fps = frameRate.den > 0 ? Double(frameRate.num) / Double(frameRate.den) : 30
+            let pixelsPerSecond = Double(dstW * evenDstH) * fps
+            let bitrate = Int64(max(1_000_000.0, pixelsPerSecond * 0.07))
+            encCtx.pointee.bit_rate = bitrate
+            av_dict_set(&opts, "allow_sw", "1", 0)
+            av_dict_set(&opts, "realtime", "0", 0)
+        } else {
+            // x264: reasonable speed/quality default (constant-quality CRF).
+            av_dict_set(&opts, "preset", "medium", 0)
+            av_dict_set(&opts, "crf", "20", 0)
+        }
 
         // MARK: Output context (MP4)
         var outputCtx: UnsafeMutablePointer<AVFormatContext>? = nil
@@ -190,6 +241,16 @@ enum VideoTranscoder {
             throw TranscodeError.openOutput
         }
         outVideoStream.pointee.time_base = encCtx.pointee.time_base
+
+        // Tag HEVC as `hvc1` (not the default `hev1`) so QuickTime, Finder
+        // Quick Look, and AVFoundation recognize and play the MP4.
+        if chosenCodec == .hevcVideoToolbox {
+            func mkTag(_ a: Character, _ b: Character, _ c: Character, _ d: Character) -> UInt32 {
+                UInt32(a.asciiValue!) | (UInt32(b.asciiValue!) << 8)
+                    | (UInt32(c.asciiValue!) << 16) | (UInt32(d.asciiValue!) << 24)
+            }
+            outVideoStream.pointee.codecpar.pointee.codec_tag = mkTag("h", "v", "c", "1")
+        }
 
         // Output audio stream (straight copy of the source's parameters), if a
         // source audio stream exists. We remux its packets without decoding.
