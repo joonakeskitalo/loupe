@@ -109,6 +109,14 @@ struct LoupeCommands: Commands {
                 Button("Export to Folder…") { exportToChosenFolder() }
             }
             .disabled(!canExportImage || (model?.isExportingImages ?? false))
+
+            // Quick-queue a video transcode with ⇧⌘E: enqueues the selected
+            // video(s) to the last-used folder (prompting the first time). One
+            // owner of ⇧⌘E for both the grid and the open viewer, since the
+            // model stays published to the menu while the viewer is up.
+            Button(videoQuickExportTitle) { model?.quickExportVideoOrPrompt() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!canExportVideo)
         }
 
         // MARK: Item actions — placed after the Edit menu's pasteboard group.
@@ -390,6 +398,20 @@ struct LoupeCommands: Commands {
     /// Enabled when the selection has at least one image to export. Export only
     /// operates on images, exactly like "Copy Image".
     private var canExportImage: Bool { model?.canExportSelection ?? false }
+
+    /// Enabled when the selection has at least one video to transcode.
+    private var canExportVideo: Bool { model?.canExportVideoSelection ?? false }
+
+    /// The ⌘E command's label, reflecting whether a destination is already
+    /// remembered (quick queue) or will be prompted for.
+    private var videoQuickExportTitle: String {
+        let count = model?.selectedMediaItems.filter { $0.kind == .video }.count ?? 0
+        let noun = count > 1 ? "\(count) Videos" : "Video"
+        if model?.lastExportDirectory != nil {
+            return "Quick Export \(noun) to Queue"
+        }
+        return "Export \(noun) to Queue…"
+    }
 
     private var flagTitle: String {
         let count = model?.selectedItems.count ?? 0

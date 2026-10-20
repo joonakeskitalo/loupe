@@ -3067,6 +3067,19 @@ final class BrowserModel {
         exportVideos(toDirectory: directory, item: item)
     }
 
+    /// The hotkey target for queueing a video transcode: enqueues to the
+    /// last-used folder when one is remembered (no prompt — the quick path),
+    /// otherwise falls back to prompting for a destination the first time.
+    /// No-op when the target has no video.
+    func quickExportVideoOrPrompt(_ item: MediaItem? = nil) {
+        guard !videoURLs(preferring: item).isEmpty else { return }
+        if lastExportDirectory != nil {
+            quickExportVideo(item)
+        } else {
+            exportVideosToChosenFolder(item)
+        }
+    }
+
     /// Prompts for a destination folder, then transcodes the selected video(s)
     /// (or `item`) into it at the current resolution preset. No-op if nothing
     /// exportable is targeted or the user cancels.
