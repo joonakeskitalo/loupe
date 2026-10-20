@@ -2840,8 +2840,8 @@ final class BrowserModel {
     var exportVideoUseConstantQuality = true
 
     /// The constant-quality (CQ) value for a video export, on a 0...100 scale
-    /// (higher = better quality, larger file). Defaults to 60.
-    var exportVideoConstantQuality = 60
+    /// (higher = better quality, larger file). Defaults to 70.
+    var exportVideoConstantQuality = 70
 
     /// The rate-control mode derived from the two prefs above, passed to the
     /// transcoder.

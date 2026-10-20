@@ -98,8 +98,8 @@ enum VideoTranscoder {
         case constantQuality(Int)
         case automaticBitrate
 
-        /// The default: constant quality at CQ 60.
-        static let `default`: RateControl = .constantQuality(60)
+        /// The default: constant quality at CQ 70.
+        static let `default`: RateControl = .constantQuality(70)
     }
 
     enum TranscodeError: Error {
