@@ -461,6 +461,21 @@ final class MPVGLView: NSOpenGLView {
     /// SwiftUI view keeps both alive for the player's lifetime.
     weak var controller: MPVController?
 
+    /// Space/K over the surface — toggle play/pause.
+    var onToggle: (() -> Void)?
+    /// J — go to the previous item.
+    var onPrevious: (() -> Void)?
+    /// L — go to the next item.
+    var onNext: (() -> Void)?
+
+    /// Window-scoped key-down monitor, mirroring `KeyablePlayerView`. Without
+    /// it, this `NSOpenGLView` (once it's the window's first responder) swallows
+    /// unhandled key events — including the viewer's ←/→ navigation arrows,
+    /// which then never reach SwiftUI's `.onKeyPress`. The monitor runs our own
+    /// transport keys (Space/K/J/L) and passes EVERYTHING ELSE through
+    /// untouched, so arrow-key navigation keeps working on `.webm` / `.mkv`.
+    private var keyMonitor: Any?
+
     /// Set (from any thread) by the render-update callback; read + cleared on
     /// the main thread by the render timer. `atomic` via a lock-free flag.
     private let frameWanted = ManagedAtomicFlag()
@@ -484,6 +499,67 @@ final class MPVGLView: NSOpenGLView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    /// Forward any key this view would otherwise consume (default `NSView`
+    /// `keyDown` beeps on unhandled keys) up the responder chain, so the
+    /// viewer's SwiftUI key handling — including ←/→ item navigation — still
+    /// receives them when the GL surface holds first-responder. The transport
+    /// keys (Space/K/J/L) are handled by the local monitor before they get
+    /// here; everything else bubbles.
+    override func keyDown(with event: NSEvent) {
+        nextResponder?.keyDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            installKeyMonitor()
+        } else {
+            removeKeyMonitor()
+        }
+    }
+
+    /// Installs the window-scoped key monitor (idempotent). Handles the
+    /// transport keys and lets every other key — crucially the ←/→ navigation
+    /// arrows — fall through to the viewer's SwiftUI key handling.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // Only act while this view is in the key window, so a background
+            // player doesn't eat another window's keys.
+            guard let window = self.window, window.isKeyWindow else { return event }
+
+            // Leave modified combos (⌘/⌃/⌥) to their own shortcuts.
+            let modified = !event.modifierFlags
+                .intersection([.command, .control, .option])
+                .isEmpty
+            if modified { return event }
+
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "k", " ":
+                self.onToggle?()
+                return nil          // swallow
+            case "j":
+                self.onPrevious?()
+                return nil
+            case "l":
+                self.onNext?()
+                return nil
+            default:
+                return event        // pass through (←/→, etc.)
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+    }
 
     override func prepareOpenGL() {
         super.prepareOpenGL()
@@ -546,6 +622,7 @@ final class MPVGLView: NSOpenGLView {
     func stopRendering() {
         renderTimer?.invalidate()
         renderTimer = nil
+        removeKeyMonitor()
     }
 
     /// The OpenGL.framework bundle, loaded once. GL entry points must be
@@ -591,11 +668,22 @@ struct MPVSurface: NSViewRepresentable {
 
     func makeNSView(context: Context) -> MPVGLView {
         let view = MPVGLView(controller: controller)
+        wire(view)
         return view
     }
 
     func updateNSView(_ nsView: MPVGLView, context: Context) {
         nsView.controller = controller
+        wire(nsView)
+    }
+
+    /// Hooks the surface's transport keys up to the controller / navigation
+    /// callbacks. Space/K toggle playback; J/L step items. All other keys
+    /// (including ←/→) are passed through to the viewer by the view's monitor.
+    private func wire(_ view: MPVGLView) {
+        view.onToggle = { [weak controller] in controller?.togglePlay() }
+        view.onPrevious = onPrevious
+        view.onNext = onNext
     }
 
     static func dismantleNSView(_ nsView: MPVGLView, coordinator: ()) {
