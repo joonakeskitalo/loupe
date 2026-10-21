@@ -2818,8 +2818,8 @@ final class BrowserModel {
 
     /// JPEG compression quality for image export, on a 0...100 scale (higher =
     /// better quality, larger file). Only applies when the export format is
-    /// JPEG. Defaults to 85, a high-quality near-transparent setting.
-    var exportJPEGQuality = 85
+    /// JPEG. Defaults to 95, a high-quality near-transparent setting.
+    var exportJPEGQuality = 95
 
     /// When true, a manually-entered long-edge pixel width (`exportCustomLongEdge`)
     /// overrides `exportScale`. Lets the user cap the output to an exact size

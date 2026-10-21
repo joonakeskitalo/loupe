@@ -506,12 +506,12 @@ struct LoupeCommands: Commands {
     private var exportFormatBinding: Binding<ImageCopyFormat> { binding(\.exportFormat, default: .defaultFormat) }
     private var exportScaleBinding: Binding<ImageCopyScale> { binding(\.exportScale, default: .original) }
     private var exportStripMetadataBinding: Binding<Bool> { binding(\.exportStripsMetadata, default: true) }
-    private var exportJPEGQualityBinding: Binding<Int> { binding(\.exportJPEGQuality, default: 85) }
+    private var exportJPEGQualityBinding: Binding<Int> { binding(\.exportJPEGQuality, default: 95) }
     private var formatBinding: Binding<ImageCopyFormat> { binding(\.imageCopyFormat, default: .defaultFormat) }
 
     /// Discrete JPEG-quality presets offered in the (slider-less) menus. The
     /// sidebar still exposes the full 0...100 range via a slider.
-    static let jpegQualityPresets = [100, 90, 85, 80, 70, 60, 50]
+    static let jpegQualityPresets = [100, 95, 90, 85, 80, 70, 60, 50]
 
     // MARK: - Export
 
