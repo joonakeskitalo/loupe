@@ -91,9 +91,15 @@ struct TagInputOverlay: View {
                     model.toggleTextTag(quickTags[digit - 1])
                     return true
                 },
-                onNavigate: { forward in
+                onNavigate: { forward, shift in
                     guard draft.isEmpty else { return false }
-                    model.moveSelection(by: forward ? 1 : -1)
+                    if shift {
+                        // Grow/shrink the multi-selection so several images can
+                        // be tagged at once.
+                        model.extendViewerSelection(by: forward ? 1 : -1)
+                    } else {
+                        model.moveSelection(by: forward ? 1 : -1)
+                    }
                     return true
                 }
             )
@@ -105,7 +111,7 @@ struct TagInputOverlay: View {
                 FlowChips(tags: quickTags, model: model)
             }
 
-            Text("Return to add · 1–9 toggle · ←/→ browse · Esc close")
+            Text("Return add · 1–9 toggle · ←/→ browse · ⇧←/→ select · Esc close")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -234,9 +240,10 @@ private struct TaggingTextField: NSViewRepresentable {
     /// Called when a 1–9 digit is pressed; return true to consume it (the
     /// overlay toggles a quick tag) or false to let it type normally.
     var onDigit: (Int) -> Bool
-    /// Called for a browse key (←/→ or J/L); `forward` is true for next.
-    /// Return true to consume it (navigated) or false to let it act normally.
-    var onNavigate: (_ forward: Bool) -> Bool
+    /// Called for a browse key (←/→ or J/L); `forward` is true for next,
+    /// `shift` is true when extending the selection. Return true to consume it
+    /// (navigated) or false to let it act normally.
+    var onNavigate: (_ forward: Bool, _ shift: Bool) -> Bool
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField()
@@ -307,24 +314,38 @@ private struct TaggingTextField: NSViewRepresentable {
                       field.currentEditor() != nil  // field is focused
                 else { return event }
 
+                // Ignore ⌘/⌃/⌥ combos (their own shortcuts). Shift is allowed —
+                // it's the "extend selection" modifier for the arrow keys.
                 let mods = event.modifierFlags.intersection([.command, .control, .option])
                 guard mods.isEmpty, field.stringValue.isEmpty else { return event }
 
-                // Browse keys: ←/→ arrows and J/L. Only active while the draft
-                // is empty, so they don't interfere with cursor movement/typing.
+                let shift = event.modifierFlags.contains(.shift)
+
+                // Browse keys: ←/→ arrows (plain = move cursor/item, Shift =
+                // extend the multi-selection) and J/L (move only). Only active
+                // while the draft is empty, so they don't interfere with
+                // cursor movement / typing.
                 switch event.keyCode {
-                case 123, 38:  // ← , J
-                    if self.parent.onNavigate(false) { return nil }
+                case 123:  // ←
+                    if self.parent.onNavigate(false, shift) { return nil }
                     return event
-                case 124, 37:  // → , L
-                    if self.parent.onNavigate(true) { return nil }
+                case 124:  // →
+                    if self.parent.onNavigate(true, shift) { return nil }
+                    return event
+                case 38:   // J (move only; ignore if Shift to avoid uppercase)
+                    if !shift, self.parent.onNavigate(false, false) { return nil }
+                    return event
+                case 37:   // L (move only)
+                    if !shift, self.parent.onNavigate(true, false) { return nil }
                     return event
                 default:
                     break
                 }
 
-                // Quick-assign digits 1–9.
-                if let ch = event.charactersIgnoringModifiers, ch.count == 1,
+                // Quick-assign digits 1–9 (plain only — Shift+digit is a
+                // symbol, not a tag shortcut).
+                if !shift,
+                   let ch = event.charactersIgnoringModifiers, ch.count == 1,
                    let digit = Int(ch), (1...9).contains(digit),
                    self.parent.onDigit(digit) {
                     return nil
