@@ -85,6 +85,7 @@ struct MediaViewer: View {
                     hotkey("t", []) {
                         withAnimation(.easeInOut(duration: 0.2)) { model.toggleFilmStrip() }
                     }
+                    .disabled(model.showTagInput)
                     .opacity(0)
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
@@ -270,6 +271,9 @@ struct MediaViewer: View {
                 if let tag = model.colorTag(item.id) {
                     colorTagChip(tag: tag, text: tag.displayName).layoutPriority(1)
                 }
+                ForEach(model.textTags(item.id), id: \.self) { tag in
+                    textTagChip(text: tag).layoutPriority(1)
+                }
                 Text(formattedSize(item.fileSize))
                     .monospacedDigit()
                     .lineLimit(1)
@@ -328,6 +332,19 @@ struct MediaViewer: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(tag.color, in: Capsule())
+    }
+
+    /// A free-text tag pill shown in the caption bar, using the accent color.
+    private func textTagChip(text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "tag.fill")
+            Text(text)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.accentColor, in: Capsule())
     }
 
     @ViewBuilder
@@ -499,6 +516,7 @@ struct MediaViewer: View {
             hotkey("1", [.command]) { zoomCommand = .actualSize }
             hotkey("1", []) { zoomCommand = .actualSize }
         }
+        .disabled(model.showTagInput)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -516,6 +534,7 @@ struct MediaViewer: View {
                 }
             }
         }
+        .disabled(model.showTagInput)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -549,6 +568,8 @@ struct MediaViewer: View {
                     model.toggleColorTag(tag)
                 }
             }
+            // Y opens the free-text tag input for the shown item(s).
+            hotkey("y", []) { model.beginTagging() }
             if showingSingleVideo {
                 hotkey("k", []) { videoController?.togglePlay() }
                 hotkey("u", []) { videoController?.skip(by: -15) }
@@ -557,6 +578,10 @@ struct MediaViewer: View {
                 hotkey(".", []) { videoController?.stepFrame(by: 1) }
             }
         }
+        // Suspend the viewer's single-key hotkeys while the tag-input overlay
+        // is up, so typing a tag name (and its 1–9 quick-assign keys) isn't
+        // hijacked by these key equivalents.
+        .disabled(model.showTagInput)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)

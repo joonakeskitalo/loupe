@@ -120,13 +120,14 @@ struct LoupeCommands: Commands {
             }
             .disabled(!canExportImage || (model?.isExportingImages ?? false))
 
-            // Quick-queue a video transcode with ⇧⌘E: enqueues the selected
-            // video(s) to the last-used folder (prompting the first time). One
-            // owner of ⇧⌘E for both the grid and the open viewer, since the
-            // model stays published to the menu while the viewer is up.
-            Button(videoQuickExportTitle) { model?.quickExportVideoOrPrompt() }
+            // Quick-export with ⇧⌘E: images are written to the last-used
+            // folder and videos are queued for transcoding (prompting the first
+            // time). One owner of ⇧⌘E for images, videos, and mixed selections,
+            // in both the grid and the open viewer, since the model stays
+            // published to the menu while the viewer is up.
+            Button(quickExportTitle) { model?.quickExportSelection() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!canExportVideo)
+                .disabled(!canQuickExport)
         }
 
         // MARK: Item actions — placed after the Edit menu's pasteboard group.
@@ -412,15 +413,29 @@ struct LoupeCommands: Commands {
     /// Enabled when the selection has at least one video to transcode.
     private var canExportVideo: Bool { model?.canExportVideoSelection ?? false }
 
-    /// The ⌘E command's label, reflecting whether a destination is already
-    /// remembered (quick queue) or will be prompted for.
-    private var videoQuickExportTitle: String {
-        let count = model?.selectedMediaItems.filter { $0.kind == .video }.count ?? 0
-        let noun = count > 1 ? "\(count) Videos" : "Video"
-        if model?.lastExportDirectory != nil {
-            return "Quick Export \(noun) to Queue"
+    /// Enabled when the selection has any exportable media (image or video).
+    private var canQuickExport: Bool { model?.canQuickExportSelection() ?? false }
+
+    /// The ⇧⌘E command's label. Reflects the media in the selection (images
+    /// export to a folder, videos queue for transcoding) and whether a
+    /// destination is already remembered.
+    private var quickExportTitle: String {
+        let images = model?.selectedMediaItems.filter { $0.kind == .image }.count ?? 0
+        let videos = model?.selectedMediaItems.filter { $0.kind == .video }.count ?? 0
+        let remembered = model?.lastExportDirectory != nil
+        let verb = remembered ? "Quick Export" : "Export"
+        let ellipsis = remembered ? "" : "…"
+
+        if images > 0 && videos == 0 {
+            let noun = images > 1 ? "\(images) Images" : "Image"
+            return "\(verb) \(noun)\(ellipsis)"
         }
-        return "Export \(noun) to Queue…"
+        if videos > 0 && images == 0 {
+            let noun = videos > 1 ? "\(videos) Videos" : "Video"
+            return "\(verb) \(noun) to Queue\(ellipsis)"
+        }
+        // Mixed (or empty) selection.
+        return "\(verb) Selection\(ellipsis)"
     }
 
     private var flagTitle: String {

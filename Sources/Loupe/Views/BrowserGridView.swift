@@ -80,6 +80,7 @@ struct BrowserGridView: View {
             isHidden: model.isHidden(item.id),
             colorTag: model.colorTag(item.id),
             aiCategory: model.aiCategory(item.id),
+            textTags: model.textTags(item.id),
             personCount: model.persons(item.id).count,
             hideFilename: model.hideFilenames,
             method: model.thumbnailMethod,

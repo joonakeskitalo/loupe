@@ -16,6 +16,9 @@ struct ThumbnailView: View {
     /// The AI-assigned category, if the image has been classified. Shown as a
     /// small caption pill in the bottom-leading corner.
     var aiCategory: String? = nil
+    /// Free-text tags assigned to the item. Shown as a small count badge so a
+    /// tagged item is distinguishable at a glance.
+    var textTags: [String] = []
     /// Number of recognized people in the image (0 = none / not processed).
     /// Shown as a small person badge in the bottom-trailing corner.
     var personCount: Int = 0
@@ -80,6 +83,15 @@ struct ThumbnailView: View {
                             .padding(3)
                             .background(Color.orange, in: Circle())
                             .shadow(radius: 1)
+                    }
+                    if !textTags.isEmpty {
+                        Image(systemName: "tag.fill")
+                            .font(.system(size: max(8, size * 0.09)))
+                            .foregroundStyle(.white)
+                            .padding(3)
+                            .background(Color.accentColor, in: Circle())
+                            .shadow(radius: 1)
+                            .help(textTags.joined(separator: ", "))
                     }
                 }
                 .padding(5)

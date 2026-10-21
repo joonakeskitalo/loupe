@@ -124,6 +124,17 @@ final class BrowserModel {
     /// selection) is shown. Window-scoped and in-session only.
     var showInfoSidebar = false
 
+    /// Whether the free-text tag-input overlay (opened with `y`) is showing.
+    /// Lives on the model so both the grid and the fullscreen viewer can open
+    /// it, and so each surface can suspend its single-key hotkeys while it's up.
+    var showTagInput = false
+
+    /// Opens the tag-input overlay if there's something selected to tag.
+    func beginTagging() {
+        guard !selectedItems.isEmpty || primarySelectedItem != nil else { return }
+        showTagInput = true
+    }
+
     /// Toggles the info sidebar on/off (⌥⌘I / toolbar button).
     func toggleInfoSidebar() { showInfoSidebar.toggle() }
 
@@ -297,6 +308,12 @@ final class BrowserModel {
     /// like `flaggedItems`: cleared when a new folder is opened and gone when
     /// the window closes (the model is per-window). An item has at most one tag.
     var colorTags: [MediaItem.ID: ColorTag] = [:]
+
+    /// Free-text tags attached to files, keyed by item ID. Unlike `colorTags`
+    /// (at most one), an item can carry several. In-session only, like the
+    /// other annotations: pruned to present items on rescan, gone when the
+    /// window closes. Driven by the `y` tag-input overlay.
+    var textTags: [MediaItem.ID: Set<String>] = [:]
 
     /// When set, the grid shows only items carrying this color tag. `nil` means
     /// no color filter is active. Mutually exclusive with `showFlaggedOnly`.
@@ -717,6 +734,7 @@ final class BrowserModel {
         flaggedItems.formIntersection(present)
         hiddenItems.formIntersection(present)
         colorTags = colorTags.filter { present.contains($0.key) }
+        textTags = textTags.filter { present.contains($0.key) }
         aiCategories = aiCategories.filter { present.contains($0.key) }
         facePersons = facePersons.filter { present.contains($0.key) }
         // Drop a category filter that no longer matches anything.
@@ -1916,6 +1934,88 @@ final class BrowserModel {
 
     /// Total number of tagged items (any color).
     var taggedCount: Int { colorTags.count }
+
+    // MARK: - Text tags
+
+    /// The free-text tags on the given item, sorted alphabetically for stable
+    /// display. Empty when untagged.
+    func textTags(_ id: MediaItem.ID) -> [String] {
+        (textTags[id] ?? []).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// Every distinct text tag in use this session, ordered by descending
+    /// item-count then alphabetically. Drives the tag-input overlay's
+    /// "existing tags" list (and its 1–9 quick-assign keys).
+    var allTextTags: [String] {
+        var counts: [String: Int] = [:]
+        for tags in textTags.values {
+            for tag in tags { counts[tag, default: 0] += 1 }
+        }
+        return counts.keys.sorted { lhs, rhs in
+            let (l, r) = (counts[lhs] ?? 0, counts[rhs] ?? 0)
+            if l != r { return l > r }
+            return lhs.localizedStandardCompare(rhs) == .orderedAscending
+        }
+    }
+
+    /// Whether every target (the selection, or `item`) already carries `tag` —
+    /// used so the overlay can show which existing tags are already applied.
+    func allTargetsHaveTextTag(_ tag: String, item: MediaItem? = nil) -> Bool {
+        let targets = textTagTargets(item)
+        guard !targets.isEmpty else { return false }
+        return targets.allSatisfy { (textTags[$0] ?? []).contains(tag) }
+    }
+
+    /// Resolves the items a text-tag action should affect, using the same
+    /// "specific unselected item, else the whole selection, else the item"
+    /// rule as `toggleColorTag`/`toggleFlag`.
+    private func textTagTargets(_ item: MediaItem?) -> [MediaItem.ID] {
+        if let item, !selectedItems.contains(item.id) {
+            return [item.id]
+        } else if !selectedItems.isEmpty {
+            return Array(selectedItems)
+        } else if let item {
+            return [item.id]
+        }
+        return []
+    }
+
+    /// Adds `tag` to the target item(s) (the selection, or `item`). Whitespace
+    /// is trimmed; empty names are ignored.
+    func addTextTag(_ tag: String, item: MediaItem? = nil) {
+        let name = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let targets = textTagTargets(item)
+        guard !targets.isEmpty else { return }
+        for id in targets { textTags[id, default: []].insert(name) }
+    }
+
+    /// Removes `tag` from the target item(s) (the selection, or `item`),
+    /// dropping now-empty entries so `textTags` stays tidy.
+    func removeTextTag(_ tag: String, item: MediaItem? = nil) {
+        let targets = textTagTargets(item)
+        guard !targets.isEmpty else { return }
+        for id in targets {
+            textTags[id]?.remove(tag)
+            if textTags[id]?.isEmpty == true { textTags[id] = nil }
+        }
+    }
+
+    /// Toggles `tag` across the target item(s): if every target already has it,
+    /// remove it from them all; otherwise add it to them all. Used by the
+    /// overlay's 1–9 quick-assign keys.
+    func toggleTextTag(_ tag: String, item: MediaItem? = nil) {
+        let name = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if allTargetsHaveTextTag(name, item: item) {
+            removeTextTag(name, item: item)
+        } else {
+            addTextTag(name, item: item)
+        }
+    }
+
+    /// Number of distinct items carrying any text tag.
+    var textTaggedCount: Int { textTags.count }
 
     // MARK: - AI classification
 
@@ -3199,6 +3299,39 @@ final class BrowserModel {
         }
     }
 
+    /// The image counterpart to `quickExportVideoOrPrompt`: exports the
+    /// selected image(s) to the last-used folder without prompting when one is
+    /// remembered, otherwise prompts the first time. No-op when the target has
+    /// no image.
+    func quickExportImagesOrPrompt(_ item: MediaItem? = nil) {
+        guard !imageURLs(preferring: item).isEmpty else { return }
+        if lastExportDirectory != nil {
+            quickExport(item)
+        } else {
+            exportImagesToChosenFolder(item)
+        }
+    }
+
+    /// Unified quick-export hotkey target (⇧⌘E): quick-exports whatever media
+    /// the selection (or `item`) contains — images are written to the last-used
+    /// folder and videos are queued for transcoding, prompting once for a
+    /// destination if none is remembered yet. Handles a mixed selection by
+    /// doing both.
+    func quickExportSelection(_ item: MediaItem? = nil) {
+        if !imageURLs(preferring: item).isEmpty {
+            quickExportImagesOrPrompt(item)
+        }
+        if !videoURLs(preferring: item).isEmpty {
+            quickExportVideoOrPrompt(item)
+        }
+    }
+
+    /// Whether the selection (or `item`) has anything the quick-export hotkey
+    /// can act on (an image or a video).
+    func canQuickExportSelection(_ item: MediaItem? = nil) -> Bool {
+        !imageURLs(preferring: item).isEmpty || !videoURLs(preferring: item).isEmpty
+    }
+
     /// Prompts for a destination folder, then transcodes the selected video(s)
     /// (or `item`) into it at the current resolution preset. No-op if nothing
     /// exportable is targeted or the user cancels.
@@ -3331,6 +3464,7 @@ final class BrowserModel {
         }
         flaggedItems.subtract(trashed)
         for url in trashed { colorTags[url] = nil }
+        for url in trashed { textTags[url] = nil }
         for url in trashed { aiCategories[url] = nil }
         for url in trashed { facePersons[url] = nil }
         rebuildMerged()
