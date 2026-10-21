@@ -33,12 +33,15 @@ enum ImageRenderer {
     /// When `maxLongEdge` is non-nil it overrides `scale`, capping the output's
     /// longest edge at that pixel count (never upscaling a smaller source) —
     /// used by the export UI's custom long-edge field.
+    /// `jpegQuality` (0...1) sets the JPEG lossy compression quality; ignored
+    /// for PNG (lossless). Nil uses the system default.
     nonisolated static func render(
         url: URL,
         scale: ImageCopyScale,
         format: ImageCopyFormat,
         stripMetadata: Bool,
         maxLongEdge: Int? = nil,
+        jpegQuality: Double? = nil,
         includeTIFF: Bool = true
     ) -> Rendered? {
         // Find the source's pixel dimensions so percentage scales are relative
@@ -67,6 +70,10 @@ enum ImageRenderer {
         let baseName = url.deletingPathExtension().lastPathComponent
         let type = format.utType
 
+        // JPEG lossy-compression quality (0...1), applied only when encoding
+        // JPEG. Clamped to a valid range; nil leaves the system default.
+        let quality: Double? = (format == .jpeg) ? jpegQuality.map { max(0, min(1, $0)) } : nil
+
         // Keep metadata only when the user didn't ask to strip it AND the chosen
         // format can actually hold it (PNG has no EXIF container).
         let keepMetadata = !stripMetadata && format.canCarryMetadata
@@ -76,22 +83,24 @@ enum ImageRenderer {
             // viewer doesn't rotate the already-upright image a second time.
             var properties = sourceProperties(of: url) ?? [:]
             properties[kCGImagePropertyOrientation] = 1
-            if let data = encode(cg, as: type, properties: properties) {
+            if let data = encode(cg, as: type, properties: properties, quality: quality) {
                 return Rendered(data: data, imageType: type, tiff: tiff, baseName: baseName)
             }
             // Attaching properties failed — fall through to a plain encode.
         }
 
-        guard let data = encode(cg, as: type, properties: nil) else { return nil }
+        guard let data = encode(cg, as: type, properties: nil, quality: quality) else { return nil }
         return Rendered(data: data, imageType: type, tiff: tiff, baseName: baseName)
     }
 
     /// Encodes a `CGImage` to the given type, optionally attaching metadata
-    /// properties (EXIF/GPS/TIFF dictionaries). Returns nil if encoding fails.
+    /// properties (EXIF/GPS/TIFF dictionaries) and a lossy-compression
+    /// `quality` (0...1, used for JPEG). Returns nil if encoding fails.
     nonisolated static func encode(
         _ image: CGImage,
         as type: UTType,
-        properties: [CFString: Any]?
+        properties: [CFString: Any]?,
+        quality: Double? = nil
     ) -> Data? {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(
@@ -99,7 +108,13 @@ enum ImageRenderer {
         ) else {
             return nil
         }
-        CGImageDestinationAddImage(dest, image, properties as CFDictionary?)
+        // Merge the compression quality into the per-image options. For JPEG
+        // this controls the lossy quality/size tradeoff; it's a no-op for PNG.
+        var options = properties ?? [:]
+        if let quality {
+            options[kCGImageDestinationLossyCompressionQuality] = quality
+        }
+        CGImageDestinationAddImage(dest, image, options.isEmpty ? nil : options as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return data as Data
     }

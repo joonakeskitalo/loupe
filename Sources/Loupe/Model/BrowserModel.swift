@@ -2816,6 +2816,11 @@ final class BrowserModel {
     /// toggle; only meaningful for formats that can carry metadata (JPEG).
     var exportStripsMetadata = true
 
+    /// JPEG compression quality for image export, on a 0...100 scale (higher =
+    /// better quality, larger file). Only applies when the export format is
+    /// JPEG. Defaults to 85, a high-quality near-transparent setting.
+    var exportJPEGQuality = 85
+
     /// When true, a manually-entered long-edge pixel width (`exportCustomLongEdge`)
     /// overrides `exportScale`. Lets the user cap the output to an exact size
     /// instead of a preset percentage / fit option.
@@ -2841,6 +2846,13 @@ final class BrowserModel {
     private var activeCustomLongEdge: Int? {
         guard exportUseCustomLongEdge, exportCustomLongEdge > 0 else { return nil }
         return exportCustomLongEdge
+    }
+
+    /// The JPEG quality to apply to an export as a 0...1 value, or `nil` when
+    /// the format isn't JPEG (PNG is lossless, so quality doesn't apply).
+    private var activeJPEGQuality: Double? {
+        guard exportFormat == .jpeg else { return nil }
+        return Double(max(0, min(100, exportJPEGQuality))) / 100.0
     }
 
     /// Whether a quick re-export is possible: there's a remembered destination
@@ -2877,6 +2889,7 @@ final class BrowserModel {
         let fmt = format ?? exportFormat
         let strip = stripMetadata ?? exportStripsMetadata
         let longEdge = activeCustomLongEdge
+        let quality = (fmt == .jpeg) ? activeJPEGQuality : nil
 
         // Remember the destination so "Quick Export" can reuse it this session.
         lastExportDirectory = directory
@@ -2893,7 +2906,8 @@ final class BrowserModel {
                 scale: resolvedScale,
                 format: fmt,
                 stripMetadata: strip,
-                maxLongEdge: longEdge
+                maxLongEdge: longEdge,
+                jpegQuality: quality
             ) { [weak self] completed, total in
                 self?.exportProgress = completed
                 self?.exportTotal = total

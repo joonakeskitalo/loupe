@@ -363,6 +363,29 @@ private struct ExportSection: View {
                 }
             }
 
+            // JPEG compression quality (0–100). Only shown for JPEG — PNG is
+            // lossless, so quality doesn't apply.
+            if model.exportFormat == .jpeg {
+                HStack(spacing: 6) {
+                    Text("Quality")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: Binding(
+                            get: { Double(model.exportJPEGQuality) },
+                            set: { model.exportJPEGQuality = Int($0.rounded()) }
+                        ),
+                        in: 0...100,
+                        step: 1
+                    )
+                    .controlSize(.small)
+                    Text("\(model.exportJPEGQuality)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, alignment: .trailing)
+                }
+            }
+
             // PNG has no EXIF container, so stripping is moot for it.
             Toggle("Remove EXIF / Metadata", isOn: $model.exportStripsMetadata)
                 .controlSize(.small)

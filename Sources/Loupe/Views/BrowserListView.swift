@@ -372,6 +372,14 @@ struct BrowserListView: View {
                     }
                 }
                 .pickerStyle(.inline)
+                if model.exportFormat == .jpeg {
+                    Picker("Quality", selection: $model.exportJPEGQuality) {
+                        ForEach(LoupeCommands.jpegQualityPresets, id: \.self) { q in
+                            Text("\(q)").tag(q)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
                 Toggle("Remove EXIF / Metadata", isOn: $model.exportStripsMetadata)
                     .disabled(!model.exportFormat.canCarryMetadata)
                 Divider()
