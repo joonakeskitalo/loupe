@@ -303,6 +303,15 @@ struct BrowserGridView: View {
                         DispatchQueue.main.async { gridFocused = true }
                     }
                 }
+                // Likewise reclaim focus when the tag-input overlay closes. Its
+                // text field takes first responder while open, so on dismiss
+                // the grid would otherwise stay unfocused and arrow-key
+                // navigation would be dead until the user clicks a cell.
+                .onChange(of: model.showTagInput) { _, showing in
+                    if !showing && canAutoFocus && !model.isViewerPresented {
+                        DispatchQueue.main.async { gridFocused = true }
+                    }
+                }
                 // Arrow keys get their own handler, matched on the specific
                 // keys. This is what makes them take precedence over the
                 // enclosing ScrollView's built-in arrow-key scrolling —

@@ -42,6 +42,7 @@ struct FilmStrip: View {
                             isFlagged: model.isFlagged(item.id),
                             isHidden: model.isHidden(item.id),
                             colorTag: model.colorTag(item.id),
+                            textTags: model.textTags(item.id),
                             method: model.thumbnailMethod,
                             videoPosition: model.videoThumbnailPosition
                         )
@@ -147,6 +148,8 @@ private struct FilmStripCell: View {
     var isHidden: Bool = false
     /// The item's color tag, if any (shown opposite the flag badge).
     var colorTag: ColorTag? = nil
+    /// Free-text tags assigned to the item (shows a tag badge, like the grid).
+    var textTags: [String] = []
     /// The window's active thumbnail-generation method.
     var method: ThumbnailMethod = .hybrid
     /// Where in a video its thumbnail frame is taken (the window's setting).
@@ -212,6 +215,15 @@ private struct FilmStripCell: View {
                         .padding(max(2, size * 0.05))
                         .background(Color.orange, in: Circle())
                         .shadow(radius: 1)
+                }
+                if !textTags.isEmpty {
+                    Image(systemName: "tag.fill")
+                        .font(.system(size: max(8, size * 0.16)))
+                        .foregroundStyle(.white)
+                        .padding(max(2, size * 0.05))
+                        .background(Color.accentColor, in: Circle())
+                        .shadow(radius: 1)
+                        .help(textTags.joined(separator: ", "))
                 }
             }
             .padding(3)

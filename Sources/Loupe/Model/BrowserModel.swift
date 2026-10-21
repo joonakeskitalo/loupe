@@ -272,6 +272,7 @@ final class BrowserModel {
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
+                if textTagFilter != nil { textTagFilter = nil }
             }
             clampSelection()
         }
@@ -299,6 +300,7 @@ final class BrowserModel {
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
+                if textTagFilter != nil { textTagFilter = nil }
             }
             clampSelection()
         }
@@ -322,6 +324,23 @@ final class BrowserModel {
             if colorTagFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
                 if showHiddenOnly { showHiddenOnly = false }
+                if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                if personFilter != nil { personFilter = nil }
+                if textTagFilter != nil { textTagFilter = nil }
+            }
+            clampSelection()
+        }
+    }
+
+    /// When set, the grid shows only items carrying this free-text tag. `nil`
+    /// means no text-tag filter is active. Mutually exclusive with the other
+    /// Library filters.
+    var textTagFilter: String? {
+        didSet {
+            if textTagFilter != nil {
+                if showFlaggedOnly { showFlaggedOnly = false }
+                if showHiddenOnly { showHiddenOnly = false }
+                if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
             }
@@ -348,6 +367,7 @@ final class BrowserModel {
                 if showHiddenOnly { showHiddenOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if personFilter != nil { personFilter = nil }
+                if textTagFilter != nil { textTagFilter = nil }
             }
             clampSelection()
         }
@@ -434,6 +454,7 @@ final class BrowserModel {
                 if showHiddenOnly { showHiddenOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                if textTagFilter != nil { textTagFilter = nil }
             }
             clampSelection()
         }
@@ -745,6 +766,10 @@ final class BrowserModel {
         if let person = personFilter, !facePersons.values.contains(where: { $0.contains(person) }) {
             personFilter = nil
         }
+        // Drop a text-tag filter whose tag is no longer applied to anything.
+        if let filter = textTagFilter, !textTags.values.contains(where: { $0.contains(filter) }) {
+            textTagFilter = nil
+        }
     }
 
     /// Drops any active type/extension chip filters that no longer have a
@@ -845,6 +870,10 @@ final class BrowserModel {
 
         if let colorTagFilter {
             base = base.filter { colorTags[$0.id] == colorTagFilter }
+        }
+
+        if let textTagFilter {
+            base = base.filter { textTags[$0.id]?.contains(textTagFilter) ?? false }
         }
 
         if let aiCategoryFilter {
@@ -1083,6 +1112,9 @@ final class BrowserModel {
         }
         if let colorTagFilter {
             return "\(colorTagFilter.displayName) Tag"
+        }
+        if let textTagFilter {
+            return textTagFilter
         }
         if let aiCategoryFilter {
             return aiCategoryFilter
@@ -2016,6 +2048,30 @@ final class BrowserModel {
 
     /// Number of distinct items carrying any text tag.
     var textTaggedCount: Int { textTags.count }
+
+    /// Number of items carrying the given text tag.
+    func textTagCount(_ tag: String) -> Int {
+        textTags.values.reduce(0) { $0 + ($1.contains(tag) ? 1 : 0) }
+    }
+
+    /// Removes a text tag from every item (and drops the sidebar filter if it
+    /// pointed at it).
+    func deleteTextTag(_ tag: String) {
+        for (id, tags) in textTags where tags.contains(tag) {
+            var updated = tags
+            updated.remove(tag)
+            textTags[id] = updated.isEmpty ? nil : updated
+        }
+        if textTagFilter == tag { textTagFilter = nil }
+        clampSelection()
+    }
+
+    /// Removes every text tag in the window.
+    func clearTextTags() {
+        textTags = [:]
+        textTagFilter = nil
+        clampSelection()
+    }
 
     // MARK: - AI classification
 
@@ -3509,6 +3565,8 @@ final class BrowserModel {
             base = "\(count) flagged \(noun)"
         } else if let colorTagFilter {
             base = "\(count) \(colorTagFilter.displayName.lowercased())-tagged \(noun)"
+        } else if let textTagFilter {
+            base = "\(count) \(noun) tagged “\(textTagFilter)”"
         } else if mode == .folders, !selectedFolders.isEmpty {
             if selectedFolders.count == 1, let folder = selectedFolders.first {
                 base = "\(count) \(noun) in \(folder.lastPathComponent)"

@@ -112,6 +112,14 @@ struct BrowserListView: View {
                         DispatchQueue.main.async { listFocused = true }
                     }
                 }
+                // Reclaim focus when the tag-input overlay closes (its text
+                // field held first responder), so arrow-key navigation isn't
+                // left dead until the user clicks a row.
+                .onChange(of: model.showTagInput) { _, showing in
+                    if !showing && canAutoFocus && !model.isViewerPresented {
+                        DispatchQueue.main.async { listFocused = true }
+                    }
+                }
                 .onKeyPress { press in handleKey(press) }
             }
         }

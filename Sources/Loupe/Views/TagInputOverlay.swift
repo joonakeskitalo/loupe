@@ -16,7 +16,6 @@ struct TagInputOverlay: View {
 
     /// The text being typed for a new tag.
     @State private var draft: String = ""
-    @FocusState private var fieldFocused: Bool
 
     /// Existing tags offered for quick-assign, capped at 9 so each maps to a
     /// single number key. Snapshotted on appear so the list (and its number
@@ -41,11 +40,9 @@ struct TagInputOverlay: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1)))
                 .shadow(radius: 24, y: 8)
         }
-        .onExitCommand { dismiss() }   // Esc
+        .onExitCommand { dismiss() }   // Esc (backstop; the field also handles it)
         .onAppear {
             quickTags = Array(model.allTextTags.prefix(9))
-            // Focus the field next tick so typing starts immediately.
-            DispatchQueue.main.async { fieldFocused = true }
         }
     }
 
@@ -55,25 +52,26 @@ struct TagInputOverlay: View {
             Text(targetCount > 1 ? "Tag \(targetCount) Items" : "Tag Item")
                 .font(.headline)
 
-            // New-tag field: type a name, Return adds it (and closes).
-            // A number key 1–9 (while the field is focused and the draft is
-            // empty) quick-toggles the matching existing tag instead of typing
-            // the digit — so the user can either type a new tag or press a
-            // number to assign an existing one. Once they've started typing a
-            // name, digits type normally so numeric tag names still work.
-            TextField("Add a tag…", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .focused($fieldFocused)
-                .onSubmit { commitDraft() }
-                .onKeyPress(phases: .down) { press in
-                    guard draft.isEmpty,
-                          let digit = press.characters.first?.wholeNumberValue,
-                          (1...9).contains(digit),
-                          digit <= quickTags.count
-                    else { return .ignored }
+            // New-tag field: type a name, Return adds it (and closes). Backed
+            // by an AppKit NSTextField so its field editor owns the standard
+            // editing keys (⌘A select-all, Backspace, ⌘C/V/X) at the responder
+            // level — a SwiftUI TextField let the menu-bar ⌘A command win.
+            //
+            // A number key 1–9 pressed while the draft is empty quick-toggles
+            // the matching existing tag instead of typing the digit; once the
+            // user has started a name, digits type normally so numeric tag
+            // names still work.
+            TaggingTextField(
+                text: $draft,
+                placeholder: "Add a tag…",
+                onSubmit: { commitDraft() },
+                onCancel: { dismiss() },
+                onDigit: { digit in
+                    guard draft.isEmpty, digit >= 1, digit <= quickTags.count else { return false }
                     model.toggleTextTag(quickTags[digit - 1])
-                    return .handled
+                    return true
                 }
+            )
 
             if !quickTags.isEmpty {
                 Divider()
@@ -141,5 +139,114 @@ struct TagInputOverlay: View {
 
     private func dismiss() {
         isPresented = false
+    }
+}
+
+import AppKit
+
+/// An AppKit-backed single-line text field for the tag overlay. Using
+/// `NSTextField` (rather than SwiftUI's `TextField`) gives us the field
+/// editor's native handling of the standard editing keys — ⌘A select-all,
+/// Backspace/⌦, ⌘C/⌘V/⌘X — at the responder level, so the menu-bar ⌘A
+/// ("Select All Items") can't steal them. It makes itself first responder on
+/// appear so typing starts immediately, and routes Return/Esc and empty-field
+/// digit presses back to the overlay.
+private struct TaggingTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var onSubmit: () -> Void
+    var onCancel: () -> Void
+    /// Called when a 1–9 digit is pressed; return true to consume it (the
+    /// overlay toggles a quick tag) or false to let it type normally.
+    var onDigit: (Int) -> Bool
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.placeholderString = placeholder
+        field.stringValue = text
+        field.delegate = context.coordinator
+        field.bezelStyle = .roundedBezel
+        field.focusRingType = .default
+        field.isAutomaticTextCompletionEnabled = false
+        context.coordinator.field = field
+        context.coordinator.installMonitor()
+        // Grab focus once the field is in a window.
+        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        if field.stringValue != text { field.stringValue = text }
+        context.coordinator.parent = self
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
+        coordinator.removeMonitor()
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: TaggingTextField
+        weak var field: NSTextField?
+        private var monitor: Any?
+
+        init(_ parent: TaggingTextField) { self.parent = parent }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        // Return commits, Esc cancels. Other command selectors (select-all,
+        // delete, copy/paste) fall through to the field editor's defaults.
+        func control(_ control: NSControl,
+                     textView: NSTextView,
+                     doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel()
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// A local key-down monitor is the reliable way to intercept bare 1–9
+        /// digits: once the field is first responder, keystrokes go to the
+        /// window's field editor (an `NSTextView`), NOT to the `NSTextField`,
+        /// so overriding the field's `keyDown` never sees them. The monitor
+        /// runs before the field editor, so it can swallow a quick-assign digit
+        /// (field empty, no modifiers) and let every other key type normally.
+        func installMonitor() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let field = self.field,
+                      field.window?.isKeyWindow == true,
+                      field.currentEditor() != nil  // field is focused
+                else { return event }
+
+                let mods = event.modifierFlags.intersection([.command, .control, .option])
+                guard mods.isEmpty, field.stringValue.isEmpty,
+                      let ch = event.charactersIgnoringModifiers, ch.count == 1,
+                      let digit = Int(ch), (1...9).contains(digit)
+                else { return event }
+
+                if self.parent.onDigit(digit) {
+                    return nil   // consumed as a quick-assign
+                }
+                return event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
     }
 }

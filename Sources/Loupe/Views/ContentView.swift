@@ -45,14 +45,6 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
-        .overlay {
-            // Free-text tag input (opened with `y`). Presented over the whole
-            // window so it sits above both the grid and the fullscreen viewer.
-            if model.showTagInput {
-                TagInputOverlay(model: model, isPresented: $model.showTagInput)
-                    .zIndex(2)
-            }
-        }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
             handleDrop(providers)
         }
@@ -61,6 +53,15 @@ struct ContentView: View {
         .background(WindowTabbingConfigurator())
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
+        }
+        // Free-text tag input (opened with `y`). Applied AFTER the
+        // fullScreenViewer overlay so it layers above both the grid and the
+        // viewer — otherwise the viewer would cover it in fullscreen.
+        .overlay {
+            if model.showTagInput {
+                TagInputOverlay(model: model, isPresented: $model.showTagInput)
+                    .zIndex(3)
+            }
         }
         .onAppear {
             if !initialURLs.isEmpty {
@@ -127,17 +128,19 @@ struct ContentView: View {
         // nil (and disable) whenever focus wasn't inside this subtree, e.g.
         // when the sidebar was focused or nothing was.
         .focusedSceneValue(\.activeBrowserModel, model)
-        // Whether the menu bar may own ⌘⌫ right now. False while search is
-        // focused (⌘⌫ edits text) or the viewer is open (it carries its own
-        // ⌘⌫ handler), so exactly one owner of the shortcut is ever live.
+        // Whether the menu bar may own ⌘⌫ right now. False while search OR the
+        // tag-input field is focused (⌘⌫ edits text there) or the viewer is
+        // open (it carries its own ⌘⌫ handler), so exactly one owner of the
+        // shortcut is ever live.
         .focusedSceneValue(
             \.trashShortcutEligible,
-            !(searchFocused || model.isViewerPresented)
+            !(searchFocused || model.showTagInput || model.isViewerPresented)
         )
         // Published so menu commands can release ⌘A (and any other text-editing
-        // shortcut) while the search field is focused, letting the field's
-        // native "select all text" work instead of selecting all grid items.
-        .focusedSceneValue(\.searchFieldFocused, searchFocused)
+        // shortcut) while a text field is focused — the toolbar search field or
+        // the tag-input overlay — letting the field's native editing (select
+        // all, etc.) work instead of the grid shortcut.
+        .focusedSceneValue(\.searchFieldFocused, searchFocused || model.showTagInput)
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.
         .toolbar(model.isViewerPresented ? .hidden : .automatic, for: .windowToolbar)

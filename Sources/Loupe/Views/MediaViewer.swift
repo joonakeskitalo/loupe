@@ -177,6 +177,14 @@ struct MediaViewer: View {
             prefetchUpcomingImages()
         }
         .onChange(of: items.count) { _, _ in prefetchUpcomingImages() }
+        // Reclaim keyboard focus when the tag-input overlay closes — its text
+        // field held first responder while open, so without this the viewer's
+        // arrow-key navigation stays dead until the user clicks the image.
+        .onChange(of: model.showTagInput) { _, showing in
+            if !showing {
+                DispatchQueue.main.async { isFocused = true }
+            }
+        }
         .onAppear {
             prefetchUpcomingImages()
             // Grab keyboard focus so arrow-key navigation works right away,
@@ -604,7 +612,7 @@ struct MediaViewer: View {
     @ViewBuilder
     private var trashHotkey: some View {
         hotkey(.deleteBackspace, .command) { model.moveToTrash() }
-            .disabled(!model.canTrashSelection)
+            .disabled(!model.canTrashSelection || model.showTagInput)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -615,7 +623,7 @@ struct MediaViewer: View {
     @ViewBuilder
     private var copyHotkey: some View {
         hotkey("c", .command) { model.copyToClipboard() }
-            .disabled(!model.canCopySelection)
+            .disabled(!model.canCopySelection || model.showTagInput)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)

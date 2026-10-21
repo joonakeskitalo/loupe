@@ -31,6 +31,7 @@ struct FolderSidebar: View {
                     model.showFlaggedOnly = false
                     model.showHiddenOnly = false
                     model.colorTagFilter = nil
+                    model.textTagFilter = nil
                     model.aiCategoryFilter = nil
                     model.personFilter = nil
                     model.mode = .flattened
@@ -42,7 +43,7 @@ struct FolderSidebar: View {
                         systemImage: "square.grid.3x3",
                         count: model.allItems.count > 0 ? model.allItems.count : nil,
                         isSelected: !model.showFlaggedOnly && !model.showHiddenOnly
-                            && model.colorTagFilter == nil
+                            && model.colorTagFilter == nil && model.textTagFilter == nil
                             && model.aiCategoryFilter == nil && model.personFilter == nil
                             && model.mode == .flattened
                     )
@@ -107,6 +108,15 @@ struct FolderSidebar: View {
                     .buttonStyle(.plain)
                     .disabled(count == 0 && model.colorTagFilter != tag)
                     .listRowInsets(Self.rowInsets)
+                }
+            }
+
+            // Free-text tags, as an expandable list. Shown only once some tags
+            // exist; the header's trailing button clears them all. Each row
+            // filters the grid to items carrying that tag.
+            if !model.allTextTags.isEmpty {
+                Section {
+                    TextTagSection(model: model, focused: $focused, rowInsets: Self.rowInsets)
                 }
             }
 
@@ -206,6 +216,7 @@ private struct FolderRow: View {
 
     private var isSelected: Bool {
         !model.showFlaggedOnly && !model.showHiddenOnly && model.colorTagFilter == nil
+            && model.textTagFilter == nil
             && model.aiCategoryFilter == nil && model.personFilter == nil
             && model.mode == .folders && model.selectedFolders.contains(node.url)
     }
@@ -215,6 +226,7 @@ private struct FolderRow: View {
             model.showFlaggedOnly = false
             model.showHiddenOnly = false
             model.colorTagFilter = nil
+            model.textTagFilter = nil
             model.aiCategoryFilter = nil
             model.personFilter = nil
             model.mode = .folders
@@ -362,6 +374,51 @@ private struct AICategorySection: View {
                 clearHelp: "Clear all AI categories"
             ) {
                 model.clearAICategories()
+            }
+            .padding(.leading, -3)
+        }
+        .listRowInsets(rowInsets)
+    }
+}
+
+/// Expandable "Tags" list: a header with a clear-all button, disclosing one
+/// row per free-text tag. Each row filters the grid to items carrying that tag;
+/// a right-click removes the tag everywhere.
+private struct TextTagSection: View {
+    @Bindable var model: BrowserModel
+    var focused: FocusState<Bool>.Binding
+    let rowInsets: EdgeInsets
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(model.allTextTags, id: \.self) { tag in
+                Button {
+                    model.textTagFilter = tag
+                    focused.wrappedValue = true
+                } label: {
+                    SidebarLabel(
+                        title: tag,
+                        systemImage: "tag",
+                        count: model.textTagCount(tag),
+                        isSelected: model.textTagFilter == tag
+                    )
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(rowInsets)
+                .contextMenu {
+                    Button("Remove Tag", role: .destructive) {
+                        model.deleteTextTag(tag)
+                    }
+                }
+            }
+        } label: {
+            SidebarSectionHeader(
+                title: "Tags",
+                clearHelp: "Clear all tags"
+            ) {
+                model.clearTextTags()
             }
             .padding(.leading, -3)
         }
