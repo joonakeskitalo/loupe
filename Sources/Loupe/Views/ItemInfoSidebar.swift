@@ -321,6 +321,9 @@ private struct ExportSection: View {
 
     var body: some View {
         InfoSection(title: "Export Image") {
+          // Extra vertical spacing between the export controls so they don't
+          // crowd together.
+          VStack(alignment: .leading, spacing: 12) {
             Picker("Format", selection: $model.exportFormat) {
                 ForEach(ImageCopyFormat.allCases, id: \.self) { format in
                     Text(format.displayName).tag(format)
@@ -347,15 +350,13 @@ private struct ExportSection: View {
 
             if model.exportUseCustomLongEdge {
                 HStack(spacing: 6) {
-                    TextField(
-                        "px",
+                    // ↑/↓ adjust by 10 px (Shift = 100 px).
+                    SteppableIntField(
                         value: $model.exportCustomLongEdge,
-                        format: .number
+                        range: 1...100_000,
+                        step: 10,
+                        width: 90
                     )
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 90)
                     Text("px")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -364,25 +365,28 @@ private struct ExportSection: View {
             }
 
             // JPEG compression quality (0–100). Only shown for JPEG — PNG is
-            // lossless, so quality doesn't apply.
+            // lossless, so quality doesn't apply. A field + stepper (rather than
+            // a slider) keeps the row free of the slider's track line.
             if model.exportFormat == .jpeg {
                 HStack(spacing: 6) {
                     Text("Quality")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Slider(
-                        value: Binding(
-                            get: { Double(model.exportJPEGQuality) },
-                            set: { model.exportJPEGQuality = Int($0.rounded()) }
-                        ),
-                        in: 0...100,
+                    // ↑/↓ adjust by 1 (Shift = 10); the stepper nudges by 5.
+                    SteppableIntField(
+                        value: $model.exportJPEGQuality,
+                        range: 0...100,
                         step: 1
                     )
+                    Stepper(
+                        "",
+                        value: $model.exportJPEGQuality,
+                        in: 0...100,
+                        step: 5
+                    )
+                    .labelsHidden()
                     .controlSize(.small)
-                    Text("\(model.exportJPEGQuality)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 24, alignment: .trailing)
+                    Spacer()
                 }
             }
 
@@ -427,6 +431,7 @@ private struct ExportSection: View {
                     .help("Export again to \(dir.path) without choosing a folder.")
                 }
             }
+          }
         }
     }
 }
@@ -470,15 +475,12 @@ private struct VideoExportSection: View {
                     Text("CQ")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    TextField(
-                        "CQ",
+                    // ↑/↓ adjust by 1 (Shift = 10); the stepper nudges by 5.
+                    SteppableIntField(
                         value: $model.exportVideoConstantQuality,
-                        format: .number
+                        range: 0...100,
+                        step: 1
                     )
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 56)
                     Stepper(
                         "",
                         value: $model.exportVideoConstantQuality,
@@ -657,6 +659,44 @@ private struct VideoExportQueueRow: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
         }
+    }
+}
+
+/// A numeric text field whose value can also be nudged with the Up/Down arrow
+/// keys while it's focused (Up increments, Down decrements by `step`; Shift
+/// makes a ×10 jump). The typed value is committed and clamped to `range` on
+/// each change, and every adjustment stays within `range`.
+///
+/// Used for the export fields (quality, custom long edge, video CQ) so the user
+/// can hold ↑/↓ to dial a value in instead of retyping it.
+private struct SteppableIntField: View {
+    @Binding var value: Int
+    var range: ClosedRange<Int>
+    var step: Int = 1
+    var width: CGFloat = 56
+
+    var body: some View {
+        TextField("", value: $value, format: .number)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: width)
+            // Clamp whatever is typed back into the valid range.
+            .onChange(of: value) { _, newValue in
+                let clamped = min(max(newValue, range.lowerBound), range.upperBound)
+                if clamped != newValue { value = clamped }
+            }
+            // Arrow keys adjust the value; Shift makes a coarse (×10) step.
+            .onKeyPress(.upArrow) { adjust(by: +effectiveStep()); return .handled }
+            .onKeyPress(.downArrow) { adjust(by: -effectiveStep()); return .handled }
+    }
+
+    private func effectiveStep() -> Int {
+        NSEvent.modifierFlags.contains(.shift) ? step * 10 : step
+    }
+
+    private func adjust(by delta: Int) {
+        value = min(max(value + delta, range.lowerBound), range.upperBound)
     }
 }
 
