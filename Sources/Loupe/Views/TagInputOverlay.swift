@@ -127,11 +127,17 @@ struct TagInputOverlay: View {
         return model.primarySelectedItem?.name ?? "Tag Item"
     }
 
+    /// Adds the typed tag and keeps the overlay open so the user can keep
+    /// tagging (type another, press a number, or browse to another item).
+    /// Pressing Return on an empty field is a no-op (use Esc to close).
     private func commitDraft() {
         let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { dismiss(); return }
+        guard !name.isEmpty else { return }
         model.addTextTag(name)
-        dismiss()
+        // Clear the field for the next tag and refresh the quick-assign list so
+        // the just-created tag appears as a chip with a number.
+        draft = ""
+        quickTags = Array(model.allTextTags.prefix(9))
     }
 
     private func dismiss() {
