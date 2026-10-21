@@ -762,7 +762,8 @@ final class BrowserModel {
         hiddenItems.formIntersection(present)
         colorTags = colorTags.filter { present.contains($0.key) }
         textTags = textTags.filter { present.contains($0.key) }
-        pruneTextTagOrder()
+        // Note: tag names in `textTagOrder` are intentionally kept even when no
+        // present item carries them, so "empty" tags persist in the sidebar.
         aiCategories = aiCategories.filter { present.contains($0.key) }
         facePersons = facePersons.filter { present.contains($0.key) }
         // Drop a category filter that no longer matches anything.
@@ -773,8 +774,11 @@ final class BrowserModel {
         if let person = personFilter, !facePersons.values.contains(where: { $0.contains(person) }) {
             personFilter = nil
         }
-        // Drop a text-tag filter whose tag is no longer applied to anything.
-        if let filter = textTagFilter, !textTags.values.contains(where: { $0.contains(filter) }) {
+        // Drop a text-tag filter whose tag no longer exists (was deleted). An
+        // "empty" tag that still exists but currently matches nothing keeps the
+        // filter active (the grid just shows no items), so the filter only
+        // clears on an actual delete, not on a rescan.
+        if let filter = textTagFilter, !textTagOrder.contains(filter) {
             textTagFilter = nil
         }
     }
@@ -1982,13 +1986,12 @@ final class BrowserModel {
         (textTags[id] ?? []).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    /// Every distinct text tag still in use this session, in the order they
-    /// were first created. Drives the tag-input overlay's "existing tags" list
-    /// (and its 1–9 quick-assign keys) and the sidebar's Tags section.
-    var allTextTags: [String] {
-        let inUse = Set(textTags.values.flatMap { $0 })
-        return textTagOrder.filter { inUse.contains($0) }
-    }
+    /// Every text tag created this session, in creation order — including
+    /// "empty" tags that no item currently carries, so they stay visible in the
+    /// sidebar and overlay until explicitly deleted. Drives the tag-input
+    /// overlay's existing-tags list (and its 1–9 quick-assign keys) and the
+    /// sidebar's Tags section.
+    var allTextTags: [String] { textTagOrder }
 
     /// Whether every target (the selection, or `item`) already carries `tag` —
     /// used so the overlay can show which existing tags are already applied.
@@ -2033,15 +2036,9 @@ final class BrowserModel {
             textTags[id]?.remove(tag)
             if textTags[id]?.isEmpty == true { textTags[id] = nil }
         }
-        pruneTextTagOrder()
-    }
-
-    /// Drops any tag from the creation-order list that no longer applies to
-    /// any item, so `allTextTags` stays in sync. A tag's position is otherwise
-    /// preserved, so re-adding it before it fully disappears keeps its slot.
-    private func pruneTextTagOrder() {
-        let inUse = Set(textTags.values.flatMap { $0 })
-        textTagOrder.removeAll { !inUse.contains($0) }
+        // The tag itself stays in `textTagOrder` even when no item carries it
+        // anymore — it becomes an "empty" tag, still shown in the sidebar until
+        // explicitly deleted via `deleteTextTag`.
     }
 
     /// Toggles `tag` across the target item(s): if every target already has it,

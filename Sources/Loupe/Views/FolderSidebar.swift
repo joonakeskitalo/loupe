@@ -394,35 +394,69 @@ private struct TextTagSection: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             ForEach(model.allTextTags, id: \.self) { tag in
-                Button {
-                    model.textTagFilter = tag
-                    focused.wrappedValue = true
-                } label: {
-                    SidebarLabel(
-                        title: tag,
-                        systemImage: "tag",
-                        count: model.textTagCount(tag),
-                        isSelected: model.textTagFilter == tag
-                    )
-                }
-                .buttonStyle(.plain)
-                .listRowInsets(rowInsets)
-                .contextMenu {
-                    Button("Remove Tag", role: .destructive) {
-                        model.deleteTextTag(tag)
-                    }
-                }
+                TextTagRow(model: model, tag: tag, focused: focused)
+                    .listRowInsets(rowInsets)
             }
         } label: {
             SidebarSectionHeader(
                 title: "Tags",
-                clearHelp: "Clear all tags"
+                clearHelp: "Delete all tags"
             ) {
                 model.clearTextTags()
             }
             .padding(.leading, -3)
         }
         .listRowInsets(rowInsets)
+    }
+}
+
+/// A single tag row in the sidebar: clicking it filters the grid to that tag;
+/// a trailing delete button (and a right-click "Delete Tag") removes the tag
+/// everywhere. "Empty" tags (count 0, carried by no item) still appear here so
+/// they can be reused or deleted.
+private struct TextTagRow: View {
+    @Bindable var model: BrowserModel
+    let tag: String
+    var focused: FocusState<Bool>.Binding
+
+    @State private var hovering = false
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button {
+                model.textTagFilter = tag
+                focused.wrappedValue = true
+            } label: {
+                SidebarLabel(
+                    title: tag,
+                    systemImage: "tag",
+                    count: model.textTagCount(tag),
+                    isSelected: model.textTagFilter == tag
+                )
+            }
+            .buttonStyle(.plain)
+
+            // Delete button, revealed on hover so it doesn't clutter the row.
+            if hovering {
+                Button {
+                    model.deleteTextTag(tag)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                        .padding(.trailing, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Delete “\(tag)” tag")
+            }
+        }
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Delete Tag", role: .destructive) {
+                model.deleteTextTag(tag)
+            }
+        }
     }
 }
 
