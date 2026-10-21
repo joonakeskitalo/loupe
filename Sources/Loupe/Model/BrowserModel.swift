@@ -317,6 +317,12 @@ final class BrowserModel {
     /// window closes. Driven by the `y` tag-input overlay.
     var textTags: [MediaItem.ID: Set<String>] = [:]
 
+    /// Distinct text tags in the order they were first created this session, so
+    /// the overlay and sidebar list them in creation order rather than by
+    /// frequency. A tag is appended the first time it's assigned and removed
+    /// only when it no longer applies to any item.
+    private(set) var textTagOrder: [String] = []
+
     /// When set, the grid shows only items carrying this color tag. `nil` means
     /// no color filter is active. Mutually exclusive with `showFlaggedOnly`.
     var colorTagFilter: ColorTag? {
@@ -756,6 +762,7 @@ final class BrowserModel {
         hiddenItems.formIntersection(present)
         colorTags = colorTags.filter { present.contains($0.key) }
         textTags = textTags.filter { present.contains($0.key) }
+        pruneTextTagOrder()
         aiCategories = aiCategories.filter { present.contains($0.key) }
         facePersons = facePersons.filter { present.contains($0.key) }
         // Drop a category filter that no longer matches anything.
@@ -1975,19 +1982,12 @@ final class BrowserModel {
         (textTags[id] ?? []).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    /// Every distinct text tag in use this session, ordered by descending
-    /// item-count then alphabetically. Drives the tag-input overlay's
-    /// "existing tags" list (and its 1–9 quick-assign keys).
+    /// Every distinct text tag still in use this session, in the order they
+    /// were first created. Drives the tag-input overlay's "existing tags" list
+    /// (and its 1–9 quick-assign keys) and the sidebar's Tags section.
     var allTextTags: [String] {
-        var counts: [String: Int] = [:]
-        for tags in textTags.values {
-            for tag in tags { counts[tag, default: 0] += 1 }
-        }
-        return counts.keys.sorted { lhs, rhs in
-            let (l, r) = (counts[lhs] ?? 0, counts[rhs] ?? 0)
-            if l != r { return l > r }
-            return lhs.localizedStandardCompare(rhs) == .orderedAscending
-        }
+        let inUse = Set(textTags.values.flatMap { $0 })
+        return textTagOrder.filter { inUse.contains($0) }
     }
 
     /// Whether every target (the selection, or `item`) already carries `tag` —
@@ -2020,6 +2020,8 @@ final class BrowserModel {
         let targets = textTagTargets(item)
         guard !targets.isEmpty else { return }
         for id in targets { textTags[id, default: []].insert(name) }
+        // Record first-seen order so the overlay/sidebar list tags as created.
+        if !textTagOrder.contains(name) { textTagOrder.append(name) }
     }
 
     /// Removes `tag` from the target item(s) (the selection, or `item`),
@@ -2031,6 +2033,15 @@ final class BrowserModel {
             textTags[id]?.remove(tag)
             if textTags[id]?.isEmpty == true { textTags[id] = nil }
         }
+        pruneTextTagOrder()
+    }
+
+    /// Drops any tag from the creation-order list that no longer applies to
+    /// any item, so `allTextTags` stays in sync. A tag's position is otherwise
+    /// preserved, so re-adding it before it fully disappears keeps its slot.
+    private func pruneTextTagOrder() {
+        let inUse = Set(textTags.values.flatMap { $0 })
+        textTagOrder.removeAll { !inUse.contains($0) }
     }
 
     /// Toggles `tag` across the target item(s): if every target already has it,
@@ -2062,6 +2073,7 @@ final class BrowserModel {
             updated.remove(tag)
             textTags[id] = updated.isEmpty ? nil : updated
         }
+        textTagOrder.removeAll { $0 == tag }
         if textTagFilter == tag { textTagFilter = nil }
         clampSelection()
     }
@@ -2069,6 +2081,7 @@ final class BrowserModel {
     /// Removes every text tag in the window.
     func clearTextTags() {
         textTags = [:]
+        textTagOrder = []
         textTagFilter = nil
         clampSelection()
     }
