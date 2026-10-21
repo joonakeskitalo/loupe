@@ -91,15 +91,12 @@ struct TagInputOverlay: View {
                     model.toggleTextTag(quickTags[digit - 1])
                     return true
                 },
-                onNavigate: { forward, shift in
+                onNavigate: { direction, shift in
                     guard draft.isEmpty else { return false }
-                    if shift {
-                        // Grow/shrink the multi-selection so several images can
-                        // be tagged at once.
-                        model.extendViewerSelection(by: forward ? 1 : -1)
-                    } else {
-                        model.moveSelection(by: forward ? 1 : -1)
-                    }
+                    model.selectFirstIfNeeded()
+                    // Up/Down jump a full grid row; Shift extends the
+                    // multi-selection so several items can be tagged at once.
+                    model.moveSelection(direction, columns: max(1, model.gridColumnCount), extend: shift)
                     return true
                 }
             )
@@ -111,7 +108,7 @@ struct TagInputOverlay: View {
                 FlowChips(tags: quickTags, model: model)
             }
 
-            Text("Return add · 1–9 toggle · ←/→ browse · ⇧←/→ select · Esc close")
+            Text("Return add · 1–9 toggle · arrows browse · ⇧arrows select · Esc close")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -246,10 +243,10 @@ private struct TaggingTextField: NSViewRepresentable {
     /// Called when a 1–9 digit is pressed; return true to consume it (the
     /// overlay toggles a quick tag) or false to let it type normally.
     var onDigit: (Int) -> Bool
-    /// Called for a browse key (←/→ or J/L); `forward` is true for next,
-    /// `shift` is true when extending the selection. Return true to consume it
-    /// (navigated) or false to let it act normally.
-    var onNavigate: (_ forward: Bool, _ shift: Bool) -> Bool
+    /// Called for an arrow key; `direction` is which way and `shift` is true
+    /// when extending the selection. Return true to consume it (navigated) or
+    /// false to let it act normally.
+    var onNavigate: (_ direction: BrowserModel.MoveDirection, _ shift: Bool) -> Bool
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField()
@@ -327,20 +324,23 @@ private struct TaggingTextField: NSViewRepresentable {
 
                 let shift = event.modifierFlags.contains(.shift)
 
-                // Browse keys: only the ←/→ arrows (plain = move to the
-                // previous/next item, Shift = extend the multi-selection).
-                // Letters like J/L are left to type into the field — the input
-                // is for tag text, so only arrows navigate here. Active only
-                // while the draft is empty so they don't fight cursor movement.
+                // Browse keys: the arrow keys navigate the grid (←/→ by one
+                // item, ↑/↓ by a full row), with Shift extending the
+                // multi-selection. Letters are left to type into the field —
+                // the input is for tag text, so only arrows navigate here.
+                // Active only while the draft is empty so they don't fight
+                // cursor movement.
+                let direction: BrowserModel.MoveDirection?
                 switch event.keyCode {
-                case 123:  // ←
-                    if self.parent.onNavigate(false, shift) { return nil }
+                case 123: direction = .left
+                case 124: direction = .right
+                case 126: direction = .up
+                case 125: direction = .down
+                default:  direction = nil
+                }
+                if let direction {
+                    if self.parent.onNavigate(direction, shift) { return nil }
                     return event
-                case 124:  // →
-                    if self.parent.onNavigate(true, shift) { return nil }
-                    return event
-                default:
-                    break
                 }
 
                 // Quick-assign digits 1–9 (plain only — Shift+digit is a

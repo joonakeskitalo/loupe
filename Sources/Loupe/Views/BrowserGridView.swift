@@ -173,11 +173,16 @@ struct BrowserGridView: View {
     /// maximum row width is the reliable signal. Falls back to the cached
     /// estimate until frames are reported.
     private var liveColumnCount: Int {
-        guard !cellFrames.isEmpty else { return max(1, model.gridColumnCount) }
-        // Bucket cells into rows by shared minY (tolerance absorbs sub-pixel
-        // drift), then take the widest row's cell count.
+        Self.columnCount(from: cellFrames, fallback: max(1, model.gridColumnCount))
+    }
+
+    /// Bucket cells into rows by shared minY (tolerance absorbs sub-pixel
+    /// drift), then take the widest row's cell count. Static so it can be
+    /// computed from freshly-reported frames before the `@State` settles.
+    private static func columnCount(from frames: [MediaItem.ID: CGRect], fallback: Int) -> Int {
+        guard !frames.isEmpty else { return fallback }
         let tolerance: CGFloat = 1
-        let sortedMinY = cellFrames.values.map(\.minY).sorted()
+        let sortedMinY = frames.values.map(\.minY).sorted()
         var widest = 1
         var rowStartY = sortedMinY[0]
         var rowCount = 0
@@ -266,7 +271,22 @@ struct BrowserGridView: View {
                             .overlay(marqueeRectangle)
                         }
                         .coordinateSpace(name: gridSpace)
-                        .onPreferenceChange(CellFramesKey.self) { cellFrames = $0 }
+                        .onPreferenceChange(CellFramesKey.self) { frames in
+                            cellFrames = frames
+                            // Publish the accurate, rendered column count so
+                            // other surfaces (e.g. the tag overlay's Up/Down
+                            // navigation) jump exactly one row. Computed from
+                            // the freshly-reported frames (not `liveColumnCount`,
+                            // which reads the not-yet-settled @State). The
+                            // width-based estimate elsewhere is only a fallback
+                            // before frames arrive; it tends to be too small and
+                            // threw off Up/Down when read from outside the grid.
+                            let live = Self.columnCount(from: frames,
+                                                        fallback: max(1, model.gridColumnCount))
+                            if model.gridColumnCount != live {
+                                model.gridColumnCount = live
+                            }
+                        }
                         .onChange(of: model.selectedItem) { _, newValue in
                             // Clicks already land on a visible item, so only
                             // auto-scroll for keyboard navigation.
