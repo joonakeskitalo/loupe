@@ -430,13 +430,16 @@ private struct TextTagRow: View {
                 SidebarLabel(
                     title: tag,
                     systemImage: "tag",
-                    count: model.textTagCount(tag),
+                    // Hide the count while hovering so the delete button takes
+                    // its slot instead of overlapping it.
+                    count: hovering ? nil : model.textTagCount(tag),
                     isSelected: model.textTagFilter == tag
                 )
             }
             .buttonStyle(.plain)
 
-            // Delete button, revealed on hover so it doesn't clutter the row.
+            // Delete button, revealed on hover (in place of the count) so it
+            // doesn't clutter the row or overlap the badge.
             if hovering {
                 Button {
                     model.deleteTextTag(tag)
