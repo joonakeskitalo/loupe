@@ -28,18 +28,23 @@ struct TagInputOverlay: View {
     }
 
     var body: some View {
-        ZStack {
-            // Dimmed backdrop; a click dismisses.
-            Color.black.opacity(0.45)
-                .ignoresSafeArea()
-                .onTapGesture { dismiss() }
-
+        // A compact panel pinned to the bottom-center, with no full-screen dim,
+        // so the image/content behind stays visible and the user can keep
+        // browsing with the arrow keys while tagging. A click outside the panel
+        // falls through to the content (the panel doesn't block it).
+        // Pinned to the bottom-center. The surrounding area has no background,
+        // so taps there pass through to the content behind — only the panel
+        // itself is interactive, keeping the overlay non-modal.
+        VStack {
+            Spacer(minLength: 0)
             panel
-                .frame(width: 360)
+                .frame(width: 420)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1)))
-                .shadow(radius: 24, y: 8)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.12)))
+                .shadow(radius: 20, y: 6)
+                .padding(.bottom, 24)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .onExitCommand { dismiss() }   // Esc (backstop; the field also handles it)
         .onAppear {
             quickTags = Array(model.allTextTags.prefix(9))
@@ -48,19 +53,34 @@ struct TagInputOverlay: View {
 
     @ViewBuilder
     private var panel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(targetCount > 1 ? "Tag \(targetCount) Items" : "Tag Item")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "tag")
+                    .foregroundStyle(.secondary)
+                Text(headerTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Close (Esc)")
+            }
 
-            // New-tag field: type a name, Return adds it (and closes). Backed
-            // by an AppKit NSTextField so its field editor owns the standard
-            // editing keys (⌘A select-all, Backspace, ⌘C/V/X) at the responder
-            // level — a SwiftUI TextField let the menu-bar ⌘A command win.
+            // New-tag field: type a name, Return adds it. Backed by an AppKit
+            // NSTextField so its field editor owns the standard editing keys
+            // (⌘A select-all, Backspace, ⌘C/V/X) at the responder level — a
+            // SwiftUI TextField let the menu-bar ⌘A command win.
             //
-            // A number key 1–9 pressed while the draft is empty quick-toggles
-            // the matching existing tag instead of typing the digit; once the
-            // user has started a name, digits type normally so numeric tag
-            // names still work.
+            // While the field is empty: 1–9 quick-toggle an existing tag and
+            // ←/→ (and J/L) browse to the previous/next item so you can tag a
+            // run of images without leaving the overlay. Once you start typing
+            // a name, those keys edit/type normally.
             TaggingTextField(
                 text: $draft,
                 placeholder: "Add a tag…",
@@ -70,64 +90,35 @@ struct TagInputOverlay: View {
                     guard draft.isEmpty, digit >= 1, digit <= quickTags.count else { return false }
                     model.toggleTextTag(quickTags[digit - 1])
                     return true
+                },
+                onNavigate: { forward in
+                    guard draft.isEmpty else { return false }
+                    model.moveSelection(by: forward ? 1 : -1)
+                    return true
                 }
             )
 
             if !quickTags.isEmpty {
-                Divider()
-                Text("Existing Tags")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                VStack(spacing: 4) {
-                    ForEach(Array(quickTags.enumerated()), id: \.element) { index, tag in
-                        existingTagRow(index: index, tag: tag)
-                    }
-                }
+                // Existing tags as compact wrapping chips — tap or press its
+                // number to toggle. Kept to one or two rows so the panel stays
+                // small and unobtrusive over the image.
+                FlowChips(tags: quickTags, model: model)
             }
 
-            Divider()
-            HStack {
-                Text("Return to add · 1–9 to toggle · Esc to close")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-                    .hidden()   // Return is handled by the field's onSubmit.
-            }
+            Text("Return to add · 1–9 toggle · ←/→ browse · Esc close")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
-        .padding(16)
+        .padding(14)
     }
 
-    /// A clickable row for an existing tag: its number key, the name, and a
-    /// checkmark when every target already carries it.
-    private func existingTagRow(index: Int, tag: String) -> some View {
-        let applied = model.allTargetsHaveTextTag(tag)
-        return Button {
-            model.toggleTextTag(tag)
-        } label: {
-            HStack(spacing: 8) {
-                Text("\(index + 1)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                Text(tag)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 8)
-                Image(systemName: applied ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(applied ? Color.accentColor : Color.secondary)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(applied ? Color.accentColor.opacity(0.12) : Color.clear)
-            )
+    /// The panel header: the current item's name (so the user knows what
+    /// they're tagging as they browse), or a count for a multi-selection.
+    private var headerTitle: String {
+        if model.selectedItems.count > 1 {
+            return "Tag \(model.selectedItems.count) Items"
         }
-        .buttonStyle(.plain)
+        return model.primarySelectedItem?.name ?? "Tag Item"
     }
 
     private func commitDraft() {
@@ -139,6 +130,90 @@ struct TagInputOverlay: View {
 
     private func dismiss() {
         isPresented = false
+    }
+}
+
+/// A compact wrapping row of existing-tag chips. Each chip shows its 1–9 number
+/// (for the keyboard shortcut) and highlights when every target already carries
+/// it; tapping toggles it. Uses SwiftUI's native `Layout`-free wrapping via a
+/// `WrapLayout` so a long tag list flows onto multiple lines without a scroll
+/// view bloating the panel.
+private struct FlowChips: View {
+    let tags: [String]
+    @Bindable var model: BrowserModel
+
+    var body: some View {
+        WrapLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(Array(tags.enumerated()), id: \.element) { index, tag in
+                let applied = model.allTargetsHaveTextTag(tag)
+                Button {
+                    model.toggleTextTag(tag)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("\(index + 1)")
+                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(applied ? Color.white.opacity(0.8) : .secondary)
+                        Text(tag)
+                            .font(.caption)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(applied ? Color.accentColor : Color.secondary.opacity(0.18))
+                    )
+                    .foregroundStyle(applied ? Color.white : Color.primary)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// A minimal flow (wrapping) layout: places subviews left-to-right, wrapping to
+/// a new line when the next one would overflow the proposed width.
+private struct WrapLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var widest: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: min(widest, maxWidth), height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var lineHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.minX + maxWidth {
+                x = bounds.minX
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                      proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
     }
 }
 
@@ -159,6 +234,9 @@ private struct TaggingTextField: NSViewRepresentable {
     /// Called when a 1–9 digit is pressed; return true to consume it (the
     /// overlay toggles a quick tag) or false to let it type normally.
     var onDigit: (Int) -> Bool
+    /// Called for a browse key (←/→ or J/L); `forward` is true for next.
+    /// Return true to consume it (navigated) or false to let it act normally.
+    var onNavigate: (_ forward: Bool) -> Bool
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField()
@@ -230,13 +308,26 @@ private struct TaggingTextField: NSViewRepresentable {
                 else { return event }
 
                 let mods = event.modifierFlags.intersection([.command, .control, .option])
-                guard mods.isEmpty, field.stringValue.isEmpty,
-                      let ch = event.charactersIgnoringModifiers, ch.count == 1,
-                      let digit = Int(ch), (1...9).contains(digit)
-                else { return event }
+                guard mods.isEmpty, field.stringValue.isEmpty else { return event }
 
-                if self.parent.onDigit(digit) {
-                    return nil   // consumed as a quick-assign
+                // Browse keys: ←/→ arrows and J/L. Only active while the draft
+                // is empty, so they don't interfere with cursor movement/typing.
+                switch event.keyCode {
+                case 123, 38:  // ← , J
+                    if self.parent.onNavigate(false) { return nil }
+                    return event
+                case 124, 37:  // → , L
+                    if self.parent.onNavigate(true) { return nil }
+                    return event
+                default:
+                    break
+                }
+
+                // Quick-assign digits 1–9.
+                if let ch = event.charactersIgnoringModifiers, ch.count == 1,
+                   let digit = Int(ch), (1...9).contains(digit),
+                   self.parent.onDigit(digit) {
+                    return nil
                 }
                 return event
             }
