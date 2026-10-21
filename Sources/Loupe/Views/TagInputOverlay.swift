@@ -321,22 +321,17 @@ private struct TaggingTextField: NSViewRepresentable {
 
                 let shift = event.modifierFlags.contains(.shift)
 
-                // Browse keys: ←/→ arrows (plain = move cursor/item, Shift =
-                // extend the multi-selection) and J/L (move only). Only active
-                // while the draft is empty, so they don't interfere with
-                // cursor movement / typing.
+                // Browse keys: only the ←/→ arrows (plain = move to the
+                // previous/next item, Shift = extend the multi-selection).
+                // Letters like J/L are left to type into the field — the input
+                // is for tag text, so only arrows navigate here. Active only
+                // while the draft is empty so they don't fight cursor movement.
                 switch event.keyCode {
                 case 123:  // ←
                     if self.parent.onNavigate(false, shift) { return nil }
                     return event
                 case 124:  // →
                     if self.parent.onNavigate(true, shift) { return nil }
-                    return event
-                case 38:   // J (move only; ignore if Shift to avoid uppercase)
-                    if !shift, self.parent.onNavigate(false, false) { return nil }
-                    return event
-                case 37:   // L (move only)
-                    if !shift, self.parent.onNavigate(true, false) { return nil }
                     return event
                 default:
                     break
