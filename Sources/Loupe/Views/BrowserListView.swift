@@ -268,6 +268,7 @@ struct BrowserListView: View {
             isHidden: model.isHidden(item.id),
             colorTag: model.colorTag(item.id),
             aiCategory: model.aiCategory(item.id),
+            textTags: model.textTags(item.id),
             method: model.thumbnailMethod,
             videoPosition: model.videoThumbnailPosition
         )
@@ -495,6 +496,9 @@ private struct ListRowView: View {
     var colorTag: ColorTag? = nil
     /// AI-assigned category, if classified. Shown as a small pill after the name.
     var aiCategory: String? = nil
+    /// Free-text tags assigned to the item. Shown as small blue pills after the
+    /// name, like the AI-category pill.
+    var textTags: [String] = []
     /// The window's active thumbnail-generation method.
     var method: ThumbnailMethod = .hybrid
     /// Where in a video its thumbnail frame is taken (the window's setting).
@@ -559,6 +563,18 @@ private struct ListRowView: View {
                 Text(item.name)
                     .lineLimit(1)
                     .truncationMode(.middle)
+
+                // Free-text tags as small blue pills, each with the tag icon.
+                ForEach(textTags, id: \.self) { tag in
+                    Label(tag, systemImage: "tag.fill")
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.85), in: Capsule())
+                        .help("Tag: \(tag)")
+                }
 
                 if let aiCategory {
                     Label(aiCategory, systemImage: "sparkles")

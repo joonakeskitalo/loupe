@@ -99,22 +99,42 @@ struct ThumbnailView: View {
                 }
             }
             .overlay(alignment: .bottomLeading) {
-                if let aiCategory, size >= 110 {
-                    // Solid dark fill (not a translucent material) with white
-                    // text and a soft shadow so the label stays legible over
-                    // any image, light or dark — the same high-contrast
-                    // approach as the flag badge.
-                    Label(aiCategory, systemImage: "sparkles")
-                        .font(.system(size: max(9, size * 0.07), weight: .medium))
-                        .lineLimit(1)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.6), in: Capsule())
-                        .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 0.5))
-                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-                        .padding(6)
-                        .help("AI category: \(aiCategory)")
+                // Tag name(s) and the AI category share the bottom-leading
+                // corner, stacked so they never overlap.
+                if size >= 110, (!textTags.isEmpty || aiCategory != nil) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        if !textTags.isEmpty {
+                            // The assigned tag name(s). A blue fill matches the
+                            // tag accent; multiple tags join with commas.
+                            Label(textTags.joined(separator: ", "), systemImage: "tag.fill")
+                                .font(.system(size: max(9, size * 0.07), weight: .medium))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.blue.opacity(0.85), in: Capsule())
+                                .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 0.5))
+                                .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                                .help(textTags.joined(separator: ", "))
+                        }
+                        if let aiCategory {
+                            // Solid dark fill (not a translucent material) with
+                            // white text and a soft shadow so the label stays
+                            // legible over any image, light or dark.
+                            Label(aiCategory, systemImage: "sparkles")
+                                .font(.system(size: max(9, size * 0.07), weight: .medium))
+                                .lineLimit(1)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.6), in: Capsule())
+                                .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 0.5))
+                                .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                                .help("AI category: \(aiCategory)")
+                        }
+                    }
+                    .padding(6)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -142,22 +162,12 @@ struct ThumbnailView: View {
             )
 
             if !hideFilename {
-                HStack(spacing: 4) {
-                    // A small blue dot marks a tagged item, sitting just left of
-                    // the name.
-                    if !textTags.isEmpty {
-                        Circle()
-                            .fill(Color.blue)
-                            .frame(width: 6, height: 6)
-                            .help(textTags.joined(separator: ", "))
-                    }
-                    Text(item.name)
-                        .font(.caption)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-                }
-                .frame(width: size)
+                Text(item.name)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: size)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
             }
         }
         .padding(gridItemPadding)
