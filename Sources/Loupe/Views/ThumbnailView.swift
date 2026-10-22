@@ -84,15 +84,6 @@ struct ThumbnailView: View {
                             .background(Color.orange, in: Circle())
                             .shadow(radius: 1)
                     }
-                    if !textTags.isEmpty {
-                        Image(systemName: "tag.fill")
-                            .font(.system(size: max(8, size * 0.09)))
-                            .foregroundStyle(.white)
-                            .padding(3)
-                            .background(Color.accentColor, in: Circle())
-                            .shadow(radius: 1)
-                            .help(textTags.joined(separator: ", "))
-                    }
                 }
                 .padding(5)
             }
@@ -151,12 +142,22 @@ struct ThumbnailView: View {
             )
 
             if !hideFilename {
-                Text(item.name)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(width: size)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                HStack(spacing: 4) {
+                    // A small blue dot marks a tagged item, sitting just left of
+                    // the name.
+                    if !textTags.isEmpty {
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 6, height: 6)
+                            .help(textTags.joined(separator: ", "))
+                    }
+                    Text(item.name)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                }
+                .frame(width: size)
             }
         }
         .padding(gridItemPadding)
