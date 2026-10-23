@@ -239,6 +239,11 @@ struct LoupeCommands: Commands {
         CommandGroup(after: .sidebar) {
             Divider()
 
+            // Right-hand preview sidebar (a live preview of the selected item).
+            Button(previewSidebarToggleTitle) { model?.togglePreviewSidebar() }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+                .disabled(model == nil)
+
             // Right-hand info sidebar (file info + metadata for the selection).
             Button(infoSidebarToggleTitle) { model?.toggleInfoSidebar() }
                 .keyboardShortcut("i", modifiers: [.command, .option])
@@ -494,6 +499,10 @@ struct LoupeCommands: Commands {
 
     private var infoSidebarToggleTitle: String {
         (model?.showInfoSidebar ?? false) ? "Hide Info Sidebar" : "Show Info Sidebar"
+    }
+
+    private var previewSidebarToggleTitle: String {
+        (model?.showPreviewSidebar ?? false) ? "Hide Preview Sidebar" : "Show Preview Sidebar"
     }
 
     private var groupByFolderToggleTitle: String {

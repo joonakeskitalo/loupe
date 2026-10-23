@@ -112,6 +112,10 @@ struct ContentView: View {
                             BrowserListView(model: model, canAutoFocus: !searchFocused)
                         }
                     }
+                    if model.showPreviewSidebar {
+                        ItemPreviewSidebar(model: model)
+                            .transition(.move(edge: .trailing))
+                    }
                     if model.showInfoSidebar {
                         ItemInfoSidebar(model: model)
                             .transition(.move(edge: .trailing))
@@ -404,7 +408,14 @@ struct ContentView: View {
             .help("Open selected item in viewer (Space or Return)")
         }
 
-        ToolbarItem {
+        ToolbarItemGroup {
+            Button {
+                withAnimation { model.togglePreviewSidebar() }
+            } label: {
+                Label("Preview", systemImage: "sidebar.squares.right")
+            }
+            .help("Show a preview of the selected item (⌥⌘P)")
+
             Button {
                 withAnimation { model.toggleInfoSidebar() }
             } label: {

@@ -899,7 +899,7 @@ private struct GridPreview: View {
 
 // MARK: - PDF
 
-private struct PDFViewerRepresentable: NSViewRepresentable {
+struct PDFViewerRepresentable: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> PDFView {
@@ -920,7 +920,7 @@ private struct PDFViewerRepresentable: NSViewRepresentable {
 
 // MARK: - QuickLook fallback
 
-private struct QuickLookView: NSViewRepresentable {
+struct QuickLookView: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> QLPreviewView {

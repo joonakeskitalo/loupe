@@ -124,6 +124,37 @@ final class BrowserModel {
     /// selection) is shown. Window-scoped and in-session only.
     var showInfoSidebar = false
 
+    /// Whether the right-hand preview sidebar (a live preview of the single
+    /// selected image / video / document) is shown. Window-scoped and
+    /// in-session only, matching `showInfoSidebar`.
+    var showPreviewSidebar = false
+
+    /// The preview sidebar's width in points. A preference persisted across
+    /// windows and launches (like `thumbnailMethod`), so resizing it in one
+    /// window carries over. Clamped to `minPreviewSidebarWidth ...
+    /// maxPreviewSidebarWidth` on write.
+    var previewSidebarWidth: Double = {
+        let stored = UserDefaults.standard.double(forKey: BrowserModel.previewSidebarWidthKey)
+        guard stored > 0 else { return BrowserModel.defaultPreviewSidebarWidth }
+        return min(max(stored, BrowserModel.minPreviewSidebarWidth),
+                   BrowserModel.maxPreviewSidebarWidth)
+    }() {
+        didSet {
+            let clamped = min(max(previewSidebarWidth, Self.minPreviewSidebarWidth),
+                              Self.maxPreviewSidebarWidth)
+            if clamped != previewSidebarWidth {
+                previewSidebarWidth = clamped
+                return
+            }
+            UserDefaults.standard.set(previewSidebarWidth, forKey: Self.previewSidebarWidthKey)
+        }
+    }
+
+    static let minPreviewSidebarWidth: Double = 220
+    static let maxPreviewSidebarWidth: Double = 900
+    static let defaultPreviewSidebarWidth: Double = 420
+    private static let previewSidebarWidthKey = "previewSidebarWidth"
+
     /// Whether the free-text tag-input overlay (opened with `y`) is showing.
     /// Lives on the model so both the grid and the fullscreen viewer can open
     /// it, and so each surface can suspend its single-key hotkeys while it's up.
@@ -137,6 +168,9 @@ final class BrowserModel {
 
     /// Toggles the info sidebar on/off (⌥⌘I / toolbar button).
     func toggleInfoSidebar() { showInfoSidebar.toggle() }
+
+    /// Toggles the preview sidebar on/off (⌥⌘P / toolbar button).
+    func togglePreviewSidebar() { showPreviewSidebar.toggle() }
 
     /// When true, the grid hides the filename caption under each thumbnail for
     /// a denser, image-only layout.
