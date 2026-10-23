@@ -20,8 +20,16 @@ enum ImageExporter {
     /// added: "name 2.jpg", "name 3.jpg", …).
     ///
     /// The decode + re-encode is CPU-heavy (especially many large or RAW images
-    /// at Original size), so it runs on a detached task to keep the UI
-    /// responsive; `progress` is called on the main actor after each image.
+    /// at Original size), so the renders run concurrently across the machine's
+    /// cores in a detached task to keep the UI responsive; `progress` is called
+    /// on the main actor as each image finishes.
+    ///
+    /// Only the render/encode step is parallel. Name de-duping and the disk
+    /// write stay serialized — `uniqueDestination` reads the destination and
+    /// mutates shared state, and writing in input order keeps output names
+    /// deterministic (the first source always claims the plain "name.ext",
+    /// later duplicates get the numeric suffix) regardless of which render
+    /// finishes first.
     @discardableResult
     @MainActor
     static func export(
@@ -38,8 +46,6 @@ enum ImageExporter {
         progress(0, total)
 
         let written = await Task.detached(priority: .userInitiated) {
-            var usedNames = Set<String>()
-            var count = 0
             let fm = FileManager.default
 
             // The destination comes from an NSOpenPanel, so under the sandbox
@@ -49,35 +55,72 @@ enum ImageExporter {
             let scoped = directory.startAccessingSecurityScopedResource()
             defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
 
-            for (index, url) in urls.enumerated() {
-                defer {
-                    let completed = index + 1
-                    Task { @MainActor in progress(completed, total) }
+            // Render up to `maxConcurrent` images at once, keeping the pool
+            // topped up as each finishes. Results are collected keyed by input
+            // index so naming/writing can replay them in order, independent of
+            // completion order.
+            let maxConcurrent = max(1, ProcessInfo.processInfo.activeProcessorCount)
+            var rendered = [Int: ImageRenderer.Rendered]()
+            rendered.reserveCapacity(total)
+            var completed = 0
+
+            await withTaskGroup(of: (Int, ImageRenderer.Rendered?).self) { group in
+                var next = 0
+
+                func addTask(_ index: Int) {
+                    let url = urls[index]
+                    group.addTask(priority: .userInitiated) {
+                        let result = ImageRenderer.render(
+                            url: url,
+                            scale: scale,
+                            format: format,
+                            stripMetadata: stripMetadata,
+                            maxLongEdge: maxLongEdge,
+                            jpegQuality: jpegQuality,
+                            includeTIFF: false
+                        )
+                        return (index, result)
+                    }
                 }
 
-                guard let rendered = ImageRenderer.render(
-                    url: url,
-                    scale: scale,
-                    format: format,
-                    stripMetadata: stripMetadata,
-                    maxLongEdge: maxLongEdge,
-                    jpegQuality: jpegQuality,
-                    includeTIFF: false
-                ) else { continue }
+                while next < total && next < maxConcurrent {
+                    addTask(next)
+                    next += 1
+                }
+
+                for await (index, result) in group {
+                    if let result { rendered[index] = result }
+
+                    completed += 1
+                    let done = completed
+                    Task { @MainActor in progress(done, total) }
+
+                    if next < total {
+                        addTask(next)
+                        next += 1
+                    }
+                }
+            }
+
+            // Serialized tail: allocate unique names and write, in input order.
+            var usedNames = Set<String>()
+            var count = 0
+            for index in 0..<total {
+                guard let r = rendered[index] else { continue }
 
                 let dest = Self.uniqueDestination(
                     directory: directory,
-                    baseName: rendered.baseName,
+                    baseName: r.baseName,
                     ext: format.fileExtension,
                     usedNames: &usedNames,
                     fileManager: fm
                 )
 
                 do {
-                    try rendered.data.write(to: dest)
+                    try r.data.write(to: dest)
                     count += 1
                 } catch {
-                    NSLog("Loupe: failed to export \(url.path) → \(dest.path): \(error.localizedDescription)")
+                    NSLog("Loupe: failed to export \(urls[index].path) → \(dest.path): \(error.localizedDescription)")
                 }
             }
             return count
