@@ -287,6 +287,19 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("h", modifiers: [.command, .shift])
                 .disabled(model == nil || ((model?.hiddenCount ?? 0) == 0 && model?.showHiddenOnly != true))
 
+            // Hide annotated items from the grid/list — a quick way to clear
+            // out things already triaged. Independent toggles, each yielding in
+            // its matching "show only" view.
+            Menu("Hide Annotated") {
+                Toggle("Hide Flagged", isOn: hideFlaggedItemsBinding)
+                    .disabled(model == nil)
+                Toggle("Hide Tagged", isOn: hideTaggedItemsBinding)
+                    .disabled(model == nil)
+                Toggle("Hide Color-Coded", isOn: hideColorCodedItemsBinding)
+                    .disabled(model == nil)
+            }
+            .disabled(model == nil)
+
             // How thumbnails are generated. `Native macOS` (Quick Look) is the
             // escape hatch for black .mp4 thumbnails the AVFoundation seek can
             // produce under the default Hybrid routing.
@@ -510,6 +523,9 @@ struct LoupeCommands: Commands {
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
     private var showHiddenOnlyBinding: Binding<Bool> { binding(\.showHiddenOnly, default: false) }
+    private var hideFlaggedItemsBinding: Binding<Bool> { binding(\.hideFlaggedItems, default: false) }
+    private var hideTaggedItemsBinding: Binding<Bool> { binding(\.hideTaggedItems, default: false) }
+    private var hideColorCodedItemsBinding: Binding<Bool> { binding(\.hideColorCodedItems, default: false) }
     private var groupingBinding: Binding<GroupingDimension> { binding(\.grouping, default: .none) }
     private var sortOrderBinding: Binding<SortOrder> { binding(\.sortOrder, default: .name) }
     private var sortAscendingBinding: Binding<Bool> { binding(\.sortAscending, default: true) }

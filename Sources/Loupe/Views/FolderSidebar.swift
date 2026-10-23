@@ -29,6 +29,7 @@ struct FolderSidebar: View {
             Section("Library") {
                 Button {
                     model.showFlaggedOnly = false
+                    model.showUnmarkedOnly = false
                     model.showHiddenOnly = false
                     model.colorTagFilter = nil
                     model.textTagFilter = nil
@@ -42,7 +43,8 @@ struct FolderSidebar: View {
                         title: "All Media",
                         systemImage: "square.grid.3x3",
                         count: model.allItems.count > 0 ? model.allItems.count : nil,
-                        isSelected: !model.showFlaggedOnly && !model.showHiddenOnly
+                        isSelected: !model.showFlaggedOnly && !model.showUnmarkedOnly
+                            && !model.showHiddenOnly
                             && model.colorTagFilter == nil && model.textTagFilter == nil
                             && model.aiCategoryFilter == nil && model.personFilter == nil
                             && model.mode == .flattened
@@ -68,6 +70,24 @@ struct FolderSidebar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.flaggedCount == 0 && !model.showFlaggedOnly)
+                .listRowInsets(Self.rowInsets)
+
+                // Unmarked: items with no flag, color tag, or text tag — the
+                // triage backlog.
+                Button {
+                    model.showUnmarkedOnly = true
+                    focused = true
+                } label: {
+                    SidebarLabel(
+                        title: "Unmarked",
+                        systemImage: "circle.dashed",
+                        count: model.unmarkedCount > 0 ? model.unmarkedCount : nil,
+                        isSelected: model.showUnmarkedOnly
+                    )
+                    .padding(.leading, -12)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.unmarkedCount == 0 && !model.showUnmarkedOnly)
                 .listRowInsets(Self.rowInsets)
 
                 Button {
@@ -215,7 +235,8 @@ private struct FolderRow: View {
     @State private var isExpanded: Bool = true
 
     private var isSelected: Bool {
-        !model.showFlaggedOnly && !model.showHiddenOnly && model.colorTagFilter == nil
+        !model.showFlaggedOnly && !model.showUnmarkedOnly && !model.showHiddenOnly
+            && model.colorTagFilter == nil
             && model.textTagFilter == nil
             && model.aiCategoryFilter == nil && model.personFilter == nil
             && model.mode == .folders && model.selectedFolders.contains(node.url)
@@ -224,6 +245,7 @@ private struct FolderRow: View {
     private var rowLabel: some View {
         Button {
             model.showFlaggedOnly = false
+            model.showUnmarkedOnly = false
             model.showHiddenOnly = false
             model.colorTagFilter = nil
             model.textTagFilter = nil

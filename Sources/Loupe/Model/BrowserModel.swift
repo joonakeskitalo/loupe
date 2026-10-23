@@ -269,6 +269,24 @@ final class BrowserModel {
         didSet {
             if showFlaggedOnly {
                 if showHiddenOnly { showHiddenOnly = false }
+                if showUnmarkedOnly { showUnmarkedOnly = false }
+                if colorTagFilter != nil { colorTagFilter = nil }
+                if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                if personFilter != nil { personFilter = nil }
+                if textTagFilter != nil { textTagFilter = nil }
+            }
+            clampSelection()
+        }
+    }
+
+    /// When true, the grid shows only "unmarked" items — those with no flag, no
+    /// color tag, and no text tag. A quick way to see what still needs triage.
+    /// Mutually exclusive with the other Library views.
+    var showUnmarkedOnly = false {
+        didSet {
+            if showUnmarkedOnly {
+                if showFlaggedOnly { showFlaggedOnly = false }
+                if showHiddenOnly { showHiddenOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
@@ -297,6 +315,7 @@ final class BrowserModel {
         didSet {
             if showHiddenOnly {
                 if showFlaggedOnly { showFlaggedOnly = false }
+                if showUnmarkedOnly { showUnmarkedOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
@@ -317,6 +336,24 @@ final class BrowserModel {
     /// window closes. Driven by the `y` tag-input overlay.
     var textTags: [MediaItem.ID: Set<String>] = [:]
 
+    // MARK: - Annotation hide filters
+    //
+    // Independent "hide" toggles that exclude annotated items from the normal
+    // grid/list, so the user can clear out things they've already triaged. Each
+    // is additive and applies in every view EXCEPT the matching "show only"
+    // Library view (hiding flagged items while viewing the Flagged library, for
+    // instance, would leave it empty — so the toggle yields there).
+
+    /// When true, flagged items are hidden from the grid/list.
+    var hideFlaggedItems = false { didSet { clampSelection() } }
+
+    /// When true, text-tagged items are hidden from the grid/list.
+    var hideTaggedItems = false { didSet { clampSelection() } }
+
+    /// When true, color-coded (color-tagged) items are hidden from the
+    /// grid/list.
+    var hideColorCodedItems = false { didSet { clampSelection() } }
+
     /// Distinct text tags in the order they were first created this session, so
     /// the overlay and sidebar list them in creation order rather than by
     /// frequency. A tag is appended the first time it's assigned and removed
@@ -330,6 +367,7 @@ final class BrowserModel {
             if colorTagFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
                 if showHiddenOnly { showHiddenOnly = false }
+                if showUnmarkedOnly { showUnmarkedOnly = false }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
                 if textTagFilter != nil { textTagFilter = nil }
@@ -346,6 +384,7 @@ final class BrowserModel {
             if textTagFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
                 if showHiddenOnly { showHiddenOnly = false }
+                if showUnmarkedOnly { showUnmarkedOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if personFilter != nil { personFilter = nil }
@@ -371,6 +410,7 @@ final class BrowserModel {
             if aiCategoryFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
                 if showHiddenOnly { showHiddenOnly = false }
+                if showUnmarkedOnly { showUnmarkedOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if personFilter != nil { personFilter = nil }
                 if textTagFilter != nil { textTagFilter = nil }
@@ -458,6 +498,7 @@ final class BrowserModel {
             if personFilter != nil {
                 if showFlaggedOnly { showFlaggedOnly = false }
                 if showHiddenOnly { showHiddenOnly = false }
+                if showUnmarkedOnly { showUnmarkedOnly = false }
                 if colorTagFilter != nil { colorTagFilter = nil }
                 if aiCategoryFilter != nil { aiCategoryFilter = nil }
                 if textTagFilter != nil { textTagFilter = nil }
@@ -879,6 +920,11 @@ final class BrowserModel {
             base = base.filter { flaggedItems.contains($0.id) }
         }
 
+        if showUnmarkedOnly {
+            // Items with no flag, no color tag, and no text tag.
+            base = base.filter { isUnmarked($0.id) }
+        }
+
         if let colorTagFilter {
             base = base.filter { colorTags[$0.id] == colorTagFilter }
         }
@@ -893,6 +939,20 @@ final class BrowserModel {
 
         if let personFilter {
             base = base.filter { facePersons[$0.id]?.contains(personFilter) ?? false }
+        }
+
+        // Annotation hide filters: drop flagged / tagged / color-coded items
+        // from view. Each yields in the matching "show only" Library view so it
+        // doesn't blank it out (e.g. don't hide flagged items while showing the
+        // Flagged library, or color-coded items while filtering to a color tag).
+        if hideFlaggedItems, !showFlaggedOnly {
+            base = base.filter { !flaggedItems.contains($0.id) }
+        }
+        if hideTaggedItems, textTagFilter == nil {
+            base = base.filter { (textTags[$0.id]?.isEmpty ?? true) }
+        }
+        if hideColorCodedItems, colorTagFilter == nil {
+            base = base.filter { colorTags[$0.id] == nil }
         }
 
         // Split the query into terms on commas and whitespace so "beach sunset"
@@ -1117,6 +1177,9 @@ final class BrowserModel {
     var searchScopeName: String {
         if showFlaggedOnly {
             return "Flagged"
+        }
+        if showUnmarkedOnly {
+            return "Unmarked"
         }
         if showHiddenOnly {
             return "Hidden"
@@ -1765,12 +1828,17 @@ final class BrowserModel {
         }
 
         let anyUnflagged = targets.contains { !flaggedItems.contains($0) }
+        // If flagging will push the current item out of view (the "Hide
+        // Flagged" filter is on), remember where the cursor should land so
+        // keyboard navigation keeps flowing instead of losing its anchor.
+        let successor = anyUnflagged ? successorAfterHiding(targets) : nil
         if anyUnflagged {
             flaggedItems.formUnion(targets)
         } else {
             flaggedItems.subtract(targets)
         }
         clampSelection()
+        advanceAfterAnnotating(successor)
     }
 
     /// Toggle the flag on exactly one item, regardless of the current
@@ -1944,7 +2012,18 @@ final class BrowserModel {
     /// but only for a single-item selection — multi-selection tagging keeps the
     /// user's selection intact.
     private func advanceAfterTagging(_ id: MediaItem.ID?) {
-        guard selectedItems.count == 1, let id else { return }
+        advanceAfterAnnotating(id)
+    }
+
+    /// Lands the cursor on a successor computed before an annotation, but only
+    /// when the annotation actually emptied the selection — i.e. the annotated
+    /// item dropped out of view because a "Hide Flagged/Tagged/Color-Coded" or
+    /// a Library tag filter is active. When items survive (a partial multi-
+    /// selection, or no hide filter was in effect) the user's selection is left
+    /// intact. This keeps next/previous navigation working after annotating the
+    /// current item in a filtered view.
+    private func advanceAfterAnnotating(_ id: MediaItem.ID?) {
+        guard selectedItems.isEmpty, let id else { return }
         selectOnly(id)
     }
 
@@ -2022,9 +2101,14 @@ final class BrowserModel {
         guard !name.isEmpty else { return }
         let targets = textTagTargets(item)
         guard !targets.isEmpty else { return }
+        // Tagging may push the current item out of view when "Hide Tagged" or a
+        // tag filter is active; remember the successor so navigation continues.
+        let successor = successorAfterHiding(targets)
         for id in targets { textTags[id, default: []].insert(name) }
         // Record first-seen order so the overlay/sidebar list tags as created.
         if !textTagOrder.contains(name) { textTagOrder.append(name) }
+        clampSelection()
+        advanceAfterAnnotating(successor)
     }
 
     /// Removes `tag` from the target item(s) (the selection, or `item`),
@@ -2056,6 +2140,22 @@ final class BrowserModel {
 
     /// Number of distinct items carrying any text tag.
     var textTaggedCount: Int { textTags.count }
+
+    // MARK: - Unmarked
+
+    /// Whether an item has no flag, no color tag, and no text tag — i.e. it
+    /// hasn't been triaged yet.
+    func isUnmarked(_ id: MediaItem.ID) -> Bool {
+        !flaggedItems.contains(id)
+            && colorTags[id] == nil
+            && (textTags[id]?.isEmpty ?? true)
+    }
+
+    /// Number of unmarked items in the whole library (ignoring the current
+    /// scope/search), for the sidebar badge.
+    var unmarkedCount: Int {
+        allItems.reduce(0) { $0 + (isUnmarked($1.id) ? 1 : 0) }
+    }
 
     /// Number of items carrying the given text tag.
     func textTagCount(_ tag: String) -> Int {
@@ -3573,6 +3673,8 @@ final class BrowserModel {
         var base: String
         if showFlaggedOnly {
             base = "\(count) flagged \(noun)"
+        } else if showUnmarkedOnly {
+            base = "\(count) unmarked \(noun)"
         } else if let colorTagFilter {
             base = "\(count) \(colorTagFilter.displayName.lowercased())-tagged \(noun)"
         } else if let textTagFilter {
