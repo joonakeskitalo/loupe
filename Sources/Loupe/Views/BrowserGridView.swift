@@ -269,8 +269,17 @@ struct BrowserGridView: View {
                                 )
                             )
                             .overlay(marqueeRectangle)
+                            // Anchor the grid coordinate space on the content
+                            // view itself — the same view the MarqueeView backs
+                            // and the cells live in — so the marquee rect (in
+                            // that view's local coordinates) and the reported
+                            // cell frames share one origin. Anchoring it on the
+                            // enclosing ScrollView instead made the two diverge
+                            // once the content scrolled or pinned section
+                            // headers shifted layout, so the marquee selected
+                            // items offset below the dragged rectangle.
+                            .coordinateSpace(name: gridSpace)
                         }
-                        .coordinateSpace(name: gridSpace)
                         .onPreferenceChange(CellFramesKey.self) { frames in
                             cellFrames = frames
                             // Publish the accurate, rendered column count so
@@ -288,6 +297,12 @@ struct BrowserGridView: View {
                             }
                         }
                         .onChange(of: model.selectedItem) { _, newValue in
+                            // Never auto-scroll while a marquee drag is in
+                            // flight: it updates the selection continuously, and
+                            // scrolling to the moving anchor would yank the grid
+                            // under the user's drag. `marqueeRect` is non-nil
+                            // only during the drag.
+                            if marqueeRect != nil { return }
                             // Clicks already land on a visible item, so only
                             // auto-scroll for keyboard navigation.
                             if suppressNextScroll {
@@ -420,7 +435,8 @@ struct BrowserGridView: View {
         marqueeRect = rect
         guard let rect else { return }
         gridFocused = true
-        suppressNextScroll = true
+        // Auto-scroll is suppressed for the whole drag via `marqueeRect != nil`
+        // in the selection `onChange`, so no one-shot flag is needed here.
         let hits = cellFrames.compactMap { $0.value.intersects(rect) ? $0.key : nil }
         model.setSelection(hits)
     }
