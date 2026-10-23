@@ -238,12 +238,17 @@ struct ContentView: View {
                 .keyboardShortcut(KeyEquivalent("\u{F707}"), modifiers: [])
                 .disabled(searchFocused || model.showTagInput)
 
-            // Color-tag hotkeys: ⌃1 red, ⌃2 blue, ⌃3 green, ⌃4 orange,
-            // ⌃5 purple. Pressing the same tag again clears it. Gated like the
-            // flag keys: needs a selection, suspended while searching. (The
-            // viewer carries its own copies so it can tag from inside.)
+            // Color-tag hotkeys: 1 red, 2 blue, 3 green, 4 orange, 5 purple.
+            // Both the plain digit and ⌃digit apply the tag; pressing the same
+            // tag again clears it. Gated like the flag keys: needs a selection,
+            // suspended while searching. The plain-digit variant is only live
+            // in the grid — inside the viewer the bare digits drive video
+            // seeking, so the viewer registers only the ⌃digit copies.
             ForEach(Array(ColorTag.allInHotkeyOrder.enumerated()), id: \.element) { index, tag in
                 Button("Tag \(tag.displayName)") { model.toggleColorTag(tag) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
+                    .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                Button("Tag \(tag.displayName) (Ctrl)") { model.toggleColorTag(tag) }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
                     .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
             }
