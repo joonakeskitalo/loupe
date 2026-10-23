@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// A process-wide flag marking that the tag-input overlay is open and owns the
+/// keyboard. AppKit key monitors that would otherwise swallow plain letter keys
+/// — notably the video players' J/L/K transport monitors — consult this so
+/// those keys type into the tag field instead. Set by `TagInputOverlay` on
+/// appear/disappear; read on the main thread by the monitors.
+enum TagInputState {
+    @MainActor static var isActive = false
+}
+
 /// A centered, modal-style overlay for assigning free-text tags to the current
 /// selection, opened with the `y` hotkey. The user can:
 ///   * type a tag name and press Return to add it, or
@@ -48,7 +57,12 @@ struct TagInputOverlay: View {
         .onExitCommand { dismiss() }   // Esc (backstop; the field also handles it)
         .onAppear {
             quickTags = Array(model.allTextTags.prefix(9))
+            // Suppress the video players' window-level J/L/K key monitors while
+            // the tag field is focused, so typing those letters goes into the
+            // field instead of navigating/toggling the video.
+            TagInputState.isActive = true
         }
+        .onDisappear { TagInputState.isActive = false }
     }
 
     @ViewBuilder

@@ -240,6 +240,13 @@ struct BrowserListView: View {
             return .handled
         }
 
+        // Y (no modifiers) opens the tag-input overlay for the selection,
+        // handled here so it works regardless of focus / selection count.
+        if press.modifiers.isEmpty, press.key == KeyEquivalent("y") {
+            model.beginTagging()
+            return .handled
+        }
+
         let direction: BrowserModel.MoveDirection
         switch press.key {
         case .upArrow:   direction = .up

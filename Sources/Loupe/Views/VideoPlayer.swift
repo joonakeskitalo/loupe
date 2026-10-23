@@ -464,6 +464,10 @@ final class KeyablePlayerView: AVPlayerView {
             // screen, so a background player window doesn't eat another's keys.
             guard let window = self.window, window.isKeyWindow else { return event }
 
+            // Yield entirely while the tag-input overlay is focused, so J/L/K/
+            // Space type into the tag field instead of driving the video.
+            if MainActor.assumeIsolated({ TagInputState.isActive }) { return event }
+
             // Ignore modified combos so ⌘-based shortcuts still work.
             let modified = !event.modifierFlags
                 .intersection([.command, .control, .option])

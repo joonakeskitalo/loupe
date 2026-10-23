@@ -448,6 +448,15 @@ struct BrowserGridView: View {
             return .handled
         }
 
+        // Y (no modifiers) opens the tag-input overlay for the selection.
+        // Handled here (not only via the hidden window-level shortcut) so it
+        // works regardless of focus state — including right after building a
+        // multi-selection, where the window shortcut didn't always fire.
+        if press.modifiers.isEmpty, press.key == KeyEquivalent("y") {
+            model.beginTagging()
+            return .handled
+        }
+
         let direction: BrowserModel.MoveDirection
         switch press.key {
         case .leftArrow:  direction = .left
