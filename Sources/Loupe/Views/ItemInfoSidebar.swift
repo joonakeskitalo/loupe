@@ -139,6 +139,7 @@ private struct SingleItemInfo: View {
 
     @State private var metadata: MediaMetadata = .empty
     @State private var thumbnail: NSImage?
+    @State private var exif: ImageEXIF = .empty
 
     var body: some View {
         ScrollView {
@@ -166,6 +167,10 @@ private struct SingleItemInfo: View {
                 InfoSection(title: "Dates") {
                     InfoRow(label: "Created", value: dateString(item.creationDate))
                     InfoRow(label: "Modified", value: dateString(item.modificationDate))
+                }
+
+                if item.kind == .image, exif.hasAny {
+                    exifSection
                 }
 
                 if hasAnnotations {
@@ -215,9 +220,56 @@ private struct SingleItemInfo: View {
         .onChange(of: item.id, initial: true) { _, _ in
             metadata = MediaMetadataCache.cached(for: item.url) ?? .empty
             thumbnail = nil
+            exif = .empty
         }
         .task(id: metadataNeedsProbe ? item.id : nil) { await probeMetadata() }
         .task(id: item.id) { await loadThumbnail() }
+        .task(id: item.kind == .image ? item.id : nil) { await probeEXIF() }
+    }
+
+    /// Camera / shooting metadata, shown only for images that carry EXIF.
+    @ViewBuilder
+    private var exifSection: some View {
+        InfoSection(title: "Camera") {
+            if let date = exif.dateTaken {
+                InfoRow(label: "Taken", value: dateString(date))
+            }
+            if let make = exif.cameraMake, let model = exif.cameraModel {
+                // Many models already include the make (e.g. "Canon EOS R6");
+                // avoid repeating it.
+                let combined = model.localizedCaseInsensitiveContains(make) ? model : "\(make) \(model)"
+                InfoRow(label: "Camera", value: combined)
+            } else if let model = exif.cameraModel {
+                InfoRow(label: "Camera", value: model)
+            } else if let make = exif.cameraMake {
+                InfoRow(label: "Camera", value: make)
+            }
+            if let lens = exif.lens {
+                InfoRow(label: "Lens", value: lens)
+            }
+            if let focal = exif.focalLength {
+                let value = exif.focalLength35mm.map { "\(focal) (\($0) eq.)" } ?? focal
+                InfoRow(label: "Focal Length", value: value)
+            }
+            if let aperture = exif.aperture {
+                InfoRow(label: "Aperture", value: aperture)
+            }
+            if let shutter = exif.shutterSpeed {
+                InfoRow(label: "Shutter", value: shutter)
+            }
+            if let iso = exif.iso {
+                InfoRow(label: "ISO", value: iso)
+            }
+            if let bias = exif.exposureBias, bias != "+0.0 EV" {
+                InfoRow(label: "Exposure", value: bias)
+            }
+            if let flash = exif.flashFired {
+                InfoRow(label: "Flash", value: flash ? "Fired" : "Off")
+            }
+            if let colorSpace = exif.colorSpace {
+                InfoRow(label: "Color", value: colorSpace)
+            }
+        }
     }
 
     @ViewBuilder
@@ -274,6 +326,13 @@ private struct SingleItemInfo: View {
     private func probeMetadata() async {
         guard item.kind == .video || item.kind == .image else { return }
         metadata = await VideoMetadataProvider.shared.metadata(for: item.url, kind: item.kind)
+    }
+
+    private func probeEXIF() async {
+        guard item.kind == .image else { return }
+        let result = await ImageEXIFProvider.shared.exif(for: item.url)
+        // Guard against a late result from a previously-selected image.
+        if item.kind == .image { exif = result }
     }
 
     private func loadThumbnail() async {
