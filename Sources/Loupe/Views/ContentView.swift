@@ -213,6 +213,15 @@ struct ContentView: View {
             Button("Flag Item (S)") { model.toggleFlag() }
                 .keyboardShortcut("s", modifiers: [])
                 .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+            // F also flags. The grid normally owns F through its focused
+            // `.onKeyPress`, but when a non-grid subview holds first responder —
+            // e.g. the preview sidebar's video player (an AVPlayerView) — that
+            // handler never fires. This window-level key equivalent gives F a
+            // focus-independent owner too; when the grid IS focused it consumes
+            // F first (returning .handled), so this never double-toggles.
+            Button("Flag Item (F)") { model.toggleFlag() }
+                .keyboardShortcut("f", modifiers: [])
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
 
             // Y opens the free-text tag input for the selection.
             Button("Tag Item") { model.beginTagging() }
