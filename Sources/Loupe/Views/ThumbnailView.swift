@@ -35,6 +35,18 @@ struct ThumbnailView: View {
     @State private var image: NSImage?
     @State private var didFail = false
 
+    /// The image to draw right now: the one this cell loaded, or — when the
+    /// cell was just (re)created by `LazyVGrid` on scroll and hasn't loaded yet
+    /// — an already-generated thumbnail read synchronously from the cache. This
+    /// is what stops a thumbnail from flashing away and back as you scroll: a
+    /// recreated cell paints the cached image on its first frame instead of
+    /// showing the fallback icon until an async lookup resolves.
+    private var displayImage: NSImage? {
+        image ?? ThumbnailProvider.shared.cachedThumbnail(
+            for: item.url, method: method, videoPosition: videoPosition
+        )
+    }
+
     /// Padding around each cell. Tighter than before for a denser grid, and
     /// tighter still when filenames are hidden (there's no caption to breathe
     /// around).
@@ -48,8 +60,8 @@ struct ThumbnailView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(hideFilename ? Color.clear : Color.secondary.opacity(0.03))
 
-                if let image {
-                    Image(nsImage: image)
+                if let displayImage {
+                    Image(nsImage: displayImage)
                         .resizable()
                         .interpolation(.high)
                         .antialiased(true)
@@ -194,6 +206,15 @@ struct ThumbnailView: View {
     }
 
     private func loadThumbnail() async {
+        // Already generated? Adopt it synchronously and skip the async request
+        // entirely, so a recreated cell neither flashes nor re-queues work.
+        if let cached = ThumbnailProvider.shared.cachedThumbnail(
+            for: item.url, method: method, videoPosition: videoPosition
+        ) {
+            image = cached
+            return
+        }
+
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: size, height: size)
         // This cell is on (or very near) screen, so it's visible-priority: it

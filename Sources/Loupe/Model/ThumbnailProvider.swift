@@ -177,6 +177,15 @@ enum VideoThumbnailPosition: String, CaseIterable, Sendable {
     static let defaultPosition: VideoThumbnailPosition = .twentyFivePercent
 }
 
+/// A `Sendable` wrapper around the thumbnail `NSCache`. `NSCache` is documented
+/// as thread-safe for concurrent reads and writes but isn't marked `Sendable`,
+/// so this box carries the `@unchecked Sendable` promise in one small, audited
+/// place — letting the provider read the cache from a `nonisolated` method (for
+/// a synchronous cached-thumbnail lookup) without hopping onto the actor.
+private final class ThumbnailCacheBox: @unchecked Sendable {
+    let cache = NSCache<NSString, NSImage>()
+}
+
 actor ThumbnailProvider {
     static let shared = ThumbnailProvider()
 
@@ -192,7 +201,14 @@ actor ThumbnailProvider {
         }
     }
 
-    private let cache = NSCache<NSString, NSImage>()
+    /// The thumbnail cache, held in a `Sendable` box so it can be read off the
+    /// actor. `NSCache` is internally thread-safe and the reference never
+    /// changes; the box just lets a cell read an already-generated thumbnail
+    /// synchronously (see `cachedThumbnail`) so a recreated grid cell paints the
+    /// cached image on its first frame instead of flashing empty while an async
+    /// lookup resolves. Standard actor code still reaches it via `cache`.
+    nonisolated private let cacheBox = ThumbnailCacheBox()
+    nonisolated private var cache: NSCache<NSString, NSImage> { cacheBox.cache }
     private var inFlight: [URL: Task<NSImage?, Never>] = [:]
     /// The scheduling priority each in-flight URL was last requested at, so a
     /// filter change can cancel only the still-prefetch work (never a cell the
@@ -216,12 +232,15 @@ actor ThumbnailProvider {
 
     /// Separate, much tighter cap on the video-frame fallback
     /// (AVFoundation / FFmpeg). That path is genuinely CPU-heavy — demuxing and
-    /// decoding real frames — so a handful running at once saturates the cores
-    /// without a single slow `.mkv` holding one of the scarce general slots for
-    /// seconds while fast image thumbnails wait behind it.
+    /// decoding real frames — so only a fraction of the cores run it at once:
+    /// enough to keep the decoders busy without a cluster of slow `.mkv` decodes
+    /// monopolizing every core while fast image thumbnails wait behind them.
+    /// Scales with core count (≈ half the cores) so a many-core machine chews
+    /// through a video-heavy folder faster, with a higher ceiling than the old
+    /// flat cap of 4 and a floor of 2 for dual-core machines.
     private static let maxConcurrentVideo: Int = {
         let cores = ProcessInfo.processInfo.activeProcessorCount
-        return min(4, max(2, cores / 2))
+        return min(12, max(2, cores / 2))
     }()
 
     /// Separate, tighter cap on camera-raw image decodes (`.RAF`, `.CR3`, …).
@@ -231,10 +250,12 @@ actor ThumbnailProvider {
     /// at once thrashed CPU and memory and made the whole grid crawl while a
     /// RAF folder loaded. Bounding them to roughly the core count keeps the
     /// decoders saturated without oversubscription, while ordinary images still
-    /// flow through the wide general gate unthrottled.
+    /// flow through the wide general gate unthrottled. Allowing up to the full
+    /// core count (with a higher ceiling than the old 8) lets a RAW folder load
+    /// faster on many-core machines while still never oversubscribing.
     private static let maxConcurrentRaw: Int = {
         let cores = ProcessInfo.processInfo.activeProcessorCount
-        return min(8, max(2, cores))
+        return min(16, max(2, cores))
     }()
 
     /// Number of generations currently running (admitted through the gate).
@@ -328,6 +349,23 @@ actor ThumbnailProvider {
             videoPosition: videoPosition, priority: priority
         )
         return await task.value
+    }
+
+    /// Synchronous, non-blocking lookup of an already-generated thumbnail.
+    /// Returns the cached image if present, else `nil` — it never generates.
+    ///
+    /// `nonisolated` so a view can call it during `body` without an `await`:
+    /// a grid cell that scrolled off and back is recreated with empty state, so
+    /// reading the cache synchronously here lets it paint the thumbnail on its
+    /// first frame instead of flashing the fallback icon while an async request
+    /// round-trips. The `NSCache` is internally thread-safe, so this is safe to
+    /// read off the actor.
+    nonisolated func cachedThumbnail(
+        for url: URL,
+        method: ThumbnailMethod = .hybrid,
+        videoPosition: VideoThumbnailPosition = .defaultPosition
+    ) -> NSImage? {
+        cache.object(forKey: Self.cacheKey(url: url, method: method, videoPosition: videoPosition))
     }
 
     /// Warms the cache for `url` at low priority without waiting for the result.

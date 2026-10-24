@@ -82,7 +82,11 @@ enum ImageDecoding {
         }
 
         if alwaysDecodeFromFullImage {
-            return createThumbnail(from: source, maxPixelSize: maxPixelSize, fromFullImage: true)
+            let fullLongest = fullImagePixelLongestEdge(source)
+            return createThumbnail(
+                from: source, maxPixelSize: maxPixelSize, fromFullImage: true,
+                fullImageLongestEdge: fullLongest
+            )
         }
 
         // Cheap path first: reuse an embedded preview if present.
@@ -105,7 +109,10 @@ enum ImageDecoding {
         // so the preview is already the best we can do.
         let fullLongest = fullImagePixelLongestEdge(source)
         if fullLongest > previewLongest {
-            if let full = createThumbnail(from: source, maxPixelSize: maxPixelSize, fromFullImage: true) {
+            if let full = createThumbnail(
+                from: source, maxPixelSize: maxPixelSize, fromFullImage: true,
+                fullImageLongestEdge: fullLongest
+            ) {
                 return full
             }
         }
@@ -115,21 +122,52 @@ enum ImageDecoding {
     /// Runs ImageIO's thumbnail decode on an already-opened source. `fromFullImage`
     /// selects between reusing an embedded preview (`false`) and always
     /// downscaling the full image (`true`).
+    ///
+    /// `fullImageLongestEdge` (0 if unknown) enables a *downscale-source hint*
+    /// on the full-image path: for an image far larger than the target, ImageIO
+    /// is told to subsample as it reads (`kCGImageSourceSubsampleFactor`), so it
+    /// pulls and decodes a fraction of the pixels off disk instead of the whole
+    /// full-resolution buffer before downscaling. The factor is the largest
+    /// power of two (2/4/8) that still leaves the subsampled longest edge at or
+    /// above the target, so the final thumbnail is bit-for-bit the size we want
+    /// with no quality loss — just much less I/O and decode work on big photos.
     private static func createThumbnail(
         from source: CGImageSource,
         maxPixelSize: Int,
-        fromFullImage: Bool
+        fromFullImage: Bool,
+        fullImageLongestEdge: Int = 0
     ) -> CGImage? {
         let thumbnailKey: CFString = fromFullImage
             ? kCGImageSourceCreateThumbnailFromImageAlways
             : kCGImageSourceCreateThumbnailFromImageIfAbsent
-        let options: [CFString: Any] = [
+        var options: [CFString: Any] = [
             thumbnailKey: true,
             kCGImageSourceCreateThumbnailWithTransform: true,  // honor EXIF orientation
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
             kCGImageSourceShouldCacheImmediately: true          // decode now, off the main thread
         ]
+        if fromFullImage,
+           let factor = subsampleFactor(fullLongest: fullImageLongestEdge, target: maxPixelSize) {
+            options[kCGImageSourceSubsampleFactor] = factor
+        }
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// The largest power-of-two subsample factor (2, 4, or 8) that keeps the
+    /// subsampled longest edge at or above `target`, or `nil` when subsampling
+    /// would drop below the target (or the inputs are unknown). Subsampling by
+    /// `f` reads ≈ `1/f²` of the pixels, so this is a large decode-cost win on
+    /// images several times bigger than the thumbnail while never undershooting
+    /// the requested size (ImageIO still does the final exact downscale).
+    private static func subsampleFactor(fullLongest: Int, target: Int) -> Int? {
+        guard fullLongest > 0, target > 0 else { return nil }
+        // Keep a 2× safety margin so the subsampled image comfortably exceeds
+        // the target before the final downscale (avoids any edge-case softening
+        // from subsampling landing just at the target).
+        for factor in [8, 4, 2] where fullLongest / factor >= target * 2 {
+            return factor
+        }
+        return nil
     }
 
     /// Longest-edge pixel size of the source's full image, read from the
