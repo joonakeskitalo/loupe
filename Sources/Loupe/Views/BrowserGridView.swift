@@ -23,8 +23,13 @@ struct BrowserGridView: View {
     private let gridSpace = "grid"
     /// Gap between cells. Collapsed to zero when filenames are hidden so the
     /// image-only grid packs edge to edge (the cell's own padding also drops to
-    /// zero there).
-    private var spacing: CGFloat { model.hideFilenames ? 0 : 2 }
+    /// zero there) — but only for fitted thumbnails, which letterbox and so
+    /// don't visually touch. In fill mode the image is cropped to the full cell,
+    /// so a zero gap would make neighbors abut; keep a small gap then.
+    private var spacing: CGFloat {
+        guard model.hideFilenames else { return 2 }
+        return model.fillGridCells ? 2 : 0
+    }
     private let padding: CGFloat = 8
 
     private var cellWidth: CGFloat { model.thumbnailSize + 12 }
