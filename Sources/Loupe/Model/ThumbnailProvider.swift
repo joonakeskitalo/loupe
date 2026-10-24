@@ -194,6 +194,10 @@ actor ThumbnailProvider {
 
     private let cache = NSCache<NSString, NSImage>()
     private var inFlight: [URL: Task<NSImage?, Never>] = [:]
+    /// The scheduling priority each in-flight URL was last requested at, so a
+    /// filter change can cancel only the still-prefetch work (never a cell the
+    /// user can see). Updated on create and on promotion; cleared in `finish`.
+    private var inFlightPriority: [URL: Priority] = [:]
 
     // MARK: - Scheduler
 
@@ -347,6 +351,26 @@ actor ThumbnailProvider {
         )
     }
 
+    /// Cancels in-flight *prefetch* work for items that are no longer shown, so
+    /// thumbnail generation tracks the current filter: when the displayed set
+    /// changes (a filter, search, or Library-view switch), warm work queued for
+    /// now-hidden items shouldn't keep occupying the scheduler's slots and
+    /// concurrency gates ahead of the newly visible set.
+    ///
+    /// Only `.prefetch` requests are touched — a `.visible` cell the user can
+    /// see is never cancelled, even if it's briefly absent from `keeping`
+    /// during a transition. Cancelling a request that's already decoding lets
+    /// it finish and cache normally (cooperative cancellation only short-
+    /// circuits before a decoder is entered); the win is reclaiming queued slots
+    /// and never starting work for vanished items.
+    ///
+    /// `keeping` is the set of URLs still displayed (the new filtered set).
+    func cancelPrefetches(keeping: Set<URL>) {
+        for (url, priority) in inFlightPriority where priority == .prefetch && !keeping.contains(url) {
+            inFlight[url]?.cancel()
+        }
+    }
+
     /// Composite cache key so a thumbnail generated under one set of options is
     /// never served when a different set is active — switching the method or
     /// the video position should re-render (that's the whole point). Keyed by
@@ -366,26 +390,84 @@ actor ThumbnailProvider {
     /// `acquireSlot` call per URL (callers are deduped in `taskForThumbnail`),
     /// so each URL owns at most one waiter. A late, higher-priority request for
     /// the same URL doesn't come through here — it goes through `promote`.
-    private func acquireSlot(url: URL, priority: Priority) async {
+    ///
+    /// Returns `true` if a generation slot was actually taken (the caller must
+    /// `releaseSlot` when it finishes), or `false` if the request was cancelled
+    /// before a slot was handed to it (nothing to release — bail instead).
+    @discardableResult
+    private func acquireSlot(url: URL, priority: Priority) async -> Bool {
+        // A request cancelled before it even reaches the gate shouldn't grab a
+        // slot via the fast path below; treat it as "no slot taken" so the
+        // caller bails cleanly.
+        if Task.isCancelled { return false }
+
         // Take a free slot immediately only when nobody is waiting; otherwise
         // queue so a lower-priority request can't jump an earlier high-priority
         // waiter just because a slot happened to open at that instant.
         if runningCount < Self.maxConcurrent, waiters.isEmpty {
             runningCount += 1
-            return
+            return true
         }
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            sequence += 1
-            waiterOrder[url] = sequence
-            waiters[url] = Waiter(priority: priority, resume: continuation)
+        // Park until a slot opens. Wrapped in a cancellation handler so a
+        // filter-change cancel (see `cancelPrefetches(keeping:)`) wakes a
+        // still-parked waiter instead of leaving it stuck — `Task.cancel()`
+        // alone does not resume a continuation. On cancel we resume the waiter
+        // and drop it from the queue (without taking a slot); the task body
+        // then sees `Task.isCancelled` and bails before decoding.
+        var slotTaken = true
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if Task.isCancelled {
+                    // Cancelled before we could park: don't enqueue, don't take
+                    // a slot; resume immediately so the task body bails.
+                    slotTaken = false
+                    continuation.resume()
+                    return
+                }
+                sequence += 1
+                waiterOrder[url] = sequence
+                waiters[url] = Waiter(priority: priority, resume: continuation)
+            }
+        } onCancel: {
+            Task { await self.resumeCancelledWaiter(url: url) }
         }
+        // If we were resumed by the cancel path (not by `releaseSlot` handing
+        // us a slot), no slot is held.
+        if Task.isCancelled && waiterWasCancelled.remove(url) != nil {
+            slotTaken = false
+        }
+        return slotTaken
+    }
+
+    /// URLs whose parked waiter was resumed specifically by cancellation (so
+    /// the resumed task knows it did NOT inherit a slot and must not release
+    /// one). A set rather than a flag because resume happens on a hop back onto
+    /// the actor, decoupled from the awaiting task.
+    private var waiterWasCancelled: Set<URL> = []
+
+    /// Resumes and dequeues a parked waiter that was cancelled, so its task can
+    /// proceed to its `Task.isCancelled` check and bail. No slot is taken: a
+    /// cancelled request never runs a decode. No-op if the waiter already
+    /// started (left `waiters`) or was never parked.
+    private func resumeCancelledWaiter(url: URL) {
+        guard let waiter = waiters.removeValue(forKey: url) else { return }
+        waiterOrder[url] = nil
+        waiterWasCancelled.insert(url)
+        waiter.resume.resume()
     }
 
     /// Raises the scheduling priority of a URL that's still waiting for a slot.
     /// Called when an in-flight (but not yet started) prefetch becomes visible,
     /// so it's served ahead of other prefetch work without duplicating it.
     private func promote(url: URL, to priority: Priority) {
+        // Record the raised priority against the in-flight URL so a later
+        // filter-change cancel never drops a prefetch that has since become
+        // visible. This runs even once the request has left `waiters` (slot
+        // acquired), which is exactly when the waiter lookup below no-ops.
+        if let current = inFlightPriority[url], priority > current {
+            inFlightPriority[url] = priority
+        }
         guard var waiter = waiters[url], priority > waiter.priority else { return }
         waiter.priority = priority
         waiters[url] = waiter
@@ -513,14 +595,27 @@ actor ThumbnailProvider {
             return existing
         }
 
+        inFlightPriority[url] = priority
+
         let kind = MediaKind.classify(url: url)
         let isRaw = kind == .image && MediaKind.isRawImage(url: url)
 
         let task = Task<NSImage?, Never> { [weak self] in
             // Wait for a generation slot before touching any decoder, so no
             // more than `maxConcurrent` run at once and visible work is admitted
-            // ahead of prefetch work.
-            await self?.acquireSlot(url: url, priority: priority)
+            // ahead of prefetch work. The returned flag says whether a slot was
+            // actually taken (vs. the request being cancelled before one was).
+            let slotTaken = await self?.acquireSlot(url: url, priority: priority) ?? false
+
+            // A filter change may have cancelled this request while it was
+            // parked for a slot (a prefetch for an item that's no longer shown).
+            // Bail before touching any decoder so freed capacity goes to the new
+            // filtered set's work instead. Use `abandon` (not `finish`) when no
+            // slot was held so we never over-release the running count.
+            if Task.isCancelled {
+                await self?.abandon(url: url, hadSlot: slotTaken)
+                return nil
+            }
 
             var image: NSImage?
             let decodePriority: TaskPriority = priority == .visible ? .userInitiated : .utility
@@ -606,6 +701,7 @@ actor ThumbnailProvider {
         image: NSImage?
     ) {
         inFlight[url] = nil
+        inFlightPriority[url] = nil
         if let image {
             cache.setObject(
                 image,
@@ -614,6 +710,19 @@ actor ThumbnailProvider {
             )
         }
         releaseSlot()
+    }
+
+    /// Cleans up a request that bailed on cancellation before any decode ran.
+    /// Drops the in-flight bookkeeping and releases a slot ONLY if one was
+    /// actually held: a waiter woken by the cancel path never inherited a slot
+    /// (see `resumeCancelledWaiter`), so releasing one then would over-count
+    /// free slots; whereas a request that took the fast-path slot and was only
+    /// cancelled afterward does hold one and must release it.
+    private func abandon(url: URL, hadSlot: Bool) {
+        inFlight[url] = nil
+        inFlightPriority[url] = nil
+        waiterWasCancelled.remove(url)
+        if hadSlot { releaseSlot() }
     }
 
     /// QuickLook thumbnail for `url` at `pixelSize` (already in pixels, so

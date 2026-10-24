@@ -8,9 +8,13 @@ struct BrowserGridView: View {
     var canAutoFocus: Bool = true
 
     @FocusState private var gridFocused: Bool
-    /// Set when selection changes via a click, so the auto-scroll (used for
-    /// keyboard navigation) doesn't yank a clicked, already-visible item.
-    @State private var suppressNextScroll = false
+    /// The id a click just selected, so the auto-scroll (used for keyboard
+    /// navigation) doesn't yank a clicked, already-visible item. Scoped to the
+    /// specific id — not a bare "skip the next change" flag — so a selection
+    /// that moves *away* from the clicked item (e.g. marking it flagged/tagged
+    /// under a filter auto-advances to the next item) still scrolls to the new
+    /// item instead of being wrongly suppressed.
+    @State private var suppressScrollForID: MediaItem.ID?
 
     // Rubber-band (marquee) selection state, in the "grid" coordinate space.
     @State private var cellFrames: [URL: CGRect] = [:]
@@ -108,7 +112,7 @@ struct BrowserGridView: View {
         // double-click delay. Command toggles, Shift extends a range.
         .onClick(
             single: { mods in
-                suppressNextScroll = true
+                suppressScrollForID = item.id
                 if mods.command {
                     model.toggleSelection(item.id)
                 } else if mods.shift {
@@ -119,7 +123,7 @@ struct BrowserGridView: View {
                 gridFocused = true
             },
             double: { _ in
-                suppressNextScroll = true
+                suppressScrollForID = item.id
                 if !model.selectedItems.contains(item.id) {
                     model.selectOnly(item.id)
                 }
@@ -324,12 +328,16 @@ struct BrowserGridView: View {
                             // under the user's drag. `marqueeRect` is non-nil
                             // only during the drag.
                             if marqueeRect != nil { return }
-                            // Clicks already land on a visible item, so only
-                            // auto-scroll for keyboard navigation.
-                            if suppressNextScroll {
-                                suppressNextScroll = false
-                                return
-                            }
+                            // A click lands on an already-visible item, so skip
+                            // the scroll for THAT item only. Any other change —
+                            // including an auto-advance after marking the
+                            // clicked item (which moves the selection to the
+                            // next item, especially under a filter that hides
+                            // the one just marked) — should still scroll. The
+                            // one-shot is cleared either way.
+                            let clicked = suppressScrollForID
+                            suppressScrollForID = nil
+                            if let newValue, newValue == clicked { return }
                             if let newValue {
                                 withAnimation(.easeInOut(duration: 0.15)) {
                                     proxy.scrollTo(newValue, anchor: .center)
@@ -361,6 +369,16 @@ struct BrowserGridView: View {
                 .focusable()
                 .focused($gridFocused)
                 .focusEffectDisabled()
+                // When the displayed set changes (a filter, search, sort, or
+                // Library-view switch), retarget thumbnail prefetching at the
+                // new filtered set: cancel warm work queued for items that are
+                // no longer shown so it stops occupying the scheduler ahead of
+                // what's now on screen. Visible cells are never cancelled. Keyed
+                // on the cheap `displayRevision` token, not the item array.
+                .onChange(of: model.displayRevision) { _, _ in
+                    let keep = Set(model.displayedItems.map(\.url))
+                    Task { await ThumbnailProvider.shared.cancelPrefetches(keeping: keep) }
+                }
                 // Only auto-focus when permitted. This branch reappears every
                 // time search results return after being empty, so grabbing
                 // focus unconditionally here would steal it from the search

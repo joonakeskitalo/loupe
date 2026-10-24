@@ -1106,8 +1106,10 @@ final class BrowserModel {
     /// `displayedItems` reads it, so SwiftUI registers a dependency on the
     /// revision rather than on the (ignored) cache storage — views still
     /// re-render when the displayed list changes, even though the heavy inputs
-    /// aren't read on a cache hit.
-    private var displayRevision = 0
+    /// aren't read on a cache hit. Readable (not settable) outside the model so
+    /// the grid can observe "the displayed set changed" cheaply to retarget
+    /// thumbnail prefetching at the new filtered set.
+    private(set) var displayRevision = 0
 
     /// Items displayed in the grid: the scoped set with the active type and
     /// extension chip filters applied, then sorted. Memoized.
@@ -1608,9 +1610,19 @@ final class BrowserModel {
     func selectAll() {
         let items = displayedItems
         guard !items.isEmpty else { return }
-        selectedItems = Set(items.map(\.id))
-        selectedItem = items.last?.id
-        rangeAnchor = items.first?.id
+        let ids = Set(items.map(\.id))
+        selectedItems = ids
+        // Keep the anchor on the item the user was already on so the grid's
+        // auto-scroll (which follows `selectedItem`) doesn't yank the viewport
+        // to the bottom. Only fall back to the first item when nothing was
+        // selected. `rangeAnchor` likewise stays put so a following Shift+arrow
+        // extends from where the cursor is.
+        if selectedItem == nil || !(ids.contains(selectedItem!)) {
+            selectedItem = items.first?.id
+            rangeAnchor = items.first?.id
+        } else if rangeAnchor == nil || !ids.contains(rangeAnchor!) {
+            rangeAnchor = selectedItem
+        }
     }
 
     // MARK: Selection mutations (driven by clicks)
