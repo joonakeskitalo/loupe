@@ -20,6 +20,10 @@ struct ZoomableImageView: NSViewRepresentable {
     let url: URL
     @Binding var command: ZoomCommand?
     @Binding var zoomFactor: CGFloat
+    /// Backing color behind the image (shown as letterboxing when the image
+    /// doesn't fill the viewport). Defaults to black for the fullscreen viewer;
+    /// the preview sidebar passes a light color.
+    var backgroundColor: NSColor = .black
     /// Optional previous/next handlers invoked on a trackpad swipe or clear
     /// horizontal scroll while the image is fitted (not zoomed in).
     var onSwipePrevious: (() -> Void)?
@@ -36,13 +40,13 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.allowsMagnification = true
         scrollView.minMagnification = 0.05
         scrollView.maxMagnification = 40
-        scrollView.backgroundColor = .black
+        scrollView.backgroundColor = backgroundColor
         scrollView.drawsBackground = true
 
         // Centering clip view keeps a small image centered in the viewport.
         let clip = CenteringClipView()
         clip.drawsBackground = true
-        clip.backgroundColor = .black
+        clip.backgroundColor = backgroundColor
         scrollView.contentView = clip
         clip.postsBoundsChangedNotifications = true
 

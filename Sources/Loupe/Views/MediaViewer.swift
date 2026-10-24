@@ -901,13 +901,16 @@ private struct GridPreview: View {
 
 struct PDFViewerRepresentable: NSViewRepresentable {
     let url: URL
+    /// Backing color behind the page. Defaults to black for the fullscreen
+    /// viewer; the preview sidebar passes a light color.
+    var backgroundColor: NSColor = .black
 
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.document = PDFDocument(url: url)
-        view.backgroundColor = .black
+        view.backgroundColor = backgroundColor
         return view
     }
 

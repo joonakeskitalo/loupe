@@ -167,15 +167,20 @@ private struct ItemPreviewContent: View {
     @State private var zoomCommand: ZoomCommand?
     @State private var zoomFactor: CGFloat = 1
 
+    /// Light backing so an image/PDF that doesn't fill the panel letterboxes
+    /// onto a bright background instead of the renderers' default black.
+    private let previewBackground = NSColor.white
+
     var body: some View {
         Group {
             switch item.kind {
             case .image:
-                ZoomableImageView(url: item.url, command: $zoomCommand, zoomFactor: $zoomFactor)
+                ZoomableImageView(url: item.url, command: $zoomCommand,
+                                  zoomFactor: $zoomFactor, backgroundColor: previewBackground)
             case .video, .audio:
                 VideoPlayerView(url: item.url)
             case .pdf:
-                PDFViewerRepresentable(url: item.url)
+                PDFViewerRepresentable(url: item.url, backgroundColor: previewBackground)
             case .markdown:
                 TextDocumentView(url: item.url, renderMarkdown: true)
             case .text:
@@ -185,5 +190,6 @@ private struct ItemPreviewContent: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .white))
     }
 }
