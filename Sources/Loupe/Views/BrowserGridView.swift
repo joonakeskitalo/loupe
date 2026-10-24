@@ -6,6 +6,14 @@ struct BrowserGridView: View {
     /// When false (e.g. the search field is focused), the grid must not grab
     /// keyboard focus on appear, so typing in search is never interrupted.
     var canAutoFocus: Bool = true
+    /// True while the toolbar search field holds keyboard focus. The grid keeps
+    /// its own `.onKeyPress` handlers mounted even then (the content area can
+    /// retain first responder alongside the toolbar field), so without this the
+    /// grid would swallow keystrokes meant for the field — notably ⌘A, which
+    /// the grid would turn into "select all items" instead of letting the field
+    /// select its text. When true, `handleKey` ignores everything so the field
+    /// gets native editing.
+    var searchFocused: Bool = false
 
     @FocusState private var gridFocused: Bool
     /// The id a click just selected, so the auto-scroll (used for keyboard
@@ -605,6 +613,10 @@ struct BrowserGridView: View {
     /// ignores them.
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard !model.isViewerPresented else { return .ignored }
+        // While the search field is focused, defer every key to it so typing —
+        // and native text editing like ⌘A (select all text) — isn't hijacked
+        // by the grid's shortcuts.
+        guard !searchFocused else { return .ignored }
 
         // Cmd+A selects everything in the grid.
         if press.modifiers.contains(.command), press.key == KeyEquivalent("a") {

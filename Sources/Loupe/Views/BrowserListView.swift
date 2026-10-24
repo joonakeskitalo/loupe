@@ -8,6 +8,12 @@ struct BrowserListView: View {
     /// When false (e.g. the search field is focused), the list must not grab
     /// keyboard focus on appear, so typing in search is never interrupted.
     var canAutoFocus: Bool = true
+    /// True while the toolbar search field holds keyboard focus. The list keeps
+    /// its own `.onKeyPress` handlers mounted even then, so without this it
+    /// would swallow keystrokes meant for the field — notably ⌘A, which the
+    /// list would turn into "select all items" instead of letting the field
+    /// select its text. When true, `handleKey` ignores everything.
+    var searchFocused: Bool = false
 
     @FocusState private var listFocused: Bool
     /// Set when selection changes via a click, so the auto-scroll (used for
@@ -224,6 +230,10 @@ struct BrowserListView: View {
     /// Arrow keys move the selection up/down the list; Shift extends a range.
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard !model.isViewerPresented else { return .ignored }
+        // While the search field is focused, defer every key to it so typing —
+        // and native text editing like ⌘A (select all text) — isn't hijacked
+        // by the list's shortcuts.
+        guard !searchFocused else { return .ignored }
 
         if press.modifiers.contains(.command), press.key == KeyEquivalent("a") {
             model.selectAll()

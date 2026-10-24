@@ -107,9 +107,13 @@ struct ContentView: View {
                         FilterBar(model: model)
                         switch model.viewLayout {
                         case .grid:
-                            BrowserGridView(model: model, canAutoFocus: !searchFocused)
+                            BrowserGridView(model: model,
+                                            canAutoFocus: !searchFocused,
+                                            searchFocused: searchFocused)
                         case .list:
-                            BrowserListView(model: model, canAutoFocus: !searchFocused)
+                            BrowserListView(model: model,
+                                            canAutoFocus: !searchFocused,
+                                            searchFocused: searchFocused)
                         }
                     }
                     if model.showPreviewSidebar {
