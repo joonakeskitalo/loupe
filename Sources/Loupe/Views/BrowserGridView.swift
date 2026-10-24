@@ -19,6 +19,10 @@ struct BrowserGridView: View {
     // Rubber-band (marquee) selection state, in the "grid" coordinate space.
     @State private var cellFrames: [URL: CGRect] = [:]
     @State private var marqueeRect: CGRect?
+    /// True only while a marquee press/drag is active. Gates per-cell frame
+    /// reporting (see `reportCellFrame`) so cells don't emit frame preferences
+    /// on every ordinary scroll frame — the main scroll-performance cost.
+    @State private var marqueeActive = false
 
     private let gridSpace = "grid"
     /// Gap between cells. Collapsed to zero when filenames are hidden so the
@@ -66,33 +70,6 @@ struct BrowserGridView: View {
     /// freeze" — the content fills the available width normally.
     @State private var frozenContentWidth: CGFloat?
 
-    /// How many items past a newly-appeared cell to warm. Roughly a couple of
-    /// rows ahead so a continued downward scroll lands on ready thumbnails
-    /// without warming the whole folder. Prefetch work is low priority, so it
-    /// never delays a cell the user can actually see.
-    private var prefetchWindow: Int { max(8, liveColumnCount * 3) }
-
-    /// Warms thumbnails for the items just after `index` at prefetch priority.
-    /// Driven off each cell's `onAppear`, which LazyVGrid fires slightly ahead
-    /// of the viewport, so neighbors decode before the user scrolls to them.
-    private func prefetchAhead(from index: Int, in items: [MediaItem]) {
-        guard index >= 0, index < items.count else { return }
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let target = CGSize(width: model.thumbnailSize, height: model.thumbnailSize)
-        let upper = min(items.count, index + 1 + prefetchWindow)
-        guard index + 1 < upper else { return }
-        let urls = items[(index + 1)..<upper].map(\.url)
-        let method = model.thumbnailMethod
-        let videoPosition = model.videoThumbnailPosition
-        Task {
-            for url in urls {
-                await ThumbnailProvider.shared.prefetch(
-                    url, size: target, scale: scale, method: method, videoPosition: videoPosition
-                )
-            }
-        }
-    }
-
     /// Warms thumbnails for every item in the current displayed set, in order,
     /// at prefetch priority — so after the visible cells are generated the rest
     /// of the filtered folder keeps generating in the background instead of
@@ -120,22 +97,11 @@ struct BrowserGridView: View {
         }
     }
 
-    /// Position of each item in the full display order, so a grouped layout can
-    /// still warm neighbors across section boundaries (prefetch is driven by a
-    /// cell's index into the flat `displayedItems`, not its index within a
-    /// section). Backed by the model's memoized `displayedItemIndex`, so it's
-    /// built once per display change rather than once per rendered cell.
-    private var globalIndex: [MediaItem.ID: Int] {
-        guard model.grouping != .none else { return [:] }
-        return model.displayedItemIndex
-    }
-
-    /// A single grid cell: the thumbnail plus all its selection, drag, prefetch
-    /// and context-menu wiring. Shared by the flat and grouped layouts so both
-    /// behave identically. `index` is the item's position in the full display
-    /// order, used to warm the following thumbnails.
+    /// A single grid cell: the thumbnail plus all its selection, drag and
+    /// context-menu wiring. Shared by the flat and grouped layouts so both
+    /// behave identically.
     @ViewBuilder
-    private func cell(for item: MediaItem, index: Int, in items: [MediaItem]) -> some View {
+    private func cell(for item: MediaItem) -> some View {
         ThumbnailView(
             item: item,
             size: model.thumbnailSize,
@@ -158,8 +124,7 @@ struct BrowserGridView: View {
         // As the grid instantiates this cell (which LazyVGrid does just before
         // it scrolls into view), warm the next few items at low priority so a
         // continued scroll finds them ready. Visible cells still take priority.
-        .onAppear { prefetchAhead(from: index, in: items) }
-        .reportCellFrame(id: item.id, in: gridSpace)
+        .reportCellFrame(id: item.id, in: gridSpace, active: marqueeActive)
         .contentShape(Rectangle())
         // AppKit-level click handling: selection fires on mouse-down with no
         // double-click delay. Command toggles, Shift extends a range.
@@ -301,9 +266,7 @@ struct BrowserGridView: View {
                                             // duplicate ForEach identities within
                                             // the one LazyVGrid.
                                             ForEach(group.entries) { entry in
-                                                cell(for: entry.item,
-                                                     index: globalIndex[entry.item.id] ?? 0,
-                                                     in: items)
+                                                cell(for: entry.item)
                                             }
                                         } header: {
                                             sectionHeader(group)
@@ -318,8 +281,11 @@ struct BrowserGridView: View {
                                         }
                                     }
                                 } else {
-                                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                                        cell(for: item, index: index, in: items)
+                                    // `ForEach(items)` (MediaItem is Identifiable)
+                                    // avoids allocating an N-element enumerated
+                                    // array on every grid re-render.
+                                    ForEach(items) { item in
+                                        cell(for: item)
                                     }
                                 }
                             }
@@ -338,6 +304,12 @@ struct BrowserGridView: View {
                             // on a cell are consumed by the cell's own overlay.
                             .background(
                                 MarqueeView(
+                                    onDragBegan: {
+                                        // Arm per-cell frame reporting for the
+                                        // duration of this press so the first
+                                        // drag rect can hit-test fresh frames.
+                                        if !marqueeActive { marqueeActive = true }
+                                    },
                                     onChange: { rect in handleMarquee(rect) },
                                     onEmptyClick: {
                                         gridFocused = true
@@ -567,7 +539,13 @@ struct BrowserGridView: View {
     /// when the drag ends.
     private func handleMarquee(_ rect: CGRect?) {
         marqueeRect = rect
-        guard let rect else { return }
+        guard let rect else {
+            // Drag (or bare press) ended: stop reporting cell frames so plain
+            // scrolling pays nothing. Clear the stale frames too.
+            marqueeActive = false
+            cellFrames = [:]
+            return
+        }
         gridFocused = true
         // Auto-scroll is suppressed for the whole drag via `marqueeRect != nil`
         // in the selection `onChange`, so no one-shot flag is needed here.

@@ -12,16 +12,30 @@ struct CellFramesKey: PreferenceKey {
 
 extension View {
     /// Reports this view's frame in the named coordinate space, keyed by `id`,
-    /// into `CellFramesKey`.
-    func reportCellFrame(id: URL, in space: String) -> some View {
-        background(
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: CellFramesKey.self,
-                    value: [id: geo.frame(in: .named(space))]
-                )
-            }
-        )
+    /// into `CellFramesKey` — but only while `active` is true.
+    ///
+    /// The per-cell `GeometryReader` recomputes its frame on every layout pass,
+    /// which during scrolling is effectively every frame, and the enclosing
+    /// `onPreferenceChange` then re-runs the grid body and re-derives the column
+    /// count each tick — a measurable scroll cost proportional to the number of
+    /// on-screen cells. The frames are only actually needed during a marquee
+    /// drag (to hit-test the rubber band), so reporting is gated: when `active`
+    /// is false the background is empty and no preference is emitted, so plain
+    /// scrolling pays nothing. The grid arms `active` on marquee mouse-down.
+    @ViewBuilder
+    func reportCellFrame(id: URL, in space: String, active: Bool) -> some View {
+        if active {
+            background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: CellFramesKey.self,
+                        value: [id: geo.frame(in: .named(space))]
+                    )
+                }
+            )
+        } else {
+            self
+        }
     }
 }
 
@@ -33,6 +47,11 @@ extension View {
 /// *behind* the cells (each of which has its own click overlay), it only
 /// receives drags that begin on empty space — matching Finder.
 struct MarqueeView: NSViewRepresentable {
+    /// Called the instant a press begins on empty space (mouse-down), before
+    /// any drag rectangle. Lets the grid arm per-cell frame reporting just for
+    /// the duration of a potential marquee drag, so cells don't emit frame
+    /// preferences on every ordinary scroll frame.
+    var onDragBegan: () -> Void
     /// Called with the current rectangle (in this view's coordinates) during a
     /// drag, and with nil when the drag ends.
     var onChange: (CGRect?) -> Void
@@ -41,18 +60,21 @@ struct MarqueeView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> MarqueeNSView {
         let view = MarqueeNSView()
+        view.onDragBegan = onDragBegan
         view.onChange = onChange
         view.onEmptyClick = onEmptyClick
         return view
     }
 
     func updateNSView(_ nsView: MarqueeNSView, context: Context) {
+        nsView.onDragBegan = onDragBegan
         nsView.onChange = onChange
         nsView.onEmptyClick = onEmptyClick
     }
 }
 
 final class MarqueeNSView: NSView {
+    var onDragBegan: (() -> Void)?
     var onChange: ((CGRect?) -> Void)?
     var onEmptyClick: (() -> Void)?
     private var startPoint: CGPoint?
@@ -63,6 +85,9 @@ final class MarqueeNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         startPoint = convert(event.locationInWindow, from: nil)
         didDrag = false
+        // Arm frame reporting now so the first drag rect can hit-test against
+        // freshly reported cell frames.
+        onDragBegan?()
     }
 
     override func mouseDragged(with event: NSEvent) {

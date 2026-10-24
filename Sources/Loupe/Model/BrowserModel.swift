@@ -2179,7 +2179,11 @@ final class BrowserModel {
     /// The free-text tags on the given item, sorted alphabetically for stable
     /// display. Empty when untagged.
     func textTags(_ id: MediaItem.ID) -> [String] {
-        (textTags[id] ?? []).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        guard let tags = textTags[id], !tags.isEmpty else { return [] }
+        // Skip the locale-aware sort (and its allocation) for the common
+        // zero/one-tag case — this runs for every grid cell on construction.
+        if tags.count == 1 { return [tags.first!] }
+        return tags.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     /// Every text tag created this session, in creation order — including
