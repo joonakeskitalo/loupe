@@ -25,14 +25,22 @@ struct BrowserGridView: View {
     @State private var marqueeActive = false
 
     private let gridSpace = "grid"
+    /// The visible gap between adjacent images when filenames are shown. The
+    /// cell adds 4pt of padding on every side, so with the 2pt grid spacing the
+    /// image-to-image gap is 2 + 4 + 4 = 10pt. The tight image wall matches
+    /// this so hiding filenames doesn't make the images suddenly crowd together.
+    private static let shownImageGap: CGFloat = 10
+
     /// Gap between cells. Collapsed to zero when filenames are hidden so the
     /// image-only grid packs edge to edge (the cell's own padding also drops to
     /// zero there) — but only for fitted thumbnails, which letterbox and so
-    /// don't visually touch. In fill mode the image is cropped to the full cell,
-    /// so a zero gap would make neighbors abut; keep a small gap then.
+    /// don't visually touch. In fill mode the image is cropped to the full cell
+    /// and the cell has no padding, so the grid spacing alone is the whole gap;
+    /// use the same ~10pt gap as the filenames-shown layout so the spacing is
+    /// consistent rather than collapsing to a near-touch 2pt.
     private var spacing: CGFloat {
         guard model.hideFilenames else { return 2 }
-        return model.fillGridCells ? 2 : 0
+        return model.fillGridCells ? Self.shownImageGap : 0
     }
     private let padding: CGFloat = 8
 
