@@ -72,6 +72,33 @@ struct BrowserGridView: View {
         }
     }
 
+    /// Warms thumbnails for every item in the current displayed set, in order,
+    /// at prefetch priority — so after the visible cells are generated the rest
+    /// of the filtered folder keeps generating in the background instead of
+    /// waiting for the user to scroll. Runs as a cancellable `.task`: a yield
+    /// between items keeps the actor responsive and lets SwiftUI cancel the
+    /// pass promptly when the displayed set changes (the id flips). The
+    /// provider skips anything already cached or in flight, and `.visible`
+    /// requests always preempt this, so it never delays on-screen cells.
+    private func warmRemainingThumbnails() async {
+        let items = model.visualOrderItems
+        guard !items.isEmpty else { return }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let target = CGSize(width: model.thumbnailSize, height: model.thumbnailSize)
+        let method = model.thumbnailMethod
+        let videoPosition = model.videoThumbnailPosition
+        for item in items {
+            if Task.isCancelled { return }
+            await ThumbnailProvider.shared.prefetch(
+                item.url, size: target, scale: scale,
+                method: method, videoPosition: videoPosition
+            )
+            // Yield so a burst of enqueues doesn't monopolize the actor and so
+            // cancellation (on a display change) is observed promptly.
+            await Task.yield()
+        }
+    }
+
     /// Position of each item in the full display order, so a grouped layout can
     /// still warm neighbors across section boundaries (prefetch is driven by a
     /// cell's index into the flat `displayedItems`, not its index within a
@@ -385,6 +412,24 @@ struct BrowserGridView: View {
                 .onChange(of: model.displayRevision) { _, _ in
                     let keep = Set(model.displayedItems.map(\.url))
                     Task { await ThumbnailProvider.shared.cancelInFlight(notIn: keep) }
+                }
+                // Background pass: once the on-screen cells have what they need,
+                // keep warming the REST of the currently displayed set at low
+                // priority so the whole filtered folder ends up generated
+                // without the user having to scroll through it. Keyed on the
+                // display state (set + thumbnail options) so it restarts — and,
+                // via `.task`, cancels the previous pass — whenever the filter,
+                // folder, or thumbnail method changes. The provider dedupes
+                // (cached / in-flight items are skipped) and always serves
+                // `.visible` cells ahead of this, so it never delays what's on
+                // screen.
+                .task(id: WarmAllKey(
+                    revision: model.displayRevision,
+                    method: model.thumbnailMethod,
+                    videoPosition: model.videoThumbnailPosition,
+                    size: model.thumbnailSize
+                )) {
+                    await warmRemainingThumbnails()
                 }
                 // Only auto-focus when permitted. This branch reappears every
                 // time search results return after being empty, so grabbing
@@ -754,4 +799,17 @@ private struct GridContentWidth: ViewModifier {
             content.frame(maxWidth: .infinity, minHeight: minHeight, alignment: .top)
         }
     }
+}
+
+/// Identity for the background "warm the rest of the displayed set" task, so
+/// `.task(id:)` restarts (and cancels the prior pass) whenever the displayed
+/// set or the thumbnail-generation options change. `revision` captures set
+/// membership and order (it's bumped on every display change); the thumbnail
+/// method/position/size are included so changing them re-warms under the new
+/// key the cache is stored under.
+private struct WarmAllKey: Equatable {
+    let revision: Int
+    let method: ThumbnailMethod
+    let videoPosition: VideoThumbnailPosition
+    let size: Double
 }
