@@ -8,6 +8,10 @@ struct ContentView: View {
 
     @State private var model = BrowserModel()
     @State private var isTargeted = false
+    /// The `NSWindow` hosting this view, captured so drop handling can tell an
+    /// internal drag that started in *this* window (ignored) from one that
+    /// started in another Loupe window (accepted like a Finder drop).
+    @State private var hostWindow: NSWindow?
     /// Registration token while this window is empty and available to receive a
     /// dropped/opened batch (see OpenURLBridge).
     @State private var emptyWindowID: UUID?
@@ -36,8 +40,9 @@ struct ContentView: View {
             }
         }
         .overlay {
-            // Don't show the drop highlight for our own grid's drags.
-            if isTargeted && !InternalDrag.inProgress {
+            // Show the drop highlight for external drops and cross-window Loupe
+            // drags, but not for this window's own grid dragging out and back.
+            if isTargeted && !InternalDrag.startedFrom(hostWindow) {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.accentColor, lineWidth: 4)
                     .background(Color.accentColor.opacity(0.08))
@@ -51,6 +56,9 @@ struct ContentView: View {
         // Make this window prefer joining Loupe's tab group, so a new window
         // (⌘T / ⌘N) opens as a tab rather than a separate window.
         .background(WindowTabbingConfigurator())
+        // Capture the hosting NSWindow so drop handling can distinguish a drag
+        // that began in this window from one dragged over from another window.
+        .background(WindowReader { hostWindow = $0 })
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
         }
@@ -460,8 +468,11 @@ struct ContentView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        // Ignore files dragged out of our own grid and dropped back in.
-        guard !InternalDrag.inProgress else { return false }
+        // Ignore only a drag that started in THIS window (dragging a file out
+        // and back shouldn't re-open it). A drag from another Loupe window — or
+        // from Finder/another app — is a genuine drop and is handled below, so
+        // items can be dragged from one window into another.
+        guard !InternalDrag.startedFrom(hostWindow) else { return false }
         guard !providers.isEmpty else { return false }
 
         // Resolve every dropped provider to a URL, then open the whole batch at
@@ -536,6 +547,30 @@ private struct WindowTabbingConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Reports the `NSWindow` that ends up hosting this SwiftUI view. SwiftUI
+/// doesn't expose the backing window directly, so we attach a zero-size AppKit
+/// view and read `view.window` once it's in the hierarchy. Used so the drop
+/// handler can compare against the window an internal drag started from.
+private struct WindowReader: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { [weak view] in
+            onResolve(view?.window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // The window can attach after the first layout pass (and change when a
+        // tab is torn out into its own window), so keep the binding current.
+        DispatchQueue.main.async { [weak nsView] in
+            onResolve(nsView?.window)
+        }
+    }
 }
 
 /// A tiny thread-safe collector for drop URLs. `NSItemProvider.loadObject`

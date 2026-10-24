@@ -128,9 +128,11 @@ struct ClickCatcher: NSViewRepresentable {
                 item.setDraggingFrame(frame, contents: image ?? NSWorkspace.shared.icon(forFile: url.path))
                 return item
             }
-            // Mark this as an internal drag so our own window's drop handler
-            // ignores it (dragging a file out and back shouldn't re-add it).
-            InternalDrag.inProgress = true
+            // Record which window started this drag so drop handlers can tell
+            // a drag back into the *same* window (ignored — dragging a file out
+            // and back shouldn't re-add it) from a drag into a *different*
+            // Loupe window (accepted, behaving like a Finder drop).
+            InternalDrag.sourceWindow = window
             beginDraggingSession(with: dragItems, event: event, source: self)
         }
 
@@ -145,7 +147,7 @@ struct ClickCatcher: NSViewRepresentable {
         func draggingSession(_ session: NSDraggingSession,
                              endedAt screenPoint: NSPoint,
                              operation: NSDragOperation) {
-            InternalDrag.inProgress = false
+            InternalDrag.sourceWindow = nil
         }
 
         // Not overriding `scrollWheel(with:)` lets wheel events fall through to
@@ -153,11 +155,28 @@ struct ClickCatcher: NSViewRepresentable {
     }
 }
 
-/// Tracks whether a drag that originated from Loupe's own grid is in flight, so
-/// the window's drop handler can ignore files dragged out and back in.
+/// Tracks a drag that originated from one of Loupe's own grids, recording the
+/// source `NSWindow` so drop handlers can distinguish:
+///   • a drop back into the *same* window — ignored, since dragging a file out
+///     and dropping it back shouldn't re-open it; and
+///   • a drop into a *different* Loupe window — accepted and handled exactly
+///     like a Finder file drop (the files open in the destination window).
 @MainActor
 enum InternalDrag {
-    static var inProgress = false
+    /// The window a current internal drag started from, or nil when no internal
+    /// drag is in flight. Weak so a closed source window doesn't leak.
+    static weak var sourceWindow: NSWindow?
+
+    /// Whether an internal drag is in flight at all (from any Loupe window).
+    static var inProgress: Bool { sourceWindow != nil }
+
+    /// True when an internal drag started from `window` specifically. A drop in
+    /// `window` should be ignored in that case; a drop in any other window is a
+    /// genuine cross-window (Finder-style) drop and should be handled.
+    static func startedFrom(_ window: NSWindow?) -> Bool {
+        guard let window, let sourceWindow else { return false }
+        return window === sourceWindow
+    }
 }
 
 extension View {
