@@ -389,22 +389,31 @@ actor ThumbnailProvider {
         )
     }
 
-    /// Cancels in-flight *prefetch* work for items that are no longer shown, so
-    /// thumbnail generation tracks the current filter: when the displayed set
-    /// changes (a filter, search, or Library-view switch), warm work queued for
-    /// now-hidden items shouldn't keep occupying the scheduler's slots and
-    /// concurrency gates ahead of the newly visible set.
+    /// Cancels in-flight work for items that are no longer shown, so thumbnail
+    /// generation tracks the active folder / filter: when the displayed set
+    /// changes (switching the selected folder, a chip filter, search, or a
+    /// Library-view switch), work queued or running for now-hidden items
+    /// shouldn't keep occupying the scheduler's slots and concurrency gates
+    /// ahead of the newly displayed set.
     ///
-    /// Only `.prefetch` requests are touched — a `.visible` cell the user can
-    /// see is never cancelled, even if it's briefly absent from `keeping`
-    /// during a transition. Cancelling a request that's already decoding lets
-    /// it finish and cache normally (cooperative cancellation only short-
+    /// Cancels work at BOTH priorities for vanished URLs. This matters most on a
+    /// folder switch: the previous folder's on-screen cells were requested at
+    /// `.visible`, so cancelling only `.prefetch` left those top-priority
+    /// decodes running and the new folder's cells queued behind them — exactly
+    /// the "doesn't prioritize the active folder" symptom. An item that's no
+    /// longer displayed has no visible cell, so its decode — whatever priority
+    /// it was requested at — should yield its slot to what's now shown.
+    ///
+    /// A request already past its slot gate and inside a decoder runs to
+    /// completion and caches normally (cooperative cancellation only short-
     /// circuits before a decoder is entered); the win is reclaiming queued slots
-    /// and never starting work for vanished items.
+    /// and never starting work for vanished items. A still-displayed item is
+    /// never cancelled, and any cell still on screen simply re-requests on its
+    /// next render.
     ///
-    /// `keeping` is the set of URLs still displayed (the new filtered set).
-    func cancelPrefetches(keeping: Set<URL>) {
-        for (url, priority) in inFlightPriority where priority == .prefetch && !keeping.contains(url) {
+    /// `keeping` is the set of URLs still displayed (the new displayed set).
+    func cancelInFlight(notIn keeping: Set<URL>) {
+        for url in inFlightPriority.keys where !keeping.contains(url) {
             inFlight[url]?.cancel()
         }
     }
@@ -448,7 +457,7 @@ actor ThumbnailProvider {
         }
 
         // Park until a slot opens. Wrapped in a cancellation handler so a
-        // filter-change cancel (see `cancelPrefetches(keeping:)`) wakes a
+        // display-change cancel (see `cancelInFlight(notIn:)`) wakes a
         // still-parked waiter instead of leaving it stuck — `Task.cancel()`
         // alone does not resume a continuation. On cancel we resume the waiter
         // and drop it from the queue (without taking a slot); the task body

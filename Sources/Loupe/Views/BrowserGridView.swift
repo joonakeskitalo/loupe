@@ -374,15 +374,17 @@ struct BrowserGridView: View {
                 .focusable()
                 .focused($gridFocused)
                 .focusEffectDisabled()
-                // When the displayed set changes (a filter, search, sort, or
-                // Library-view switch), retarget thumbnail prefetching at the
-                // new filtered set: cancel warm work queued for items that are
-                // no longer shown so it stops occupying the scheduler ahead of
-                // what's now on screen. Visible cells are never cancelled. Keyed
-                // on the cheap `displayRevision` token, not the item array.
+                // When the displayed set changes (switching the selected
+                // folder, a chip filter, search, sort, or Library-view switch),
+                // retarget thumbnail generation at the new displayed set: cancel
+                // in-flight work for items no longer shown so it stops occupying
+                // the scheduler ahead of what's now on screen. Items still
+                // displayed keep their work; vanished items (including the
+                // previous folder's on-screen cells) yield their slots. Keyed on
+                // the cheap `displayRevision` token, not the item array.
                 .onChange(of: model.displayRevision) { _, _ in
                     let keep = Set(model.displayedItems.map(\.url))
-                    Task { await ThumbnailProvider.shared.cancelPrefetches(keeping: keep) }
+                    Task { await ThumbnailProvider.shared.cancelInFlight(notIn: keep) }
                 }
                 // Only auto-focus when permitted. This branch reappears every
                 // time search results return after being empty, so grabbing
