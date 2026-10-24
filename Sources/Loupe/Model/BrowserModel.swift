@@ -63,6 +63,12 @@ final class BrowserModel {
     private(set) var trees: [FolderNode] = []
     private(set) var isScanning = false
 
+    /// The in-flight folder-scan task, if any. Both `open(url:)` and
+    /// `refresh()` store their scan `Task` here and cancel any previous one
+    /// before starting, so scans never overlap and a stale scan can't clobber
+    /// newer state. Held so the "Scanning…" state has a single owner.
+    private var scanTask: Task<Void, Never>?
+
     /// True once at least one folder (or file) has been added.
     var hasContent: Bool { !roots.isEmpty }
 
@@ -638,15 +644,13 @@ final class BrowserModel {
 
         if scopeAccess(root) { scopedURLs.insert(root) }
         roots.append(root)
-        isScanning = true
         if selectedFolder == nil { selectedFolder = root }
 
-        Task {
-            await Task.yield()
+        startScan { [root] in
             let result = await FolderScanner.scan(root: root)
+            guard !Task.isCancelled else { return }
             self.resultsByRoot[root] = result
             self.rebuildMerged()
-            self.isScanning = false
         }
     }
 
@@ -828,11 +832,11 @@ final class BrowserModel {
         guard !roots.isEmpty else { return }
         let foldersToKeep = selectedFolders
         let anchorToKeep = folderAnchor
-        isScanning = true
         let currentRoots = roots
-        Task {
+        startScan {
             for root in currentRoots where !self.singleFileRoots.contains(root) {
                 let result = await FolderScanner.scan(root: root)
+                guard !Task.isCancelled else { return }
                 self.resultsByRoot[root] = result
             }
             self.rebuildMerged()
@@ -848,8 +852,30 @@ final class BrowserModel {
                     self.folderAnchor = kept.first
                 }
             }
-            self.isScanning = false
         }
+    }
+
+    /// Runs a folder-scan `body` as the window's single scan task. Cancels any
+    /// scan already in flight so a new one supersedes it, flips `isScanning`
+    /// on for the duration, and — via `defer` — always flips it back off when
+    /// the task ends, including when the task is cancelled at an `await`. This
+    /// guaranteed reset is what keeps a reload (⌘R) from hanging on the
+    /// "Scanning…" screen if a scan is interrupted or two scans overlap.
+    private func startScan(_ body: @escaping () async -> Void) {
+        scanTask?.cancel()
+        isScanning = true
+        var task: Task<Void, Never>!
+        task = Task { [weak self] in
+            defer {
+                // Only the current scan may clear the flag. A superseded task's
+                // tail can run after a newer scan has already set isScanning =
+                // true; without this check it would wrongly clear it and hide
+                // the newer scan's progress.
+                if let self, self.scanTask == task { self.isScanning = false }
+            }
+            await body()
+        }
+        scanTask = task
     }
 
     /// A root paired with its tree, for the sidebar. `key` is the stable root
