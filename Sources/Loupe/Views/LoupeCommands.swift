@@ -284,6 +284,10 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(model == nil)
 
+            Toggle("Fill Grid Cells (Crop to Square)", isOn: fillGridCellsBinding)
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .disabled(model == nil)
+
             Toggle("Show Flagged Only", isOn: showFlaggedOnlyBinding)
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(model == nil)
@@ -530,6 +534,7 @@ struct LoupeCommands: Commands {
     private var modeBinding: Binding<BrowseMode> { binding(\.mode, default: .flattened) }
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
+    private var fillGridCellsBinding: Binding<Bool> { binding(\.fillGridCells, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
     private var showHiddenOnlyBinding: Binding<Bool> { binding(\.showHiddenOnly, default: false) }
     private var hideFlaggedItemsBinding: Binding<Bool> { binding(\.hideFlaggedItems, default: false) }

@@ -179,6 +179,15 @@ final class BrowserModel {
     /// Toggles the grid filename captions on/off.
     func toggleHideFilenames() { hideFilenames.toggle() }
 
+    /// When true, grid thumbnails are scaled to fill their square cell and
+    /// cropped (center) rather than fitted whole with letterboxing. Gives a
+    /// uniform, edge-to-edge grid at the cost of cropping off-square images.
+    /// Window-scoped and in-session only, like `hideFilenames`.
+    var fillGridCells = false
+
+    /// Toggles between fit (letterboxed) and fill (zoomed/cropped) thumbnails.
+    func toggleFillGridCells() { fillGridCells.toggle() }
+
     /// How thumbnails are generated (per-type `.hybrid`, QuickLook-everywhere
     /// `.nativeMacOS`, or in-app-decoders-only `.custom`). A preference, not
     /// per-folder data, so it's persisted across windows and launches like

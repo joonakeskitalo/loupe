@@ -24,6 +24,9 @@ struct ThumbnailView: View {
     var personCount: Int = 0
     /// When true, the filename caption under the thumbnail is hidden.
     var hideFilename: Bool = false
+    /// When true, the thumbnail fills its square cell and is cropped rather than
+    /// fitted whole (letterboxed).
+    var fill: Bool = false
     /// How this cell's thumbnail is generated (the window's current method).
     var method: ThumbnailMethod = .hybrid
     /// Where in a video its thumbnail frame is taken (the window's setting).
@@ -50,8 +53,11 @@ struct ThumbnailView: View {
                         .resizable()
                         .interpolation(.high)
                         .antialiased(true)
-                        .aspectRatio(contentMode: .fit)
-                        .padding(4)
+                        .aspectRatio(contentMode: fill ? .fill : .fit)
+                        // Fill mode zooms the image to cover the square and
+                        // crops the overflow; fitted mode keeps the small inset
+                        // so the whole image breathes inside the cell.
+                        .padding(fill ? 0 : 4)
                 } else {
                     Image(systemName: item.kind.fallbackSymbol)
                         .font(.system(size: size * 0.28))
@@ -66,6 +72,10 @@ struct ThumbnailView: View {
                 }
             }
             .frame(width: size, height: size)
+            // In fill mode the image is scaled to cover the square, so clip the
+            // overflow to the cell's rounded rect. Fitted mode never overflows,
+            // so it's left unclipped to keep its existing appearance.
+            .modifier(FillClip(fill: fill))
             .overlay(alignment: .topTrailing) {
                 HStack(spacing: 3) {
                     if isHidden {
@@ -201,6 +211,21 @@ struct ThumbnailView: View {
             image = result
         } else {
             didFail = true
+        }
+    }
+}
+
+/// Clips the thumbnail to the cell's rounded rect, but only in fill mode. In
+/// fitted mode the image always sits inside its frame, so leaving it unclipped
+/// preserves the prior look exactly (and avoids clipping overlay badges).
+private struct FillClip: ViewModifier {
+    let fill: Bool
+
+    func body(content: Content) -> some View {
+        if fill {
+            content.clipShape(RoundedRectangle(cornerRadius: 6))
+        } else {
+            content
         }
     }
 }

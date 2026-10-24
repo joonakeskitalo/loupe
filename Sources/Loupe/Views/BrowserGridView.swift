@@ -83,6 +83,7 @@ struct BrowserGridView: View {
             textTags: model.textTags(item.id),
             personCount: model.persons(item.id).count,
             hideFilename: model.hideFilenames,
+            fill: model.fillGridCells,
             method: model.thumbnailMethod,
             videoPosition: model.videoThumbnailPosition
         )
