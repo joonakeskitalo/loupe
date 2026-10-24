@@ -221,6 +221,19 @@ struct VideoPlayerView: View {
     var onPrevious: (() -> Void)? = nil
     /// L over the video surface — move to the next item.
     var onNext: (() -> Void)? = nil
+    /// ←/→ over the video surface — navigate between items (forward == Right),
+    /// with `shift` indicating a Shift+arrow (extend) press. Routed through the
+    /// surface's key monitor so navigation keeps working even once the video
+    /// view holds first responder and SwiftUI's `.onKeyPress` stops firing.
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
+    /// Whether this player owns the keyboard transport keys (Space/K/J/L and,
+    /// in the viewer, the ←/→ navigation arrows).
+    /// Only the fullscreen viewer sets this: it's the surface the user drives
+    /// with the keyboard, so it should capture those keys. An inline preview
+    /// (the sidebar, a grid tile) leaves it `false` so it never installs a key
+    /// monitor and the browser's own hotkeys (Space to open, J/L to navigate,
+    /// flag/tag keys) keep working while a video happens to be showing.
+    var capturesKeyboard: Bool = false
 
     /// True when the extension is one AVFoundation can't demux and mpv must
     /// handle. Reuses the single source of truth in `MediaItem`.
@@ -234,10 +247,14 @@ struct VideoPlayerView: View {
         Group {
             if needsMPV {
                 MPVVideoPlayerView(url: url, onController: onController,
-                                   onPrevious: onPrevious, onNext: onNext)
+                                   onPrevious: onPrevious, onNext: onNext,
+                                   onArrow: onArrow,
+                                   capturesKeyboard: capturesKeyboard)
             } else {
                 AVVideoPlayerView(url: url, onController: onController,
-                                  onPrevious: onPrevious, onNext: onNext)
+                                  onPrevious: onPrevious, onNext: onNext,
+                                  onArrow: onArrow,
+                                  capturesKeyboard: capturesKeyboard)
             }
         }
         .id(needsMPV)
@@ -251,17 +268,23 @@ struct AVVideoPlayerView: View {
     var onController: ((any PlaybackController) -> Void)? = nil
     var onPrevious: (() -> Void)? = nil
     var onNext: (() -> Void)? = nil
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
+    var capturesKeyboard: Bool = false
 
     @StateObject private var controller: VideoController
 
     init(url: URL,
          onController: ((any PlaybackController) -> Void)? = nil,
          onPrevious: (() -> Void)? = nil,
-         onNext: (() -> Void)? = nil) {
+         onNext: (() -> Void)? = nil,
+         onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil,
+         capturesKeyboard: Bool = false) {
         self.url = url
         self.onController = onController
         self.onPrevious = onPrevious
         self.onNext = onNext
+        self.onArrow = onArrow
+        self.capturesKeyboard = capturesKeyboard
         _controller = StateObject(wrappedValue: VideoController(url: url))
     }
 
@@ -273,7 +296,9 @@ struct AVVideoPlayerView: View {
                 player: controller.player,
                 onToggle: { controller.togglePlay() },
                 onPrevious: onPrevious,
-                onNext: onNext
+                onNext: onNext,
+                onArrow: onArrow,
+                capturesKeyboard: capturesKeyboard
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -296,23 +321,30 @@ struct MPVVideoPlayerView: View {
     var onController: ((any PlaybackController) -> Void)? = nil
     var onPrevious: (() -> Void)? = nil
     var onNext: (() -> Void)? = nil
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
+    var capturesKeyboard: Bool = false
 
     @StateObject private var controller: MPVController
 
     init(url: URL,
          onController: ((any PlaybackController) -> Void)? = nil,
          onPrevious: (() -> Void)? = nil,
-         onNext: (() -> Void)? = nil) {
+         onNext: (() -> Void)? = nil,
+         onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil,
+         capturesKeyboard: Bool = false) {
         self.url = url
         self.onController = onController
         self.onPrevious = onPrevious
         self.onNext = onNext
+        self.onArrow = onArrow
+        self.capturesKeyboard = capturesKeyboard
         _controller = StateObject(wrappedValue: MPVController(url: url))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            MPVSurface(controller: controller, onPrevious: onPrevious, onNext: onNext)
+            MPVSurface(controller: controller, onPrevious: onPrevious, onNext: onNext,
+                       onArrow: onArrow, capturesKeyboard: capturesKeyboard)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             PlaybackControlBar(controller: controller)
@@ -398,6 +430,12 @@ private struct PlayerSurface: NSViewRepresentable {
     var onPrevious: (() -> Void)? = nil
     /// Called on L — move to the next item.
     var onNext: (() -> Void)? = nil
+    /// Called on ←/→ (forward == Right); `shift` marks a Shift+arrow press.
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
+    /// Whether to install the window-level transport-key monitor. Only the
+    /// fullscreen viewer sets this; inline previews leave it off so they never
+    /// claim the browser's hotkeys.
+    var capturesKeyboard: Bool = false
 
     func makeNSView(context: Context) -> KeyablePlayerView {
         let view = KeyablePlayerView()
@@ -407,9 +445,15 @@ private struct PlayerSurface: NSViewRepresentable {
         view.onToggle = onToggle
         view.onPrevious = onPrevious
         view.onNext = onNext
-        // Take first responder so the transport keys are handled here and never
-        // bubble up to the window's hidden shortcut buttons.
-        DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        view.onArrow = onArrow
+        view.capturesKeyboard = capturesKeyboard
+        // Intentionally do NOT make this the first responder. AVKit's
+        // AVPlayerView installs its own key handling (transport keys, arrows,
+        // speed changes) the moment it becomes first responder, which overrode
+        // the app's hotkeys. Keeping it out of the responder chain means AVKit
+        // never receives key events, so every app hotkey reaches its normal
+        // handler. The player's OWN keys are driven by the window-level key
+        // monitor below, which works regardless of first-responder status.
         return view
     }
 
@@ -420,6 +464,8 @@ private struct PlayerSurface: NSViewRepresentable {
         nsView.onToggle = onToggle
         nsView.onPrevious = onPrevious
         nsView.onNext = onNext
+        nsView.onArrow = onArrow
+        nsView.capturesKeyboard = capturesKeyboard
     }
 }
 
@@ -442,14 +488,41 @@ final class KeyablePlayerView: AVPlayerView {
     var onPrevious: (() -> Void)?
     /// L — go to the next item (not AVPlayerView's fast-forward/speed-up).
     var onNext: (() -> Void)?
+    /// ←/→ — navigate between items (forward == Right); `shift` marks a
+    /// Shift+arrow (extend) press. Handled here, by the monitor, rather than
+    /// via SwiftUI's `.onKeyPress` because once a video plays this view can take
+    /// first responder and SwiftUI focus leaves the viewer, so `.onKeyPress`
+    /// stops firing — but this window-level monitor keeps receiving keys.
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)?
+    /// Whether this surface owns the transport keys. When false (inline
+    /// previews) no monitor is installed, so the browser's own hotkeys keep
+    /// working while a video is merely showing. Toggling it adds/removes the
+    /// monitor so a view reused across contexts behaves correctly.
+    var capturesKeyboard: Bool = false {
+        didSet {
+            guard capturesKeyboard != oldValue else { return }
+            refreshMonitor()
+        }
+    }
 
     private var keyMonitor: Any?
 
-    override var acceptsFirstResponder: Bool { true }
+    // Decline first responder so AVKit's AVPlayerView never installs its own
+    // key handling (which claims arrows/space/J/K/L and speed keys and overrode
+    // the app's hotkeys). The player's own keys are driven by the window-level
+    // `keyMonitor` instead, which doesn't need first-responder status. A click
+    // on the video still toggles play/pause via that monitor's Space/K path.
+    override var acceptsFirstResponder: Bool { false }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
+        refreshMonitor()
+    }
+
+    /// Install the monitor only when in a window AND this surface owns the
+    /// keyboard; otherwise tear it down.
+    private func refreshMonitor() {
+        if window != nil && capturesKeyboard {
             installMonitor()
         } else {
             removeMonitor()
@@ -473,6 +546,22 @@ final class KeyablePlayerView: AVPlayerView {
                 .intersection([.command, .control, .option])
                 .isEmpty
             if modified { return event }
+
+            // ←/→ item navigation. Driven here (not via SwiftUI `.onKeyPress`)
+            // so it survives the video view holding first responder. Shift is
+            // read off the event so the viewer's extend-selection still works.
+            if let onArrow = self.onArrow {
+                switch event.keyCode {
+                case 123:   // Left arrow
+                    onArrow(false, event.modifierFlags.contains(.shift))
+                    return nil
+                case 124:   // Right arrow
+                    onArrow(true, event.modifierFlags.contains(.shift))
+                    return nil
+                default:
+                    break
+                }
+            }
 
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "k", " ":

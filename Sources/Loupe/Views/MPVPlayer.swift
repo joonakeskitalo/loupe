@@ -467,6 +467,22 @@ final class MPVGLView: NSOpenGLView {
     var onPrevious: (() -> Void)?
     /// L — go to the next item.
     var onNext: (() -> Void)?
+    /// ←/→ — navigate between items (forward == Right); `shift` marks a
+    /// Shift+arrow (extend) press. Handled by the monitor rather than SwiftUI's
+    /// `.onKeyPress`: this GL view takes first responder once a video plays, at
+    /// which point SwiftUI focus leaves the viewer and `.onKeyPress` goes
+    /// silent, but this window-level monitor still receives the keys.
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)?
+    /// Whether this surface owns the transport keys. When false (inline
+    /// previews) no monitor is installed, so the browser's own hotkeys keep
+    /// working while a `.webm`/`.mkv` is merely showing. Only the fullscreen
+    /// viewer sets this true.
+    var capturesKeyboard: Bool = false {
+        didSet {
+            guard capturesKeyboard != oldValue else { return }
+            refreshKeyMonitor()
+        }
+    }
 
     /// Window-scoped key-down monitor, mirroring `KeyablePlayerView`. Without
     /// it, this `NSOpenGLView` (once it's the window's first responder) swallows
@@ -514,7 +530,13 @@ final class MPVGLView: NSOpenGLView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil {
+        refreshKeyMonitor()
+    }
+
+    /// Install the transport-key monitor only when in a window AND this surface
+    /// owns the keyboard; otherwise tear it down.
+    private func refreshKeyMonitor() {
+        if window != nil && capturesKeyboard {
             installKeyMonitor()
         } else {
             removeKeyMonitor()
@@ -542,6 +564,21 @@ final class MPVGLView: NSOpenGLView {
                 .isEmpty
             if modified { return event }
 
+            // ←/→ item navigation, handled here so it survives this GL view
+            // holding first responder. Shift extends the viewer's selection.
+            if let onArrow = self.onArrow {
+                switch event.keyCode {
+                case 123:   // Left arrow
+                    onArrow(false, event.modifierFlags.contains(.shift))
+                    return nil
+                case 124:   // Right arrow
+                    onArrow(true, event.modifierFlags.contains(.shift))
+                    return nil
+                default:
+                    break
+                }
+            }
+
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "k", " ":
                 self.onToggle?()
@@ -553,7 +590,7 @@ final class MPVGLView: NSOpenGLView {
                 self.onNext?()
                 return nil
             default:
-                return event        // pass through (←/→, etc.)
+                return event        // pass through (other keys)
             }
         }
     }
@@ -669,6 +706,8 @@ struct MPVSurface: NSViewRepresentable {
     let controller: MPVController
     var onPrevious: (() -> Void)? = nil
     var onNext: (() -> Void)? = nil
+    var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
+    var capturesKeyboard: Bool = false
 
     func makeNSView(context: Context) -> MPVGLView {
         let view = MPVGLView(controller: controller)
@@ -682,12 +721,16 @@ struct MPVSurface: NSViewRepresentable {
     }
 
     /// Hooks the surface's transport keys up to the controller / navigation
-    /// callbacks. Space/K toggle playback; J/L step items. All other keys
-    /// (including ←/→) are passed through to the viewer by the view's monitor.
+    /// callbacks. Space/K toggle playback; J/L step items; ←/→ navigate items.
+    /// The ←/→ arrows are handled by the view's monitor (not SwiftUI's
+    /// `.onKeyPress`) so they keep working once the GL surface takes first
+    /// responder while a video plays. Every other key still passes through.
     private func wire(_ view: MPVGLView) {
         view.onToggle = { [weak controller] in controller?.togglePlay() }
         view.onPrevious = onPrevious
         view.onNext = onNext
+        view.onArrow = onArrow
+        view.capturesKeyboard = capturesKeyboard
     }
 
     static func dismantleNSView(_ nsView: MPVGLView, coordinator: ()) {

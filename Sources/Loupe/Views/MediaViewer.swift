@@ -371,7 +371,15 @@ struct MediaViewer: View {
                 url: item.url,
                 onController: { controller in videoController = controller },
                 onPrevious: { model.moveSelection(by: -1) },
-                onNext: { model.moveSelection(by: 1) }
+                onNext: { model.moveSelection(by: 1) },
+                // ←/→ navigation is routed through the player surface's key
+                // monitor (not SwiftUI's `.onKeyPress`) so it keeps working
+                // once the video view takes first responder during playback.
+                // Uses the same paging/extend logic as the viewer's arrows.
+                onArrow: { forward, shift in _ = handleArrow(forward: forward, shift: shift) },
+                // Only the fullscreen viewer captures the transport keys; the
+                // sidebar/grid previews leave them to the browser's hotkeys.
+                capturesKeyboard: true
             )
         case .pdf:
             PDFViewerRepresentable(url: item.url)
