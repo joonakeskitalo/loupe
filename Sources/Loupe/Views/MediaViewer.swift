@@ -158,6 +158,7 @@ struct MediaViewer: View {
         // owner is live at a time.
         .background { trashHotkey }
         .background { copyHotkey }
+        .background { hideHotkey }
         // Space + arrow keys are handled through one modifier (see
         // `ViewerKeyHandling`) so the main view's modifier chain stays small
         // enough for the type-checker. Arrows go through `onKeyPress` rather
@@ -632,6 +633,21 @@ struct MediaViewer: View {
     private var copyHotkey: some View {
         hotkey("c", .command) { model.copyToClipboard() }
             .disabled(!model.canCopySelection || model.showTagInput)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+
+    /// Hidden ⌫ (backspace) shortcut to hide/unhide the shown item(s) while the
+    /// viewer owns focus. The grid's own ⌫ hotkey (in ContentView) is gated off
+    /// while the viewer is open, so the viewer carries its own copy here —
+    /// mirroring the trash and copy hotkeys so exactly one owner is ever live.
+    /// Hiding the current item advances the selection to the next one via
+    /// `toggleHidden`, so browsing keeps flowing.
+    @ViewBuilder
+    private var hideHotkey: some View {
+        hotkey(.deleteBackspace, []) { model.toggleHidden() }
+            .disabled(items.isEmpty || model.showTagInput)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
