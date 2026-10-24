@@ -15,16 +15,32 @@ import SwiftUI
 struct ItemPreviewSidebar: View {
     @Bindable var model: BrowserModel
 
-    /// Width captured when a resize drag begins, so the drag delta is applied
+    /// The live width while a resize drag is in flight. Driving the frame off
+    /// local state (not the model) keeps dragging smooth: it avoids the model's
+    /// per-tick `UserDefaults` write and the observation churn that re-rendered
+    /// the whole sidebar (including the live preview) on every delta. The
+    /// committed width lands back on the model only when the drag ends.
+    @State private var dragWidth: Double?
+
+    /// Width captured when a resize drag begins, so the delta is applied
     /// against a stable base rather than accumulating rounding error.
     @State private var dragStartWidth: Double?
+
+    /// The width the panel should render at right now.
+    private var effectiveWidth: Double { dragWidth ?? model.previewSidebarWidth }
+
+    /// True while a resize drag is in flight. During the drag the live preview
+    /// is swapped for a static placeholder so the expensive media renderers
+    /// (`NSViewRepresentable`s that re-layout/refit on every size change) don't
+    /// run once per drag tick — that layout work was the source of the stutter.
+    private var isResizing: Bool { dragWidth != nil }
 
     var body: some View {
         HStack(spacing: 0) {
             resizeHandle
             panel
         }
-        .frame(width: CGFloat(model.previewSidebarWidth))
+        .frame(width: CGFloat(effectiveWidth))
     }
 
     // MARK: Panel
@@ -37,7 +53,10 @@ struct ItemPreviewSidebar: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxHeight: .infinity)
-        .background(.bar)
+        // Force a light background (and matching light color scheme) regardless
+        // of the system appearance, so the preview reads on a bright panel.
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(\.colorScheme, .light)
     }
 
     @ViewBuilder
@@ -57,11 +76,18 @@ struct ItemPreviewSidebar: View {
         if selected.count > 1 {
             multiSelection(count: selected.count)
         } else if let item = model.primarySelectedItem {
-            // Keyed by item id so each new selection rebuilds its renderer
-            // (and resets image zoom / reloads the player) instead of reusing
-            // the previous item's view state.
-            ItemPreviewContent(item: item)
-                .id(item.id)
+            if isResizing {
+                // Cheap stand-in during the drag: no media renderer, so the
+                // panel resizes at a steady frame rate. The real preview comes
+                // back (once) when the drag ends.
+                placeholder(symbol: item.kind.fallbackSymbol, text: item.name)
+            } else {
+                // Keyed by item id so each new selection rebuilds its renderer
+                // (and resets image zoom / reloads the player) instead of
+                // reusing the previous item's view state.
+                ItemPreviewContent(item: item)
+                    .id(item.id)
+            }
         } else {
             emptyState
         }
@@ -82,6 +108,9 @@ struct ItemPreviewSidebar: View {
                 .foregroundStyle(.tertiary)
             Text(text)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -111,10 +140,20 @@ struct ItemPreviewSidebar: View {
                         let base = dragStartWidth ?? model.previewSidebarWidth
                         if dragStartWidth == nil { dragStartWidth = base }
                         // Handle is on the leading edge: dragging left
-                        // (negative translation) widens the panel.
-                        model.previewSidebarWidth = base - Double(value.translation.width)
+                        // (negative translation) widens the panel. Update only
+                        // local state so the resize stays smooth; clamp here so
+                        // the panel visibly stops at the min/max.
+                        let proposed = base - Double(value.translation.width)
+                        dragWidth = min(max(proposed, BrowserModel.minPreviewSidebarWidth),
+                                        BrowserModel.maxPreviewSidebarWidth)
                     }
-                    .onEnded { _ in dragStartWidth = nil }
+                    .onEnded { _ in
+                        // Commit the final width to the model once (which
+                        // persists it), then drop the live override.
+                        if let dragWidth { model.previewSidebarWidth = dragWidth }
+                        dragWidth = nil
+                        dragStartWidth = nil
+                    }
             )
     }
 }
