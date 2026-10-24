@@ -13,6 +13,10 @@ struct FolderSidebar: View {
     @Bindable var model: BrowserModel
     @FocusState private var focused: Bool
 
+    /// Gate for the "Remove All & Reset" confirmation dialog, since that action
+    /// clears every open folder and all flags/tags/colors at once.
+    @State private var showResetConfirm = false
+
     /// Shared row insets applied to both each section's header and its rows so
     /// their content shares identical leading/trailing edges — the only way to
     /// make the header's remove button line up with the rows' count badges
@@ -187,15 +191,44 @@ struct FolderSidebar: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            Button {
-                addFolder()
-            } label: {
-                Label("Add Folder…", systemImage: "plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                Button {
+                    addFolder()
+                } label: {
+                    Label("Add Folder…", systemImage: "plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+
+                // Remove every folder and reset all marks. Only offered when
+                // the window actually has content to clear. Confirmed first,
+                // since it's a broad, one-shot reset.
+                if model.hasContent {
+                    Button(role: .destructive) {
+                        showResetConfirm = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove all folders and reset flags, tags, and colors")
+                }
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
+        }
+        .confirmationDialog(
+            "Remove all folders and reset all marks?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Remove All & Reset", role: .destructive) {
+                model.resetAll()
+                focused = false
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This clears every open folder and removes all flags, hidden marks, color tags, text tags, AI categories, and recognized people in this window. Files on disk are not changed.")
         }
         // Make the whole sidebar focusable so arrow keys move the folder
         // selection once a folder is selected or the sidebar is clicked.

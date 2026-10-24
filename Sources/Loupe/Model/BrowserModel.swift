@@ -761,6 +761,61 @@ final class BrowserModel {
         }
     }
 
+    /// Removes every root folder from the window, releasing each one's security
+    /// scope. Leaves the window empty (showing the drop zone) but keeps
+    /// preferences. Annotations for the now-absent files are pruned by the
+    /// rebuild; `resetAll()` additionally clears any lingering filter state.
+    func removeAllRoots() {
+        guard !roots.isEmpty else { return }
+        for root in scopedURLs {
+            root.stopAccessingSecurityScopedResource()
+        }
+        scopedURLs.removeAll()
+        roots.removeAll()
+        resultsByRoot.removeAll()
+        singleFileRoots.removeAll()
+        selectedFolders = []
+        folderAnchor = nil
+        rebuildMerged()
+    }
+
+    /// Clears every in-session annotation (flags, hidden marks, color tags,
+    /// free-text tags, AI categories, recognized people) and the filters/
+    /// groupings that depend on them, returning the window's marks to a clean
+    /// slate. Does not touch the open folders.
+    func clearAllAnnotations() {
+        flaggedItems = []
+        hiddenItems = []
+        colorTags = [:]
+        textTags = [:]
+        textTagOrder = []
+        aiCategories = [:]
+        facePersons = [:]
+
+        // Drop every filter / Library view that keyed off those annotations.
+        showFlaggedOnly = false
+        showHiddenOnly = false
+        showUnmarkedOnly = false
+        colorTagFilter = nil
+        textTagFilter = nil
+        aiCategoryFilter = nil
+        personFilter = nil
+        hideFlaggedItems = false
+        hideTaggedItems = false
+        hideColorCodedItems = false
+        if grouping == .person || grouping == .category { grouping = .none }
+
+        clampSelection()
+    }
+
+    /// Removes all folders AND clears every annotation/filter, giving a
+    /// completely fresh, empty window. Backs the sidebar's "Remove All &
+    /// Reset" action.
+    func resetAll() {
+        clearAllAnnotations()
+        removeAllRoots()
+    }
+
     /// Re-scans every root, preserving the sidebar folder selection.
     func refresh() {
         guard !roots.isEmpty else { return }
