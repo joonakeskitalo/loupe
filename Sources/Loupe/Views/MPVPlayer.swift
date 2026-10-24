@@ -18,12 +18,28 @@ private func mpvRenderUpdate(_ ctx: UnsafeMutableRawPointer?) {
 /// metadata — mpv invokes it on its internal "core" thread, where any Swift
 /// executor-isolation check would trap. It only hops to the main queue, where
 /// the controller safely drains events.
+///
+/// LIFETIME: the callback fires on mpv's core thread and enqueues a block that
+/// runs *later* on the main queue. The reference held in the controller's
+/// `callbackContext` is NOT enough to keep it alive across that hop: teardown()
+/// clears the mpv callback and releases `callbackContext` on the main queue,
+/// which can deallocate the controller *before* an already-enqueued block runs.
+/// Resolving the pointer with `takeUnretainedValue()` then touched freed memory
+/// and crashed in swift_retain (EXC_BAD_ACCESS).
+///
+/// So we take an ADDITIONAL +1 here on the core thread via `Unmanaged.retain()`
+/// (a bare refcount bump — no actor isolation, safe off-main) and hand that
+/// owned reference to the block, which consumes it with `takeRetainedValue()`.
+/// Each in-flight block therefore owns its own strong reference and keeps the
+/// controller alive until it finishes draining, independent of teardown.
 private func mpvWakeup(_ ctx: UnsafeMutableRawPointer?) {
     guard let ctx else { return }
-    let bits = UInt(bitPattern: ctx)
+    // Bump the retain count on the core thread so the controller cannot be
+    // deallocated between this enqueue and the block running on main.
+    let retained = Unmanaged<MPVController>.fromOpaque(ctx).retain()
     DispatchQueue.main.async {
-        guard let raw = UnsafeMutableRawPointer(bitPattern: bits) else { return }
-        let controller = Unmanaged<MPVController>.fromOpaque(raw).takeUnretainedValue()
+        // Consume the +1 taken above; the controller stays alive for the call.
+        let controller = retained.takeRetainedValue()
         controller.drainEventsFromMain()
     }
 }
@@ -430,11 +446,18 @@ final class MPVController: ObservableObject, PlaybackController {
             self.renderContext = nil
         }
         if let mpv {
+            // Clearing the wakeup callback and destroying the handle stops
+            // mpv's core thread, so no NEW mpvWakeup invocation can begin after
+            // this returns. Any block already enqueued on the main queue holds
+            // its own +1 (taken in mpvWakeup) and will outlive the release
+            // below, so dropping callbackContext here can't dangle it.
             mpv_set_wakeup_callback(mpv, nil, nil)
             mpv_destroy(mpv)
             self.mpv = nil
         }
-        // Now that the callback is cleared, drop the retained self it held.
+        // Drop the registration reference the callback context held. In-flight
+        // main-queue blocks keep their own reference, so this is safe even if
+        // one is still pending.
         callbackContext?.release()
         callbackContext = nil
     }
