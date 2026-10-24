@@ -605,6 +605,13 @@ final class BrowserModel {
     /// so keyboard Up/Down navigation can jump a full row.
     var gridColumnCount = 1
 
+    /// True while the preview sidebar is being drag-resized. The grid reads
+    /// this to freeze its column layout for the duration of the drag: an
+    /// adaptive `LazyVGrid` otherwise re-flows every visible cell on each tick
+    /// as the grid's available width changes, which looks stuttery. In-session,
+    /// window-scoped, and never persisted.
+    var isResizingPreviewSidebar = false
+
     // Security-scoped access is kept alive per root for the lifetime of the
     // window; stopped when a root is removed. The OS reclaims the rest on exit.
     private var scopedURLs: Set<URL> = []

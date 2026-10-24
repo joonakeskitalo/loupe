@@ -29,6 +29,13 @@ struct BrowserGridView: View {
         [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
     }
 
+    /// The grid content's width, frozen at its pre-drag value while the preview
+    /// sidebar is being resized. Pinning the content width keeps the adaptive
+    /// `LazyVGrid` from re-deriving its column count (and re-flowing/stretching
+    /// every cell) as the panel squeezes the grid each tick. `nil` means "no
+    /// freeze" — the content fills the available width normally.
+    @State private var frozenContentWidth: CGFloat?
+
     /// How many items past a newly-appeared cell to warm. Roughly a couple of
     /// rows ahead so a continued downward scroll lands on ready thumbnails
     /// without warming the whole folder. Prefetch work is low priority, so it
@@ -255,7 +262,14 @@ struct BrowserGridView: View {
                                 }
                             }
                             .padding(padding)
-                            .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .top)
+                            // While the sidebar is resizing, pin the content to
+                            // its pre-drag width and keep it leading-aligned so
+                            // the adaptive grid doesn't re-flow as the panel
+                            // squeezes the column; otherwise fill the width.
+                            .modifier(GridContentWidth(
+                                frozenWidth: frozenContentWidth,
+                                minHeight: geo.size.height
+                            ))
                             // Marquee layer sits behind the cells (AppKit-level,
                             // so the scroll view never sees the drag): a drag
                             // beginning on empty space rubber-band-selects; drags
@@ -283,6 +297,12 @@ struct BrowserGridView: View {
                         }
                         .onPreferenceChange(CellFramesKey.self) { frames in
                             cellFrames = frames
+                            // Don't republish the column count mid-resize: the
+                            // grid is frozen to a fixed count then, and the
+                            // cells are mid-reflow so the frame-derived count
+                            // would be noisy. The committed count is recomputed
+                            // once the drag ends and the layout settles.
+                            guard !model.isResizingPreviewSidebar else { return }
                             // Publish the accurate, rendered column count so
                             // other surfaces (e.g. the tag overlay's Up/Down
                             // navigation) jump exactly one row. Computed from
@@ -318,7 +338,24 @@ struct BrowserGridView: View {
                         }
                     }
                     .onChange(of: geo.size.width, initial: true) { _, width in
+                        // Don't recompute the column count mid-resize: the grid
+                        // is frozen then, and churning this observable would
+                        // re-render the grid on every tick.
+                        guard !model.isResizingPreviewSidebar else { return }
                         model.gridColumnCount = columnCount(for: width)
+                    }
+                    .onChange(of: model.isResizingPreviewSidebar) { _, resizing in
+                        // At the start of a sidebar resize, freeze the content
+                        // to its current width so the adaptive grid stops
+                        // re-flowing as the panel squeezes it. Clear the freeze
+                        // when the drag ends and let it relayout once.
+                        if resizing {
+                            // The frame is applied after `.padding(padding)`, so
+                            // pin it to the full pre-drag grid width.
+                            frozenContentWidth = geo.size.width
+                        } else {
+                            frozenContentWidth = nil
+                        }
                     }
                 }
                 .focusable()
@@ -671,6 +708,25 @@ struct BrowserGridView: View {
             }
             Divider()
             Button("Remove Tag") { model.clearColorTag(item: item) }
+        }
+    }
+}
+
+/// Sizes the grid content: normally it fills the available width; while a
+/// `frozenWidth` is set (during a preview-sidebar resize) it's pinned to that
+/// exact width and leading-aligned, so the adaptive `LazyVGrid` keeps its
+/// column layout instead of re-flowing as the panel squeezes the grid.
+private struct GridContentWidth: ViewModifier {
+    let frozenWidth: CGFloat?
+    let minHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        if let frozenWidth {
+            content
+                .frame(width: frozenWidth, alignment: .topLeading)
+                .frame(minHeight: minHeight, alignment: .topLeading)
+        } else {
+            content.frame(maxWidth: .infinity, minHeight: minHeight, alignment: .top)
         }
     }
 }

@@ -135,24 +135,40 @@ struct ItemPreviewSidebar: View {
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
             }
             .gesture(
-                DragGesture(minimumDistance: 0)
+                // Measure the drag in the global (window) space, not the
+                // handle's local space. The handle sits on the panel's leading
+                // edge and moves as the panel resizes, so a local
+                // `translation` drifts out from under the pointer. The global
+                // pointer x stays fixed to the cursor, so anchoring the width
+                // to it keeps the edge pinned to the cursor the whole drag.
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
                         let base = dragStartWidth ?? model.previewSidebarWidth
-                        if dragStartWidth == nil { dragStartWidth = base }
-                        // Handle is on the leading edge: dragging left
-                        // (negative translation) widens the panel. Update only
-                        // local state so the resize stays smooth; clamp here so
-                        // the panel visibly stops at the min/max.
-                        let proposed = base - Double(value.translation.width)
+                        if dragStartWidth == nil {
+                            dragStartWidth = base
+                            // Tell the grid a resize started so it freezes its
+                            // column layout (see `isResizingPreviewSidebar`).
+                            model.isResizingPreviewSidebar = true
+                        }
+                        // Handle is on the leading edge and the panel is pinned
+                        // to the window's trailing edge, so moving the cursor
+                        // left (a smaller x) widens the panel. Use the pointer's
+                        // displacement from where the drag began — in global
+                        // space this tracks the cursor exactly, regardless of
+                        // how the handle itself has shifted.
+                        let delta = value.startLocation.x - value.location.x
+                        let proposed = base + Double(delta)
                         dragWidth = min(max(proposed, BrowserModel.minPreviewSidebarWidth),
                                         BrowserModel.maxPreviewSidebarWidth)
                     }
                     .onEnded { _ in
                         // Commit the final width to the model once (which
-                        // persists it), then drop the live override.
+                        // persists it), then drop the live override and let the
+                        // grid reflow to the final width in a single pass.
                         if let dragWidth { model.previewSidebarWidth = dragWidth }
                         dragWidth = nil
                         dragStartWidth = nil
+                        model.isResizingPreviewSidebar = false
                     }
             )
     }
