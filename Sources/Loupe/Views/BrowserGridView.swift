@@ -23,6 +23,13 @@ struct BrowserGridView: View {
     /// reporting (see `reportCellFrame`) so cells don't emit frame preferences
     /// on every ordinary scroll frame — the main scroll-performance cost.
     @State private var marqueeActive = false
+    /// The most recent marquee rectangle, kept so the drag can be re-hit-tested
+    /// against cell frames that only arrive after `marqueeActive` is armed (the
+    /// `GeometryReader` frames reach `cellFrames` a layout pass later, via the
+    /// preference round-trip). When those frames land mid-drag we redo the
+    /// hit-test with this rect so the selection catches up instead of staying
+    /// empty for the first frames — or, for a quick drag, never registering.
+    @State private var lastMarqueeRect: CGRect?
 
     private let gridSpace = "grid"
     /// The visible gap between adjacent images when filenames are shown. The
@@ -339,6 +346,20 @@ struct BrowserGridView: View {
                         }
                         .onPreferenceChange(CellFramesKey.self) { frames in
                             cellFrames = frames
+                            // Frames arrive a layout pass after a marquee drag
+                            // arms `marqueeActive`, so the drag's first ticks ran
+                            // against an empty `cellFrames` and selected nothing.
+                            // Now that fresh frames have landed, redo the
+                            // hit-test against the live rect so the selection
+                            // catches up — this is also what makes a quick drag
+                            // (released before the first frames arrived) still
+                            // register, because the rect is retained.
+                            if marqueeActive, let rect = lastMarqueeRect, !frames.isEmpty {
+                                let hits = frames.compactMap {
+                                    $0.value.intersects(rect) ? $0.key : nil
+                                }
+                                model.setSelection(hits)
+                            }
                             // Don't republish the column count mid-resize: the
                             // grid is frozen to a fixed count then, and the
                             // cells are mid-reflow so the frame-derived count
@@ -548,15 +569,33 @@ struct BrowserGridView: View {
     private func handleMarquee(_ rect: CGRect?) {
         marqueeRect = rect
         guard let rect else {
-            // Drag (or bare press) ended: stop reporting cell frames so plain
-            // scrolling pays nothing. Clear the stale frames too.
+            // Drag (or bare press) ended. If cell frames only arrived late (the
+            // preference round-trip lags the drag by a layout pass), the live
+            // ticks above may have hit-tested an empty `cellFrames` and the
+            // selection would be wrong or empty. Do one authoritative hit-test
+            // against whatever frames are now available, using the final rect,
+            // before tearing the frames down.
+            if let lastMarqueeRect, !cellFrames.isEmpty {
+                let hits = cellFrames.compactMap {
+                    $0.value.intersects(lastMarqueeRect) ? $0.key : nil
+                }
+                model.setSelection(hits)
+            }
+            // Stop reporting cell frames so plain scrolling pays nothing, and
+            // clear the stale frames and retained rect.
+            lastMarqueeRect = nil
             marqueeActive = false
             cellFrames = [:]
             return
         }
         gridFocused = true
+        lastMarqueeRect = rect
         // Auto-scroll is suppressed for the whole drag via `marqueeRect != nil`
         // in the selection `onChange`, so no one-shot flag is needed here.
+        // `cellFrames` may still be empty on the first few ticks (the frames
+        // are reported a layout pass after `marqueeActive` armed); the
+        // `onPreferenceChange` above redoes this hit-test the moment they land,
+        // so the selection catches up rather than staying empty.
         let hits = cellFrames.compactMap { $0.value.intersects(rect) ? $0.key : nil }
         model.setSelection(hits)
     }
