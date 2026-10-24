@@ -34,8 +34,29 @@ struct BrowserGridView: View {
 
     private var cellWidth: CGFloat { model.thumbnailSize + 12 }
 
+    /// True for the edge-to-edge, cropped image wall: filenames hidden and
+    /// thumbnails filled. In that mode we want a uniform gap in BOTH axes.
+    private var isTightImageWall: Bool { model.hideFilenames && model.fillGridCells }
+
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
+        // In the tight image-wall mode, use fixed-width columns sized to the
+        // cell so the horizontal gap between images is exactly `spacing` — the
+        // same as the vertical row gap. The adaptive layout (used everywhere
+        // else) stretches columns to fill the width, which spreads the leftover
+        // slack between images and makes the horizontal gaps wider than the
+        // vertical ones. Fixed columns remove that slack so both axes match.
+        if isTightImageWall {
+            // Columns are exactly the cell's image width (`thumbnailSize`),
+            // with no extra inset, so the only horizontal gap is `spacing` —
+            // matching the vertical row gap. (The normal `cellWidth` adds 12pt
+            // of breathing room, which would make the horizontal gap larger.)
+            let count = max(1, liveColumnCount)
+            return Array(
+                repeating: GridItem(.fixed(model.thumbnailSize), spacing: spacing, alignment: .top),
+                count: count
+            )
+        }
+        return [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
     }
 
     /// The grid content's width, frozen at its pre-drag value while the preview
@@ -197,7 +218,12 @@ struct BrowserGridView: View {
     private func columnCount(for width: CGFloat) -> Int {
         let usable = width - padding * 2
         guard usable > 0 else { return 1 }
-        let count = Int((usable + spacing) / (cellWidth + spacing))
+        // Match whichever column width the active layout uses, so the estimated
+        // count agrees with how many columns actually get laid out: the tight
+        // image wall uses fixed `thumbnailSize`-wide columns, every other mode
+        // the adaptive `cellWidth` minimum.
+        let perColumn = isTightImageWall ? model.thumbnailSize : cellWidth
+        let count = Int((usable + spacing) / (perColumn + spacing))
         return max(1, count)
     }
 
