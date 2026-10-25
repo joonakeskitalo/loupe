@@ -142,11 +142,29 @@ struct BrowserGridView: View {
         }
     }
 
+    /// The cell id to scroll to for a selected item. Cells carry a string id —
+    /// the item's own id in the flat grid, or a per-occurrence composite
+    /// group+item id when grouping is active — so a bare selected id must be
+    /// resolved to the matching cell. In a grouped grid the same photo can
+    /// appear under several sections; we target its FIRST occurrence (the
+    /// earliest in display order), matching where navigation treats the item as
+    /// living (see `visualOrderItems`, which keeps each item once at its first
+    /// position).
+    private func scrollTarget(for id: MediaItem.ID) -> String? {
+        guard model.grouping != .none else { return id.absoluteString }
+        for group in model.groupedDisplayedItems {
+            if let item = group.items.first(where: { $0.id == id }) {
+                return BrowserModel.CategoryGroup.Entry(groupID: group.id, item: item).id
+            }
+        }
+        return nil
+    }
+
     /// A single grid cell: the thumbnail plus all its selection, drag and
     /// context-menu wiring. Shared by the flat and grouped layouts so both
     /// behave identically.
     @ViewBuilder
-    private func cell(for item: MediaItem) -> some View {
+    private func cell(for item: MediaItem, cellID: String) -> some View {
         ThumbnailView(
             item: item,
             size: model.thumbnailSize,
@@ -162,10 +180,17 @@ struct BrowserGridView: View {
             method: model.thumbnailMethod,
             videoPosition: model.videoThumbnailPosition
         )
-        // The ScrollViewReader scrolls to this id; a grouped person view may
-        // show the same item under several people, so scrolling resolves to the
-        // first matching cell, which is fine.
-        .id(item.id)
+        // Per-occurrence SwiftUI identity. In the flat grid this is the item's
+        // own id; in a grouped (e.g. person) grid the SAME photo can appear in
+        // several sections, so each occurrence gets a composite group+item id.
+        // Using the bare `item.id` here instead would give two cells in the one
+        // LazyVGrid the same explicit identity — SwiftUI then can't tell them
+        // apart and a selection change refreshes only one of the colliding
+        // cells, so the other shows no highlight. That's the "selected item
+        // sometimes isn't highlighted" bug. The ScrollViewReader targets this
+        // same id (see `scrollTarget`) so auto-scroll still resolves to a real
+        // cell in both layouts.
+        .id(cellID)
         // As the grid instantiates this cell (which LazyVGrid does just before
         // it scrolls into view), warm the next few items at low priority so a
         // continued scroll finds them ready. Visible cells still take priority.
@@ -311,7 +336,7 @@ struct BrowserGridView: View {
                                             // duplicate ForEach identities within
                                             // the one LazyVGrid.
                                             ForEach(group.entries) { entry in
-                                                cell(for: entry.item)
+                                                cell(for: entry.item, cellID: entry.id)
                                             }
                                         } header: {
                                             sectionHeader(group)
@@ -330,7 +355,7 @@ struct BrowserGridView: View {
                                     // avoids allocating an N-element enumerated
                                     // array on every grid re-render.
                                     ForEach(items) { item in
-                                        cell(for: item)
+                                        cell(for: item, cellID: item.id.absoluteString)
                                     }
                                 }
                             }
@@ -447,9 +472,13 @@ struct BrowserGridView: View {
                             let clicked = suppressScrollForID
                             suppressScrollForID = nil
                             if let newValue, newValue == clicked { return }
-                            if let newValue {
+                            // Cells are identified by a string id (the item's
+                            // own id when flat, a composite group+item id when
+                            // grouped), so translate the selected item into the
+                            // matching cell id before scrolling.
+                            if let newValue, let target = scrollTarget(for: newValue) {
                                 withAnimation(.easeInOut(duration: 0.15)) {
-                                    proxy.scrollTo(newValue, anchor: .center)
+                                    proxy.scrollTo(target, anchor: .center)
                                 }
                             }
                         }
