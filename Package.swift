@@ -53,6 +53,7 @@ let package = Package(
                     "-lavcodec",
                     "-lavutil",
                     "-lswscale",
+                    "-lswresample",
                     "-L\(mpvPrefix)/lib",
                     "-lmpv"
                 ])

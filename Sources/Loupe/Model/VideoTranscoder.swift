@@ -137,6 +137,25 @@ enum VideoTranscoder {
         case allocation
         case encode
         case cancelled
+        /// Setting up the audio decode/encode/resample pipeline failed.
+        case audioInit
+    }
+
+    /// Whether an audio codec can be stored in an MP4 by a straight stream copy
+    /// (no re-encode). MP4 only permits a limited set of audio codecs — AAC,
+    /// MP3, AC-3/E-AC-3, ALAC, Opus, and a couple of others. Raw PCM variants
+    /// (notably A-law / µ-law, which some cameras and capture devices emit) are
+    /// NOT valid in MP4, so copying them makes the muxer reject the file and the
+    /// whole export fails. Those codecs are re-encoded to AAC instead.
+    nonisolated private static func canCopyAudioToMP4(_ codecID: AVCodecID) -> Bool {
+        switch codecID {
+        case AV_CODEC_ID_AAC, AV_CODEC_ID_MP3, AV_CODEC_ID_AC3, AV_CODEC_ID_EAC3,
+             AV_CODEC_ID_ALAC, AV_CODEC_ID_OPUS, AV_CODEC_ID_MP2,
+             AV_CODEC_ID_MP1, AV_CODEC_ID_DTS:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Transcodes `input` to `output` (an MP4), scaling the video to
@@ -325,17 +344,38 @@ enum VideoTranscoder {
             outVideoStream.pointee.codecpar.pointee.codec_tag = mkTag("h", "v", "c", "1")
         }
 
-        // Output audio stream (straight copy of the source's parameters), if a
-        // source audio stream exists. We remux its packets without decoding.
-        var outAudioStreamIndex: Int32 = -1
+        // Output audio stream, if a source audio stream exists.
+        //
+        // Fast path: when the source audio codec is valid in MP4 (AAC, MP3,
+        // AC-3, …) we remux its packets untouched — a straight copy, no decode.
+        //
+        // Re-encode path: some sources carry audio MP4 can't store, notably raw
+        // PCM A-law / µ-law from certain cameras and capture devices. Copying
+        // those makes the muxer reject the file, failing the whole export. For
+        // them we decode and re-encode to AAC via `AudioReencoder`.
+        var outAudioStreamIndex: Int32 = -1       // set only on the copy path
         var inAudioStream: UnsafeMutablePointer<AVStream>? = nil
+        var audioReencoder: AudioReencoder? = nil
+        let wantsGlobalHeader = (outputCtx.pointee.oformat?.pointee.flags ?? 0) & AVFMT_GLOBALHEADER != 0
+
         if audioIndex >= 0, let aStream = inputCtx?.pointee.streams[Int(audioIndex)] {
-            if let outAudio = avformat_new_stream(outputCtx, nil),
-               avcodec_parameters_copy(outAudio.pointee.codecpar, aStream.pointee.codecpar) >= 0 {
-                outAudio.pointee.codecpar.pointee.codec_tag = 0
-                outAudio.pointee.time_base = aStream.pointee.time_base
-                outAudioStreamIndex = Int32(outputCtx.pointee.nb_streams - 1)
-                inAudioStream = aStream
+            let srcAudioCodecID = aStream.pointee.codecpar.pointee.codec_id
+            if canCopyAudioToMP4(srcAudioCodecID) {
+                if let outAudio = avformat_new_stream(outputCtx, nil),
+                   avcodec_parameters_copy(outAudio.pointee.codecpar, aStream.pointee.codecpar) >= 0 {
+                    outAudio.pointee.codecpar.pointee.codec_tag = 0
+                    outAudio.pointee.time_base = aStream.pointee.time_base
+                    outAudioStreamIndex = Int32(outputCtx.pointee.nb_streams - 1)
+                    inAudioStream = aStream
+                }
+            } else {
+                // Incompatible codec (e.g. pcm_alaw): re-encode to AAC. If the
+                // pipeline can't be built, fall through with no audio rather
+                // than aborting — a silent export beats a failed one.
+                audioReencoder = AudioReencoder(
+                    sourceStream: aStream,
+                    outputCtx: outputCtx,
+                    globalHeader: wantsGlobalHeader)
             }
         }
 
@@ -458,11 +498,15 @@ enum VideoTranscoder {
                 }
             } else if streamIdx == audioIndex, outAudioStreamIndex >= 0,
                       let inAudioStream, let outAudio = outputCtx.pointee.streams[Int(outAudioStreamIndex)] {
-                // Audio: straight copy. Rescale timestamps into the output
-                // stream's time base, retag the stream index, and write.
+                // Audio copy path. Rescale timestamps into the output stream's
+                // time base, retag the stream index, and write.
                 av_packet_rescale_ts(packet, inAudioStream.pointee.time_base, outAudio.pointee.time_base)
                 packet.pointee.stream_index = outAudioStreamIndex
                 _ = av_interleaved_write_frame(outputCtx, packet)
+                av_packet_unref(packet)
+            } else if streamIdx == audioIndex, let audioReencoder {
+                // Audio re-encode path (incompatible source codec → AAC).
+                audioReencoder.process(packet)
                 av_packet_unref(packet)
             } else {
                 av_packet_unref(packet)
@@ -494,10 +538,287 @@ enum VideoTranscoder {
             nextOutputPTS += 1
             try encodeAndWrite(scaledFrame)
         }
-        // Drain the encoder.
+        // Drain the video encoder.
         try encodeAndWrite(nil)
+
+        // Flush the audio re-encoder (decoder/resampler/FIFO/encoder tails) so
+        // the final audio samples aren't dropped. No-op on the copy path.
+        audioReencoder?.finish()
 
         av_write_trailer(outputCtx)
         progress?(1.0)
+    }
+}
+
+/// Decodes an MP4-incompatible audio stream (e.g. PCM A-law / µ-law) and
+/// re-encodes it to AAC so the output MP4 is valid. Owns its own decoder,
+/// AAC encoder, resampler (`SwrContext`, converting the source sample format /
+/// rate / layout to what AAC wants), and an audio FIFO — AAC needs fixed-size
+/// frames (typically 1024 samples), so decoded audio is buffered and drained in
+/// encoder-frame-sized chunks.
+///
+/// All C work, no shared mutable state; created and driven from the same
+/// detached task as the video transcode.
+private final class AudioReencoder {
+    private let decCtx: UnsafeMutablePointer<AVCodecContext>
+    private var decCtxOpt: UnsafeMutablePointer<AVCodecContext>?
+    private let encCtx: UnsafeMutablePointer<AVCodecContext>
+    private var encCtxOpt: UnsafeMutablePointer<AVCodecContext>?
+    private var swr: OpaquePointer?            // SwrContext*
+    private var fifo: OpaquePointer?           // AVAudioFifo*
+    private let outputCtx: UnsafeMutablePointer<AVFormatContext>
+    private let outStreamIndex: Int32
+    private let outTimeBase: AVRational
+
+    private var decFrame: UnsafeMutablePointer<AVFrame>?
+    private var encFrame: UnsafeMutablePointer<AVFrame>?
+    private var packet: UnsafeMutablePointer<AVPacket>?
+
+    /// Running sample count, used to stamp monotonic PTS on encoded frames.
+    private var nextPTS: Int64 = 0
+    private let frameSize: Int32
+
+    /// Builds the decode→resample→encode pipeline for the source audio stream,
+    /// adding an AAC output stream to `outputCtx`. Returns nil if any piece of
+    /// the pipeline can't be set up (the caller then proceeds without audio
+    /// rather than failing the whole export).
+    init?(sourceStream: UnsafeMutablePointer<AVStream>,
+          outputCtx: UnsafeMutablePointer<AVFormatContext>,
+          globalHeader: Bool) {
+        self.outputCtx = outputCtx
+
+        guard let codecpar = sourceStream.pointee.codecpar else { return nil }
+        guard let decoder = avcodec_find_decoder(codecpar.pointee.codec_id),
+              let dec = avcodec_alloc_context3(decoder) else { return nil }
+        self.decCtx = dec
+        self.decCtxOpt = dec
+        guard avcodec_parameters_to_context(dec, codecpar) >= 0,
+              avcodec_open2(dec, decoder, nil) >= 0 else {
+            avcodec_free_context(&decCtxOpt)
+            return nil
+        }
+
+        guard let aacEncoder = avcodec_find_encoder(AV_CODEC_ID_AAC),
+              let enc = avcodec_alloc_context3(aacEncoder) else {
+            avcodec_free_context(&decCtxOpt)
+            return nil
+        }
+        self.encCtx = enc
+        self.encCtxOpt = enc
+
+        // Encoder parameters: keep the source sample rate; use a sane channel
+        // layout taken from the decoder (defaulting to stereo if the source
+        // layout is unknown); AAC's native sample format is planar float.
+        let sampleRate = dec.pointee.sample_rate > 0 ? dec.pointee.sample_rate : 48_000
+        enc.pointee.sample_rate = sampleRate
+        enc.pointee.sample_fmt = AV_SAMPLE_FMT_FLTP
+        enc.pointee.bit_rate = 192_000
+
+        // Channel layout (new AVChannelLayout API, FFmpeg 7/8). Copy the
+        // decoder's layout; if it's unspecified, default by channel count.
+        if dec.pointee.ch_layout.nb_channels > 0 {
+            av_channel_layout_copy(&enc.pointee.ch_layout, &dec.pointee.ch_layout)
+        } else {
+            av_channel_layout_default(&enc.pointee.ch_layout, 2)
+        }
+
+        if globalHeader {
+            enc.pointee.flags |= AV_CODEC_FLAG_GLOBAL_HEADER
+        }
+
+        guard avcodec_open2(enc, aacEncoder, nil) >= 0 else {
+            avcodec_free_context(&decCtxOpt)
+            avcodec_free_context(&encCtxOpt)
+            return nil
+        }
+
+        // AAC reports a fixed frame size once opened; fall back to 1024.
+        self.frameSize = enc.pointee.frame_size > 0 ? enc.pointee.frame_size : 1024
+
+        // Output stream carrying the AAC parameters.
+        guard let outStream = avformat_new_stream(outputCtx, nil),
+              avcodec_parameters_from_context(outStream.pointee.codecpar, enc) >= 0 else {
+            avcodec_free_context(&decCtxOpt)
+            avcodec_free_context(&encCtxOpt)
+            return nil
+        }
+        outStream.pointee.time_base = AVRational(num: 1, den: sampleRate)
+        self.outStreamIndex = Int32(outputCtx.pointee.nb_streams - 1)
+        self.outTimeBase = outStream.pointee.time_base
+
+        // Resampler: source (fmt/rate/layout) -> AAC (fltp/sampleRate/layout).
+        var swrPtr: OpaquePointer? = nil
+        let setRet = swr_alloc_set_opts2(
+            &swrPtr,
+            &enc.pointee.ch_layout, AV_SAMPLE_FMT_FLTP, sampleRate,
+            &dec.pointee.ch_layout, dec.pointee.sample_fmt, dec.pointee.sample_rate,
+            0, nil)
+        guard setRet >= 0, let swrPtr, swr_init(swrPtr) >= 0 else {
+            if swrPtr != nil { var s: OpaquePointer? = swrPtr; swr_free(&s) }
+            avcodec_free_context(&decCtxOpt)
+            avcodec_free_context(&encCtxOpt)
+            return nil
+        }
+        self.swr = swrPtr
+
+        // FIFO holding resampled samples until a full encoder frame is ready.
+        guard let fifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP,
+                                             enc.pointee.ch_layout.nb_channels, 1) else {
+            var s: OpaquePointer? = swrPtr; swr_free(&s)
+            avcodec_free_context(&decCtxOpt)
+            avcodec_free_context(&encCtxOpt)
+            return nil
+        }
+        self.fifo = fifo
+
+        self.decFrame = av_frame_alloc()
+        self.encFrame = av_frame_alloc()
+        self.packet = av_packet_alloc()
+        guard decFrame != nil, encFrame != nil, packet != nil else { return nil }
+    }
+
+    deinit {
+        avcodec_free_context(&decCtxOpt)
+        avcodec_free_context(&encCtxOpt)
+        if swr != nil { swr_free(&swr) }
+        if let fifo { av_audio_fifo_free(fifo); self.fifo = nil }
+        if decFrame != nil { av_frame_free(&decFrame) }
+        if encFrame != nil { av_frame_free(&encFrame) }
+        if packet != nil { av_packet_free(&packet) }
+    }
+
+    /// Feeds one source audio packet through decode → resample → FIFO, then
+    /// drains any full encoder frames out to the muxer.
+    func process(_ inPacket: UnsafeMutablePointer<AVPacket>) {
+        guard avcodec_send_packet(decCtx, inPacket) >= 0 else { return }
+        while avcodec_receive_frame(decCtx, decFrame) == 0 {
+            resampleIntoFIFO(decFrame)
+            av_frame_unref(decFrame)
+        }
+        drainFIFO(flush: false)
+    }
+
+    /// Flushes the decoder, the resampler, and the FIFO, then the encoder, so
+    /// the tail samples aren't dropped. Called once after the demux loop ends.
+    func finish() {
+        // Flush decoder.
+        avcodec_send_packet(decCtx, nil)
+        while avcodec_receive_frame(decCtx, decFrame) == 0 {
+            resampleIntoFIFO(decFrame)
+            av_frame_unref(decFrame)
+        }
+        // Flush any samples buffered inside the resampler.
+        flushResampler()
+        // Emit whatever remains, even a short final frame.
+        drainFIFO(flush: true)
+        // Flush the encoder.
+        encodeFrame(nil)
+    }
+
+    private func resampleIntoFIFO(_ frame: UnsafeMutablePointer<AVFrame>?) {
+        guard let swr, let fifo else { return }
+        let outChannels = encCtx.pointee.ch_layout.nb_channels
+        let inSamples = frame?.pointee.nb_samples ?? 0
+        // Upper bound on output samples for this input chunk.
+        let maxOut = swr_get_out_samples(swr, inSamples)
+        guard maxOut > 0 else { return }
+
+        var converted: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>? = nil
+        guard av_samples_alloc_array_and_samples(
+            &converted, nil, outChannels, maxOut, AV_SAMPLE_FMT_FLTP, 0) >= 0,
+              let converted else { return }
+        defer {
+            if let base = converted[0] { var b: UnsafeMutablePointer<UInt8>? = base; av_freep(&b) }
+            var c: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>? = converted
+            av_freep(&c)
+        }
+
+        // swr_convert wants `const uint8_t **` for the input planes. The
+        // frame's `extended_data` is the mutable form, so rebind it to the
+        // const pointer type the call expects. Nil frame == drain (no input).
+        let produced: Int32
+        if let frame, let ext = frame.pointee.extended_data {
+            produced = ext.withMemoryRebound(to: UnsafePointer<UInt8>?.self, capacity: Int(outChannels)) { inPlanes in
+                swr_convert(swr, converted, maxOut, inPlanes, inSamples)
+            }
+        } else {
+            produced = swr_convert(swr, converted, maxOut, nil, inSamples)
+        }
+        guard produced > 0 else { return }
+
+        av_audio_fifo_realloc(fifo, av_audio_fifo_size(fifo) + produced)
+        converted.withMemoryRebound(to: UnsafeMutableRawPointer?.self, capacity: Int(outChannels)) { raw in
+            _ = av_audio_fifo_write(fifo, raw, produced)
+        }
+    }
+
+    private func flushResampler() {
+        guard let swr, let fifo else { return }
+        let outChannels = encCtx.pointee.ch_layout.nb_channels
+        while true {
+            let maxOut = swr_get_out_samples(swr, 0)
+            guard maxOut > 0 else { break }
+            var converted: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>? = nil
+            guard av_samples_alloc_array_and_samples(
+                &converted, nil, outChannels, maxOut, AV_SAMPLE_FMT_FLTP, 0) >= 0,
+                  let converted else { break }
+            let produced = swr_convert(swr, converted, maxOut, nil, 0)
+            if produced > 0 {
+                av_audio_fifo_realloc(fifo, av_audio_fifo_size(fifo) + produced)
+                converted.withMemoryRebound(to: UnsafeMutableRawPointer?.self, capacity: Int(outChannels)) { raw in
+                    _ = av_audio_fifo_write(fifo, raw, produced)
+                }
+            }
+            if let base = converted[0] { var b: UnsafeMutablePointer<UInt8>? = base; av_freep(&b) }
+            var c: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>? = converted
+            av_freep(&c)
+            if produced <= 0 { break }
+        }
+    }
+
+    /// Pulls full `frameSize` chunks (or, on `flush`, a short final chunk) out
+    /// of the FIFO, wraps each in an `AVFrame`, and encodes it.
+    private func drainFIFO(flush: Bool) {
+        guard let fifo, let encFrame else { return }
+        while true {
+            let available = av_audio_fifo_size(fifo)
+            if flush {
+                if available <= 0 { break }
+            } else if available < frameSize {
+                break
+            }
+            let take = min(frameSize, available)
+
+            av_frame_unref(encFrame)
+            encFrame.pointee.nb_samples = take
+            av_channel_layout_copy(&encFrame.pointee.ch_layout, &encCtx.pointee.ch_layout)
+            encFrame.pointee.format = Int32(AV_SAMPLE_FMT_FLTP.rawValue)
+            encFrame.pointee.sample_rate = encCtx.pointee.sample_rate
+            guard av_frame_get_buffer(encFrame, 0) >= 0 else { break }
+
+            let read = withUnsafeMutablePointer(to: &encFrame.pointee.data.0) { dataPtr in
+                dataPtr.withMemoryRebound(to: UnsafeMutableRawPointer?.self, capacity: 8) { raw in
+                    av_audio_fifo_read(fifo, raw, take)
+                }
+            }
+            guard read > 0 else { break }
+            encFrame.pointee.nb_samples = read
+            encFrame.pointee.pts = nextPTS
+            nextPTS += Int64(read)
+            encodeFrame(encFrame)
+        }
+    }
+
+    private func encodeFrame(_ frame: UnsafeMutablePointer<AVFrame>?) {
+        guard let packet else { return }
+        guard avcodec_send_frame(encCtx, frame) >= 0 else { return }
+        while true {
+            let ret = avcodec_receive_packet(encCtx, packet)
+            if ret == -35 /* EAGAIN */ || ret < 0 { break }
+            packet.pointee.stream_index = outStreamIndex
+            av_packet_rescale_ts(packet, encCtx.pointee.time_base, outTimeBase)
+            _ = av_interleaved_write_frame(outputCtx, packet)
+            av_packet_unref(packet)
+        }
     }
 }

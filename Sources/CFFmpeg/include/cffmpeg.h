@@ -11,5 +11,9 @@
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
+#include <libavutil/opt.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/audio_fifo.h>
 
 #endif /* LOUPE_CFFMPEG_H */
