@@ -512,7 +512,10 @@ struct ContentView: View {
             }
         }
 
-        for folder in folders { model.open(url: folder) }
+        // Open all dropped folders under one scan task. Looping `open(url:)`
+        // per folder cancelled every scan but the last (see `open(urls:)`), so
+        // dropping several folders only showed the last one until ⌘R.
+        if !folders.isEmpty { model.open(urls: folders) }
         // Files dropped together — especially siblings from one Finder folder —
         // are opened as a group so same-directory files share a folder and end
         // up selected together.
@@ -542,6 +545,25 @@ private struct WindowTabbingConfigurator: NSViewRepresentable {
             guard let window = view?.window else { return }
             window.tabbingIdentifier = Self.tabbingIdentifier
             window.tabbingMode = .preferred
+
+            // Join this freshly attached window to an existing Loupe window's
+            // tab group so new windows/tabs open IN the same window by default.
+            // `tabbingMode = .preferred` alone defers to the macOS "Prefer tabs
+            // when opening documents" system setting, so with that set to
+            // "manually"/"in full screen only" a new window floated free. Force
+            // the merge: find another visible Loupe window that isn't already
+            // sharing this one's tab group and add this window as a tab of it.
+            guard (window.tabGroup?.windows.count ?? 0) <= 1 else { return }
+            let host = NSApp.windows.first { other in
+                other !== window
+                    && other.tabbingIdentifier == Self.tabbingIdentifier
+                    && other.isVisible
+                    && other.tabGroup?.windows.contains(window) != true
+            }
+            if let host {
+                host.addTabbedWindow(window, ordered: .above)
+                window.makeKeyAndOrderFront(nil)
+            }
         }
         return view
     }
