@@ -38,6 +38,15 @@ struct BrowserGridView: View {
     /// hit-test with this rect so the selection catches up instead of staying
     /// empty for the first frames — or, for a quick drag, never registering.
     @State private var lastMarqueeRect: CGRect?
+    /// Set when a marquee drag ends (mouse-up) but the cell frames haven't
+    /// arrived yet, so the final hit-test couldn't run. Keeps `marqueeActive`
+    /// (and therefore frame reporting) alive past the drag so the pending
+    /// `onPreferenceChange` can do one authoritative hit-test against the
+    /// retained `lastMarqueeRect` the instant frames land, then tear down.
+    /// Without this, a quick drag — or one over empty space whose frames hadn't
+    /// been reported yet — tore everything down on mouse-up and selected
+    /// nothing, which is why marquee selection appeared completely broken.
+    @State private var marqueeEndPending = false
 
     private let gridSpace = "grid"
     /// The visible gap between adjacent images when filenames are shown. The
@@ -344,6 +353,11 @@ struct BrowserGridView: View {
                                         // Arm per-cell frame reporting for the
                                         // duration of this press so the first
                                         // drag rect can hit-test fresh frames.
+                                        // Clear any leftover pending-end state
+                                        // from a prior drag so this one starts
+                                        // clean.
+                                        marqueeEndPending = false
+                                        lastMarqueeRect = nil
                                         if !marqueeActive { marqueeActive = true }
                                     },
                                     onChange: { rect in handleMarquee(rect) },
@@ -380,6 +394,21 @@ struct BrowserGridView: View {
                                     $0.value.intersects(rect) ? $0.key : nil
                                 }
                                 model.setSelection(hits)
+                                // If the drag already ended (mouse-up came
+                                // before these frames landed), this was the
+                                // deferred authoritative hit-test: finalize and
+                                // stop reporting now that the selection is set.
+                                if marqueeEndPending {
+                                    finishMarquee()
+                                }
+                            } else if marqueeEndPending {
+                                // The drag ended and frames resolved to empty
+                                // (no realized cells overlapped the rubber
+                                // band): the selection is nothing. Clear it and
+                                // finalize so frame reporting stops instead of
+                                // staying armed forever.
+                                model.setSelection([])
+                                finishMarquee()
                             }
                             // Don't republish the column count mid-resize: the
                             // grid is frozen to a fixed count then, and the
@@ -591,23 +620,29 @@ struct BrowserGridView: View {
     private func handleMarquee(_ rect: CGRect?) {
         marqueeRect = rect
         guard let rect else {
-            // Drag (or bare press) ended. If cell frames only arrived late (the
-            // preference round-trip lags the drag by a layout pass), the live
-            // ticks above may have hit-tested an empty `cellFrames` and the
-            // selection would be wrong or empty. Do one authoritative hit-test
-            // against whatever frames are now available, using the final rect,
-            // before tearing the frames down.
+            // Drag (or bare press) ended. The cell frames are reported a layout
+            // pass AFTER `marqueeActive` armed on mouse-down, and SwiftUI holds
+            // those layout/preference updates until the run loop turns — which,
+            // for a quick drag, can be after this mouse-up. So `cellFrames` is
+            // frequently still empty right here.
             if let lastMarqueeRect, !cellFrames.isEmpty {
+                // Frames are present: do the authoritative final hit-test now
+                // and tear the marquee state down.
                 let hits = cellFrames.compactMap {
                     $0.value.intersects(lastMarqueeRect) ? $0.key : nil
                 }
                 model.setSelection(hits)
+                finishMarquee()
+            } else {
+                // Frames haven't landed yet. DON'T tear down — keep
+                // `marqueeActive` (hence frame reporting) alive and flag the
+                // end as pending. The next `onPreferenceChange`, once frames
+                // arrive, runs the final hit-test against the retained
+                // `lastMarqueeRect` and then calls `finishMarquee`. This is the
+                // fix for marquee selection selecting nothing: the old code
+                // tore everything down here before the frames could arrive.
+                marqueeEndPending = true
             }
-            // Stop reporting cell frames so plain scrolling pays nothing, and
-            // clear the stale frames and retained rect.
-            lastMarqueeRect = nil
-            marqueeActive = false
-            cellFrames = [:]
             return
         }
         gridFocused = true
@@ -620,6 +655,17 @@ struct BrowserGridView: View {
         // so the selection catches up rather than staying empty.
         let hits = cellFrames.compactMap { $0.value.intersects(rect) ? $0.key : nil }
         model.setSelection(hits)
+    }
+
+    /// Tear down the marquee state once a drag has fully resolved (either the
+    /// final hit-test ran at mouse-up, or it ran later from `onPreferenceChange`
+    /// once the deferred frames arrived). Stops per-cell frame reporting so
+    /// ordinary scrolling pays nothing again.
+    private func finishMarquee() {
+        lastMarqueeRect = nil
+        marqueeEndPending = false
+        marqueeActive = false
+        cellFrames = [:]
     }
 
     /// Arrow keys navigate the grid; holding Shift extends the selection as a
