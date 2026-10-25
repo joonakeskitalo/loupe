@@ -201,6 +201,11 @@ private struct LayerZoomHost<Content: View>: NSViewRepresentable {
 final class ZoomHostView: NSView {
     override var isFlipped: Bool { true }
 
+    /// The current zoom/pan, remembered so the transform can be rebuilt against
+    /// fresh bounds on every resize (not just when the gesture changes it).
+    private var magnification: CGFloat = 1
+    private var panOffset: CGSize = .zero
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -225,39 +230,51 @@ final class ZoomHostView: NSView {
         ])
     }
 
-    /// Transform the backing layer: scale about the center, then translate by
-    /// the pan offset. Wrapped in a non-animated transaction so each gesture
-    /// tick snaps to the new value instead of CA implicitly animating toward it
-    /// (which would lag the picture behind the fingers and look like a stutter).
+    /// Store the new zoom/pan and rebuild the transform against the current
+    /// bounds. Called from `updateNSView` (gesture/toolbar changes).
     func apply(magnification: CGFloat, offset: CGSize) {
+        self.magnification = magnification
+        self.panOffset = offset
+        applyTransform()
+    }
+
+    /// Build the scale+pan transform about the view's center.
+    ///
+    /// Crucially this leaves the backing layer's `anchorPoint` and `position`
+    /// at the defaults AppKit manages for a layer-backed view. We previously
+    /// set `anchorPoint = (0.5, 0.5)` so the scale would grow about the middle,
+    /// but AppKit lays a layer-backed view's layer out assuming the default
+    /// `(0, 0)` anchor: on a resize it writes a fresh `frame` computed for that
+    /// anchor, so a `(0.5, 0.5)` anchor left the content shifted by half the
+    /// size delta — the picture jumped into a corner (top-right) and, for a
+    /// paused clip, stayed there until the next frame repainted.
+    ///
+    /// Instead we keep the default anchor and center the scale ourselves:
+    /// translate to the center, scale, translate back, then apply the pan. The
+    /// transform is recomputed from the live `bounds` here and in `layout()`,
+    /// so a resize always re-centers correctly. Wrapped in a non-animated
+    /// transaction so gesture ticks snap instead of CA interpolating.
+    private func applyTransform() {
         guard let layer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // Anchor at the center so scaling grows symmetrically about the middle.
-        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        let cx = bounds.midX
+        let cy = bounds.midY
         var t = CATransform3DIdentity
-        t = CATransform3DTranslate(t, offset.width, offset.height, 0)
+        t = CATransform3DTranslate(t, panOffset.width, panOffset.height, 0)
+        t = CATransform3DTranslate(t, cx, cy, 0)
         t = CATransform3DScale(t, magnification, magnification, 1)
+        t = CATransform3DTranslate(t, -cx, -cy, 0)
         layer.transform = t
         CATransaction.commit()
     }
 
-    /// Re-center the transform when the view is resized so the anchor stays at
-    /// the middle (the position is in the superlayer's coordinate space).
-    ///
-    /// Wrapped in a non-animated transaction: when the viewer animates the
-    /// media area's width (e.g. toggling the info sidebar), AppKit drives this
-    /// host through intermediate frames. Without disabling implicit actions the
-    /// layer's `position` would animate toward each new center on CA's own
-    /// timeline, so the hosted video briefly trails off-center (it flashes in a
-    /// corner) before catching up. Snapping each frame keeps it centered.
+    /// Rebuild the transform whenever the view is resized so the scale stays
+    /// centered on the new bounds (and a fitted 1× video stays put instead of
+    /// detaching to a corner).
     override func layout() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         super.layout()
-        layer?.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        CATransaction.commit()
+        applyTransform()
     }
 }
 
