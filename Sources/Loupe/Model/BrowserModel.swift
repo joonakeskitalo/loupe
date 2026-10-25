@@ -88,7 +88,13 @@ final class BrowserModel {
     var sortOrder: SortOrder = .name {
         didSet {
             invalidateDisplayCache()
-            if sortOrder == .codec { prefetchCodecs() }
+            if sortOrder == .codec {
+                prefetchCodecs()
+            } else if oldValue == .codec {
+                // Leaving the codec sort: nothing needs codecs anymore, so stop
+                // a running pass from probing the rest of the folder off disk.
+                cancelCodecPrefetch()
+            }
         }
     }
     var sortAscending = true {
@@ -103,6 +109,13 @@ final class BrowserModel {
 
     /// Guards against launching more than one codec prefetch pass at a time.
     private var isPrefetchingCodecs = false
+
+    /// The in-flight codec-prefetch task, if any. Held so a change that
+    /// invalidates the pass's input — removing a root, or switching the sort
+    /// away from codec — can cancel it instead of letting it keep probing the
+    /// old folder's videos off (a slow) disk. Mirrors how `scanTask` is held
+    /// and cancelled; the pass itself checks `Task.isCancelled` between probes.
+    private var codecPrefetchTask: Task<Void, Never>?
 
     /// Grid and list keep independent zoom levels. Grid starts at a comfortable
     /// mid size; list starts at the minimum so rows are compact by default.
@@ -759,6 +772,11 @@ final class BrowserModel {
         roots.removeAll { $0 == std }
         resultsByRoot[std] = nil
         singleFileRoots.remove(std)
+        // A codec-prefetch pass may be probing videos from the root being
+        // removed (whose security scope is about to be released). Cancel it;
+        // `rebuildMerged` re-triggers a fresh pass over the remaining set when
+        // the codec sort is still active.
+        cancelCodecPrefetch()
         rebuildMerged()
         // Drop any selected folders that belonged to the removed root; if the
         // selection becomes empty, fall back to the first remaining root.
@@ -778,6 +796,9 @@ final class BrowserModel {
     /// rebuild; `resetAll()` additionally clears any lingering filter state.
     func removeAllRoots() {
         guard !roots.isEmpty else { return }
+        // No roots left to probe — stop any codec-prefetch pass before releasing
+        // the security scopes it's reading through.
+        cancelCodecPrefetch()
         for root in scopedURLs {
             root.stopAccessingSecurityScopedResource()
         }
@@ -863,6 +884,10 @@ final class BrowserModel {
     /// "Scanning…" screen if a scan is interrupted or two scans overlap.
     private func startScan(_ body: @escaping () async -> Void) {
         scanTask?.cancel()
+        // A rescan/add changes the item set the codec pass is probing. Cancel
+        // the current pass; `rebuildMerged` starts a fresh one over the new set
+        // once the scan publishes results (when the codec sort is active).
+        cancelCodecPrefetch()
         isScanning = true
         var task: Task<Void, Never>!
         task = Task { [weak self] in
@@ -1349,19 +1374,33 @@ final class BrowserModel {
         guard !pending.isEmpty else { return }
 
         isPrefetchingCodecs = true
-        Task { @MainActor in
+        var task: Task<Void, Never>!
+        task = Task { @MainActor in
+            // Clear the guard when the pass ends — including on cancellation at
+            // an `await` — so a later codec sort can start a fresh pass. Only
+            // the current pass may clear it: a superseded task's tail can run
+            // after a newer pass has already set the flag and stored its own
+            // handle, so without this check it would wrongly clear the newer
+            // pass's guard. Mirrors the `defer` in `startScan`.
+            defer { if self.codecPrefetchTask == task { self.isPrefetchingCodecs = false } }
+
             // Probe concurrently with a bounded window so we don't open a
             // thousand files at once, collecting (url, codec) pairs as they
             // finish and publishing them to the observable map in batches.
             let maxConcurrent = 6
             var batch: [(URL, String)] = []
 
-            await withTaskGroup(of: (URL, String).self) { group in
+            await withTaskGroup(of: (URL, String)?.self) { group in
                 var iterator = pending.makeIterator()
 
                 func addNext() {
-                    guard let item = iterator.next() else { return }
+                    // Stop feeding the window once cancelled (root removed, or
+                    // the sort left codec): no new files get opened.
+                    guard !Task.isCancelled, let item = iterator.next() else { return }
                     group.addTask {
+                        // A probe already running can't be interrupted, but skip
+                        // its work if the pass was cancelled before it started.
+                        guard !Task.isCancelled else { return nil }
                         let meta = await VideoMetadataProvider.shared.metadata(
                             for: item.url, kind: .video
                         )
@@ -1374,7 +1413,14 @@ final class BrowserModel {
                 for _ in 0..<maxConcurrent { addNext() }
 
                 while let result = await group.next() {
-                    batch.append(result)
+                    // Drop results and stop scheduling once cancelled, so a
+                    // superseded pass doesn't keep probing or write stale codecs
+                    // into the observable map for a folder the user has left.
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    if let result { batch.append(result) }
                     // Publish a batch at a time so the view updates
                     // progressively without a full re-sort per probe.
                     if batch.count >= maxConcurrent {
@@ -1384,9 +1430,28 @@ final class BrowserModel {
                     addNext()
                 }
             }
-            self.storeCodecs(batch)
-            self.isPrefetchingCodecs = false
+            // Flush whatever resolved before cancellation (if any). Harmless
+            // when empty; keeps already-probed codecs rather than discarding
+            // work that completed.
+            if !Task.isCancelled { self.storeCodecs(batch) }
         }
+        codecPrefetchTask = task
+    }
+
+    /// Cancels an in-flight codec-prefetch pass, if any. Called when the pass's
+    /// input is invalidated — a root removed, or the sort switched away from
+    /// codec — so it stops probing the old set's videos off disk instead of
+    /// running to completion in the background.
+    private func cancelCodecPrefetch() {
+        codecPrefetchTask?.cancel()
+        codecPrefetchTask = nil
+        // Clear the guard synchronously. The cancelled task's `defer` won't run
+        // until it next reaches an `await`, so without this a fresh pass kicked
+        // off right after (e.g. by `rebuildMerged` on the remaining roots) would
+        // hit the `isPrefetchingCodecs` guard and no-op, leaving the new set
+        // unprobed. The cancelled task's `defer` is guarded on identity, so it
+        // won't clobber the newer pass's flag.
+        isPrefetchingCodecs = false
     }
 
     /// Publishes a batch of resolved codecs to the observable map in one go.
