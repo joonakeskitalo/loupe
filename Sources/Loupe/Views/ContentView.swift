@@ -19,6 +19,18 @@ struct ContentView: View {
     /// suspend modifier-less window hotkeys so typing isn't hijacked.
     @FocusState private var searchFocused: Bool
 
+    /// Whether this window is currently the key (frontmost/active) window.
+    ///
+    /// Every tab of Loupe's `WindowGroup` is the *same* SwiftUI Scene, so every
+    /// open tab mounts `ContentView` and runs the `focusedSceneValue` publishers
+    /// below. If two tabs published simultaneously, the scene-scoped values
+    /// would be ambiguous, which churns SwiftUI's command validation and breaks
+    /// menu key-equivalent dispatch for the whole `.commands` set — that's what
+    /// made ⌘N / ⌘T stop firing once a second tab was open. Gating the
+    /// publishers on "am I the key window" keeps exactly one active publisher
+    /// per scene value at a time, so there's never a collision.
+    @State private var isKeyWindow = false
+
     /// Sidebar column visibility, toggled by ⌘S.
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
@@ -97,6 +109,22 @@ struct ContentView: View {
                 emptyWindowID = nil
             }
         }
+        // Track whether this window is key so the scene-value publishers above
+        // only fire for the frontmost tab (see `isKeyWindow`). Seed from the
+        // resolved host window, then keep it current via the key notifications.
+        .onChange(of: hostWindow) { _, window in
+            isKeyWindow = window?.isKeyWindow ?? false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            if let w = note.object as? NSWindow, w === hostWindow {
+                isKeyWindow = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            if let w = note.object as? NSWindow, w === hostWindow {
+                isKeyWindow = false
+            }
+        }
     }
 
     @ViewBuilder
@@ -136,27 +164,27 @@ struct ContentView: View {
                 PathBar(model: model)
             }
         }
-        // Publish this window's model so the menu-bar commands (which live at
-        // the Scene level) can act on the frontmost window. Uses
-        // `focusedSceneValue` (not `focusedValue`) so it resolves for the key
-        // window regardless of which inner view — grid, list, sidebar, or none
-        // — currently holds focus. With plain `focusedValue` the commands read
-        // nil (and disable) whenever focus wasn't inside this subtree, e.g.
-        // when the sidebar was focused or nothing was.
-        .focusedSceneValue(\.activeBrowserModel, model)
-        // Whether the menu bar may own ⌘⌫ right now. False while search OR the
-        // tag-input field is focused (⌘⌫ edits text there) or the viewer is
-        // open (it carries its own ⌘⌫ handler), so exactly one owner of the
-        // shortcut is ever live.
-        .focusedSceneValue(
-            \.trashShortcutEligible,
-            !(searchFocused || model.showTagInput || model.isViewerPresented)
-        )
-        // Published so menu commands can release ⌘A (and any other text-editing
-        // shortcut) while a text field is focused — the toolbar search field or
-        // the tag-input overlay — letting the field's native editing (select
-        // all, etc.) work instead of the grid shortcut.
-        .focusedSceneValue(\.searchFieldFocused, searchFocused || model.showTagInput)
+        // Publish this window's model (and the two shortcut-gating flags) so
+        // the menu-bar commands — which live at the Scene level — can act on
+        // the frontmost window. These use `focusedSceneValue` (not
+        // `focusedValue`) so they resolve for the key window regardless of which
+        // inner view — grid, list, sidebar, or none — currently holds focus.
+        // With plain `focusedValue` the commands read nil (and disable) whenever
+        // focus wasn't inside this subtree, e.g. when the sidebar was focused or
+        // nothing was.
+        //
+        // Every tab is the same Scene, so these publishers are gated on
+        // `isKeyWindow`: only the frontmost tab publishes, keeping exactly one
+        // active publisher per key. Without that gate two tabs publish at once,
+        // the scene values go ambiguous, and SwiftUI's command validation churn
+        // breaks menu key-equivalent dispatch (⌘N / ⌘T stop working). See
+        // `isKeyWindow`.
+        .modifier(KeyWindowSceneValues(
+            isKeyWindow: isKeyWindow,
+            model: model,
+            trashEligible: !(searchFocused || model.showTagInput || model.isViewerPresented),
+            searchFieldFocused: searchFocused || model.showTagInput
+        ))
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.
         .toolbar(model.isViewerPresented ? .hidden : .automatic, for: .windowToolbar)
@@ -581,6 +609,34 @@ private struct WindowTabbingConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Publishes a window's scene-scoped focused values, but ONLY while that window
+/// is the key window. Every tab of Loupe's `WindowGroup` is the same SwiftUI
+/// Scene, so if more than one tab published these at once the values would be
+/// ambiguous and SwiftUI's command validation would thrash — breaking menu
+/// key-equivalent dispatch (⌘N / ⌘T stopped firing with two tabs open). Gating
+/// on `isKeyWindow` guarantees a single active publisher per key at any moment.
+///
+/// When not key, the modifier publishes nothing (it applies no
+/// `focusedSceneValue`), so this window simply isn't a candidate and the key
+/// window's values win unambiguously.
+private struct KeyWindowSceneValues: ViewModifier {
+    let isKeyWindow: Bool
+    let model: BrowserModel
+    let trashEligible: Bool
+    let searchFieldFocused: Bool
+
+    func body(content: Content) -> some View {
+        if isKeyWindow {
+            content
+                .focusedSceneValue(\.activeBrowserModel, model)
+                .focusedSceneValue(\.trashShortcutEligible, trashEligible)
+                .focusedSceneValue(\.searchFieldFocused, searchFieldFocused)
+        } else {
+            content
+        }
+    }
 }
 
 /// Reports the `NSWindow` that ends up hosting this SwiftUI view. SwiftUI
