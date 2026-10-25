@@ -47,6 +47,9 @@ enum GroupingDimension: String, CaseIterable {
     case category = "Category"
     case person = "Person"
     case folder = "Folder"
+    /// Buckets items by image/video shape: vertical (portrait), horizontal
+    /// (landscape), or square, using each file's pixel dimensions.
+    case orientation = "Orientation"
 }
 
 @MainActor
@@ -491,7 +494,17 @@ final class BrowserModel {
     /// How the grid/list are sectioned: flat, by AI category, or by recognized
     /// person. Changing it only re-sections the already-filtered list.
     var grouping: GroupingDimension = .none {
-        didSet { invalidateDisplayCache() }
+        didSet {
+            invalidateDisplayCache()
+            if grouping == .orientation {
+                // Orientation needs pixel dimensions, which are otherwise only
+                // probed lazily per visible row. Kick off an eager pass so the
+                // sections fill in without the user scrolling the whole folder.
+                prefetchOrientationSizes()
+            } else if oldValue == .orientation {
+                orientationPrefetchTask?.cancel()
+            }
+        }
     }
 
     /// Back-compat shim for the original category-only toggle: reads/writes the
@@ -659,17 +672,40 @@ final class BrowserModel {
     /// Adds a folder as an additional root (or the first one). Existing roots
     /// are kept; the new folder's contents are merged in.
     func open(url: URL) {
-        let root = url.standardizedFileURL
-        guard !roots.contains(root) else { return }   // already added
+        open(urls: [url])
+    }
 
-        if scopeAccess(root) { scopedURLs.insert(root) }
-        roots.append(root)
-        if selectedFolder == nil { selectedFolder = root }
+    /// Adds a batch of folders at once, scanning them all under a SINGLE scan
+    /// task. Opening folders one-by-one via `open(url:)` in a loop was broken:
+    /// each call started its own `startScan`, and `startScan` cancels the scan
+    /// already in flight — so when several folders were dropped together, every
+    /// folder but the last had its scan cancelled before it could store results
+    /// and merge. The roots were all appended (so the window looked non-empty)
+    /// but only the last folder actually showed until ⌘R rescanned everything.
+    /// Mirroring `refresh()` — one scan task looping over the new roots, a
+    /// single `rebuildMerged()` at the end — keeps every dropped folder's items
+    /// present without a manual refresh.
+    func open(urls: [URL]) {
+        // Append every not-yet-open root first (standardized, de-duplicated),
+        // scoping each for sandbox access, so `roots` is complete before the
+        // scan runs and a mid-batch read sees them all.
+        var newRoots: [URL] = []
+        for url in urls {
+            let root = url.standardizedFileURL
+            guard !roots.contains(root) else { continue }   // already added
+            if scopeAccess(root) { scopedURLs.insert(root) }
+            roots.append(root)
+            if selectedFolder == nil { selectedFolder = root }
+            newRoots.append(root)
+        }
+        guard !newRoots.isEmpty else { return }
 
-        startScan { [root] in
-            let result = await FolderScanner.scan(root: root)
-            guard !Task.isCancelled else { return }
-            self.resultsByRoot[root] = result
+        startScan { [newRoots] in
+            for root in newRoots {
+                let result = await FolderScanner.scan(root: root)
+                guard !Task.isCancelled else { return }
+                self.resultsByRoot[root] = result
+            }
             self.rebuildMerged()
         }
     }
@@ -2553,8 +2589,9 @@ final class BrowserModel {
         }
         let result: [CategoryGroup]
         switch grouping {
-        case .person:   result = groupedByPerson
-        case .folder:   result = groupedByFolder
+        case .person:      result = groupedByPerson
+        case .folder:      result = groupedByFolder
+        case .orientation: result = groupedByOrientation
         case .category, .none: result = groupedByCategoryGroups
         }
         cacheGroups(result, at: displayRevision)
@@ -2670,6 +2707,132 @@ final class BrowserModel {
                 title: dir.lastPathComponent,
                 symbol: "folder",
                 items: buckets[dir] ?? [])
+        }
+    }
+
+    /// The shape of an image/video, derived from its pixel dimensions.
+    private enum Orientation {
+        case vertical, horizontal, square
+
+        /// Classifies a pixel size. Treats near-square (within 1%) as square so
+        /// minor off-by-a-pixel crops don't scatter obviously-square media.
+        init(_ size: PixelSize) {
+            let w = Double(size.width), h = Double(size.height)
+            guard w > 0, h > 0 else { self = .square; return }
+            let ratio = w / h
+            if ratio > 1.01 { self = .horizontal }
+            else if ratio < 0.99 { self = .vertical }
+            else { self = .square }
+        }
+
+        /// Display order: vertical, horizontal, then square.
+        var sortRank: Int {
+            switch self {
+            case .vertical: return 0
+            case .horizontal: return 1
+            case .square: return 2
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .vertical: return "Vertical"
+            case .horizontal: return "Horizontal"
+            case .square: return "Square"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .vertical: return "rectangle.portrait"
+            case .horizontal: return "rectangle"
+            case .square: return "square"
+            }
+        }
+    }
+
+    /// Sections the displayed items by their shape — Vertical (portrait),
+    /// Horizontal (landscape), or Square — using each file's pixel dimensions.
+    ///
+    /// Dimensions come from `MediaMetadataCache`, which is populated lazily as
+    /// rows render. To avoid scattering most items into an "Unknown" bucket
+    /// before they've been probed, `grouping`'s setter kicks off an eager probe
+    /// of the displayed set (`prefetchOrientationSizes`) whenever orientation
+    /// grouping becomes active; each probe bumps the display revision so these
+    /// sections rebuild as sizes arrive. Items still unprobed at read time land
+    /// in a residual "Unknown" group.
+    private var groupedByOrientation: [CategoryGroup] {
+        let items = displayedItems
+        var buckets: [Orientation: [MediaItem]] = [:]
+        var unknown: [MediaItem] = []
+        for item in items {
+            if let size = MediaMetadataCache.cached(for: item.url)?.pixelSize,
+               size.width > 0, size.height > 0 {
+                buckets[Orientation(size), default: []].append(item)
+            } else {
+                unknown.append(item)
+            }
+        }
+        var groups: [CategoryGroup] = []
+        for orientation in buckets.keys.sorted(by: { $0.sortRank < $1.sortRank }) {
+            groups.append(CategoryGroup(
+                id: "orientation-\(orientation.sortRank)",
+                title: orientation.title,
+                symbol: orientation.symbol,
+                items: buckets[orientation] ?? []))
+        }
+        if !unknown.isEmpty {
+            groups.append(CategoryGroup(
+                id: "\u{0}unknownorientation", title: "Unknown",
+                symbol: "questionmark.circle", items: unknown, isResidual: true))
+        }
+        return groups
+    }
+
+    /// The in-flight orientation-size prefetch task, if any. Held so switching
+    /// away from orientation grouping (or tearing down the window) can cancel a
+    /// pass still probing the folder's files off disk.
+    private var orientationPrefetchTask: Task<Void, Never>?
+
+    /// Probes pixel dimensions for every displayed item that isn't cached yet,
+    /// so `groupedByOrientation` can place them deterministically instead of
+    /// waiting for grid rows to lazily probe. Runs a bounded concurrent pass
+    /// (like the codec prefetch), bumping the display revision as sizes land so
+    /// the sections rebuild progressively. Cheap: each probe only reads file
+    /// headers (ImageIO for images, FFmpeg stream info for video).
+    private func prefetchOrientationSizes() {
+        orientationPrefetchTask?.cancel()
+        let pending = displayedItems.filter {
+            MediaMetadataCache.cached(for: $0.url) == nil
+        }
+        guard !pending.isEmpty else { return }
+
+        orientationPrefetchTask = Task { @MainActor [weak self] in
+            let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+            var iterator = pending.makeIterator()
+            await withTaskGroup(of: Void.self) { group in
+                var inFlight = 0
+                func addNext() {
+                    guard let item = iterator.next() else { return }
+                    inFlight += 1
+                    group.addTask {
+                        _ = await VideoMetadataProvider.shared.metadata(
+                            for: item.url, kind: item.kind)
+                    }
+                }
+                for _ in 0..<maxConcurrent { addNext() }
+                while inFlight > 0 {
+                    await group.next()
+                    inFlight -= 1
+                    if Task.isCancelled { break }
+                    addNext()
+                    // Rebuild the orientation sections as sizes arrive so items
+                    // migrate out of "Unknown" progressively.
+                    if let self, self.grouping == .orientation {
+                        self.invalidateDisplayCache()
+                    }
+                }
+            }
         }
     }
 

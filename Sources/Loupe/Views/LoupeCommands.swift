@@ -366,6 +366,7 @@ struct LoupeCommands: Commands {
                 Picker("Group By", selection: groupingBinding) {
                     Text("None").tag(GroupingDimension.none)
                     Text("Folder").tag(GroupingDimension.folder)
+                    Text("Orientation").tag(GroupingDimension.orientation)
                     Text("Category").tag(GroupingDimension.category)
                     Text("Person").tag(GroupingDimension.person)
                 }
