@@ -84,8 +84,10 @@ struct ItemPreviewSidebar: View {
             } else {
                 // Keyed by item id so each new selection rebuilds its renderer
                 // (and resets image zoom / reloads the player) instead of
-                // reusing the previous item's view state.
-                ItemPreviewContent(item: item)
+                // reusing the previous item's view state. `isViewerActive`
+                // pauses a playing video preview while the fullscreen viewer is
+                // up, so two players don't play the same clip at once.
+                ItemPreviewContent(item: item, isViewerActive: model.isViewerPresented)
                     .id(item.id)
             }
         } else {
@@ -179,9 +181,17 @@ struct ItemPreviewSidebar: View {
 /// so an image preview can be zoomed/panned within the sidebar.
 private struct ItemPreviewContent: View {
     let item: MediaItem
+    /// True while the fullscreen viewer is open. The preview pauses its video
+    /// playback for the duration so the sidebar and the viewer don't both play
+    /// the same clip (doubled audio, wasted decode).
+    var isViewerActive: Bool
 
     @State private var zoomCommand: ZoomCommand?
     @State private var zoomFactor: CGFloat = 1
+
+    /// The preview's video backend, captured so we can pause/resume it when the
+    /// viewer opens and closes. Nil for non-video items.
+    @State private var playback: (any PlaybackController)?
 
     /// Light backing so an image/PDF that doesn't fill the panel letterboxes
     /// onto a bright background instead of the renderers' default black.
@@ -194,7 +204,12 @@ private struct ItemPreviewContent: View {
                 ZoomableImageView(url: item.url, command: $zoomCommand,
                                   zoomFactor: $zoomFactor, backgroundColor: previewBackground)
             case .video, .audio:
-                VideoPlayerView(url: item.url)
+                VideoPlayerView(url: item.url) { controller in
+                    playback = controller
+                    // If the viewer is already up when the player mounts (e.g.
+                    // selection changed while the viewer is open), start paused.
+                    if isViewerActive { controller.pause() }
+                }
             case .pdf:
                 PDFViewerRepresentable(url: item.url, backgroundColor: previewBackground)
             case .markdown:
@@ -207,5 +222,9 @@ private struct ItemPreviewContent: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .white))
+        // Pause the preview when the viewer takes over; resume when it closes.
+        .onChange(of: isViewerActive) { _, active in
+            if active { playback?.pause() } else { playback?.play() }
+        }
     }
 }

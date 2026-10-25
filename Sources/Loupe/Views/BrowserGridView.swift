@@ -224,24 +224,37 @@ struct BrowserGridView: View {
     }
 
     /// A pinned category section header: the category name, an item count, and
-    /// a tap target that filters the grid to just that category.
+    /// A pinned section header. Clicking it collapses or expands the section;
+    /// a leading chevron rotates to show the state.
     @ViewBuilder
     private func sectionHeader(_ group: BrowserModel.CategoryGroup) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: group.symbol)
-                .foregroundStyle(.secondary)
-            Text(group.title)
-                .font(.headline)
-                .foregroundStyle(group.isResidual ? .secondary : .primary)
-            Text("\(group.items.count)")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Spacer()
+        let collapsed = model.isGroupCollapsed(group.id)
+        Button {
+            model.toggleGroupCollapsed(group.id)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+                Image(systemName: group.symbol)
+                    .foregroundStyle(.secondary)
+                Text(group.title)
+                    .font(.headline)
+                    .foregroundStyle(group.isResidual ? .secondary : .primary)
+                Text("\(group.items.count)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(.bar)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
+        .buttonStyle(.plain)
+        .help(collapsed ? "Expand group" : "Collapse group")
     }
 
     /// Vertical gap below each group (except the last) that separates adjacent
@@ -334,9 +347,12 @@ struct BrowserGridView: View {
                                             // item) so a person who appears in
                                             // several sections doesn't produce
                                             // duplicate ForEach identities within
-                                            // the one LazyVGrid.
-                                            ForEach(group.entries) { entry in
-                                                cell(for: entry.item, cellID: entry.id)
+                                            // the one LazyVGrid. A collapsed
+                                            // section renders only its header.
+                                            if !model.isGroupCollapsed(group.id) {
+                                                ForEach(group.entries) { entry in
+                                                    cell(for: entry.item, cellID: entry.id)
+                                                }
                                             }
                                         } header: {
                                             sectionHeader(group)

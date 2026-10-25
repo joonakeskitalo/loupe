@@ -10,9 +10,30 @@ import SwiftUI
 /// to a `VideoMetadataProvider` probe), so opening the sidebar on an image or
 /// video resolves its dimensions without decoding pixels.
 struct ItemInfoSidebar: View {
-    var model: BrowserModel
+    @Bindable var model: BrowserModel
+
+    /// The live width while a resize drag is in flight, driven off local state
+    /// (not the model) so dragging avoids the model's per-tick `UserDefaults`
+    /// write and the observation churn that would re-render the whole sidebar
+    /// on every delta. The committed width lands on the model only on drag end.
+    @State private var dragWidth: Double?
+
+    /// Width captured when a resize drag begins, so the delta is applied
+    /// against a stable base rather than accumulating rounding error.
+    @State private var dragStartWidth: Double?
+
+    /// The width the panel should render at right now.
+    private var effectiveWidth: Double { dragWidth ?? model.infoSidebarWidth }
 
     var body: some View {
+        HStack(spacing: 0) {
+            resizeHandle
+            panel
+        }
+        .frame(width: CGFloat(effectiveWidth))
+    }
+
+    private var panel: some View {
         VStack(spacing: 0) {
             header
             Divider()
@@ -26,10 +47,47 @@ struct ItemInfoSidebar: View {
                 VideoExportQueueView(model: model)
             }
         }
-        .frame(width: 260)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.bar)
-        .overlay(alignment: .leading) { Divider() }
+    }
+
+    /// A thin, draggable strip on the sidebar's leading edge. Dragging it left
+    /// grows the sidebar, right shrinks it; the model clamps the result to its
+    /// min/max. Mirrors the preview sidebar's handle.
+    private var resizeHandle: some View {
+        Divider()
+            .frame(width: 6)
+            .contentShape(Rectangle())
+            .overlay(alignment: .center) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.35))
+                    .frame(width: 2, height: 26)
+            }
+            .background(.bar)
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                // Measure in the global (window) space so the width stays
+                // anchored to the cursor even as the handle shifts with the
+                // resizing panel (see the preview sidebar for the rationale).
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { value in
+                        let base = dragStartWidth ?? model.infoSidebarWidth
+                        if dragStartWidth == nil { dragStartWidth = base }
+                        // Handle is on the leading edge of a trailing-pinned
+                        // panel, so moving the cursor left (smaller x) widens it.
+                        let delta = value.startLocation.x - value.location.x
+                        let proposed = base + Double(delta)
+                        dragWidth = min(max(proposed, BrowserModel.minInfoSidebarWidth),
+                                        BrowserModel.maxInfoSidebarWidth)
+                    }
+                    .onEnded { _ in
+                        if let dragWidth { model.infoSidebarWidth = dragWidth }
+                        dragWidth = nil
+                        dragStartWidth = nil
+                    }
+            )
     }
 
     @ViewBuilder

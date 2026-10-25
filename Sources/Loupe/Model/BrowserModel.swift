@@ -176,9 +176,36 @@ final class BrowserModel {
     }
 
     static let minPreviewSidebarWidth: Double = 220
-    static let maxPreviewSidebarWidth: Double = 900
+    static let maxPreviewSidebarWidth: Double = 1600
     static let defaultPreviewSidebarWidth: Double = 420
     private static let previewSidebarWidthKey = "previewSidebarWidth"
+
+    /// The info sidebar's width in points. A preference persisted across
+    /// windows and launches (like `previewSidebarWidth`), so resizing it in one
+    /// window carries over. Clamped to `minInfoSidebarWidth ...
+    /// maxInfoSidebarWidth` on write. A wider sidebar lets the rename section
+    /// and long file names / paths show in full instead of truncating.
+    var infoSidebarWidth: Double = {
+        let stored = UserDefaults.standard.double(forKey: BrowserModel.infoSidebarWidthKey)
+        guard stored > 0 else { return BrowserModel.defaultInfoSidebarWidth }
+        return min(max(stored, BrowserModel.minInfoSidebarWidth),
+                   BrowserModel.maxInfoSidebarWidth)
+    }() {
+        didSet {
+            let clamped = min(max(infoSidebarWidth, Self.minInfoSidebarWidth),
+                              Self.maxInfoSidebarWidth)
+            if clamped != infoSidebarWidth {
+                infoSidebarWidth = clamped
+                return
+            }
+            UserDefaults.standard.set(infoSidebarWidth, forKey: Self.infoSidebarWidthKey)
+        }
+    }
+
+    static let minInfoSidebarWidth: Double = 260
+    static let maxInfoSidebarWidth: Double = 640
+    static let defaultInfoSidebarWidth: Double = 260
+    private static let infoSidebarWidthKey = "infoSidebarWidth"
 
     /// Whether the free-text tag-input overlay (opened with `y`) is showing.
     /// Lives on the model so both the grid and the fullscreen viewer can open
@@ -521,7 +548,37 @@ final class BrowserModel {
             if !usesPrefetch(grouping), usesPrefetch(oldValue) {
                 orientationPrefetchTask?.cancel()
             }
+            // Collapsed-group state is keyed by `CategoryGroup.id`, which is
+            // only meaningful within a given grouping dimension. Switching
+            // dimensions makes those ids stale, so start the new dimension
+            // fully expanded.
+            if grouping != oldValue { collapsedGroupIDs.removeAll() }
         }
+    }
+
+    /// IDs of grouped sections the user has collapsed (keyed by
+    /// `CategoryGroup.id`). A collapsed section shows only its header; its
+    /// items are hidden in the grid/list and skipped by keyboard navigation.
+    /// In-session and window-scoped — cleared when the grouping dimension
+    /// changes, since the ids don't carry across dimensions.
+    private(set) var collapsedGroupIDs: Set<String> = []
+
+    /// Whether the group with the given id is currently collapsed.
+    func isGroupCollapsed(_ id: String) -> Bool {
+        collapsedGroupIDs.contains(id)
+    }
+
+    /// Toggles the collapsed state of a grouped section. Dropping the group's
+    /// rows changes what's on screen, so the display cache is invalidated and
+    /// the selection reclamped to whatever stays visible.
+    func toggleGroupCollapsed(_ id: String) {
+        if collapsedGroupIDs.contains(id) {
+            collapsedGroupIDs.remove(id)
+        } else {
+            collapsedGroupIDs.insert(id)
+        }
+        invalidateDisplayCache()
+        clampSelection()
     }
 
     /// Back-compat shim for the original category-only toggle: reads/writes the
@@ -2651,6 +2708,10 @@ final class BrowserModel {
         var seen: Set<MediaItem.ID> = []
         var out: [MediaItem] = []
         for group in groups {
+            // A collapsed section hides its rows, so they drop out of the
+            // navigable order too — stepping or a shift-range never lands on a
+            // row the user can't see.
+            if collapsedGroupIDs.contains(group.id) { continue }
             for item in group.items where seen.insert(item.id).inserted {
                 out.append(item)
             }
