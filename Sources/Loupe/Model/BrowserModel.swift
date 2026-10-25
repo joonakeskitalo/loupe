@@ -50,6 +50,9 @@ enum GroupingDimension: String, CaseIterable {
     /// Buckets items by image/video shape: vertical (portrait), horizontal
     /// (landscape), or square, using each file's pixel dimensions.
     case orientation = "Orientation"
+    /// Buckets items by media kind — Images, Videos, PDFs, Audio, etc. — using
+    /// each file's `MediaKind` classification.
+    case type = "Type"
 }
 
 @MainActor
@@ -2612,6 +2615,7 @@ final class BrowserModel {
         case .person:      result = groupedByPerson
         case .folder:      result = groupedByFolder
         case .orientation: result = groupedByOrientation
+        case .type:        result = groupedByType
         case .category, .none: result = groupedByCategoryGroups
         }
         cacheGroups(result, at: displayRevision)
@@ -2728,6 +2732,28 @@ final class BrowserModel {
                 symbol: "folder",
                 items: buckets[dir] ?? [])
         }
+    }
+
+    /// Sections the displayed items by their `MediaKind` — Images, Videos,
+    /// PDFs, Audio, Markdown, Text, Other. Each item lands in exactly one
+    /// bucket. Sections are ordered by `MediaKind.groupSortRank` (visual media
+    /// first, "Other" last) and use the kind's plural name and SF Symbol for
+    /// the header. Needs no prefetch — every item's kind is known at scan time.
+    private var groupedByType: [CategoryGroup] {
+        let items = displayedItems
+        var buckets: [MediaKind: [MediaItem]] = [:]
+        for item in items {
+            buckets[item.kind, default: []].append(item)
+        }
+        return buckets.keys
+            .sorted { $0.groupSortRank < $1.groupSortRank }
+            .map { kind in
+                CategoryGroup(
+                    id: "type-\(kind.rawValue)",
+                    title: kind.displayName,
+                    symbol: kind.fallbackSymbol,
+                    items: buckets[kind] ?? [])
+            }
     }
 
     /// The shape of an image/video, derived from its pixel dimensions.

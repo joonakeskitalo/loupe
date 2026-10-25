@@ -38,6 +38,21 @@ enum MediaKind: String, Sendable {
         }
     }
 
+    /// Display order for "Group by Type" sections, so kinds read in a stable,
+    /// sensible order (visual media first, `.other` last) regardless of which
+    /// kinds a given folder happens to contain.
+    var groupSortRank: Int {
+        switch self {
+        case .image: return 0
+        case .video: return 1
+        case .pdf: return 2
+        case .audio: return 3
+        case .markdown: return 4
+        case .text: return 5
+        case .other: return 6
+        }
+    }
+
     /// Extensions treated as Markdown regardless of how the system maps them.
     private static let markdownExtensions: Set<String> = [
         "md", "markdown", "mdown", "mkd", "mdx"
