@@ -320,6 +320,13 @@ final class BrowserModel {
         didSet { clampSelection() }
     }
 
+    /// Whether the free-text search matches case exactly. Off by default, so
+    /// search is case-insensitive unless the user turns this on from the menu.
+    /// Toggling it reclamps the selection since the displayed set may change.
+    var caseSensitiveSearch = false {
+        didSet { clampSelection() }
+    }
+
     /// Files flagged "for later". In-session only: cleared when a new folder is
     /// opened and gone when the window closes (the model is per-window).
     var flaggedItems: Set<MediaItem.ID> = []
@@ -1198,14 +1205,19 @@ final class BrowserModel {
                 includeTerms.append(String(rawTerm))
             }
         }
+        // Match honors `caseSensitiveSearch`: off (the default) folds case via
+        // the localized case-insensitive contains; on compares case exactly.
+        let matches: (String, String) -> Bool = caseSensitiveSearch
+            ? { name, term in name.contains(term) }
+            : { name, term in name.localizedCaseInsensitiveContains(term) }
         if !includeTerms.isEmpty {
             base = base.filter { item in
-                includeTerms.allSatisfy { item.name.localizedCaseInsensitiveContains($0) }
+                includeTerms.allSatisfy { matches(item.name, $0) }
             }
         }
         if !excludeTerms.isEmpty {
             base = base.filter { item in
-                !excludeTerms.contains { item.name.localizedCaseInsensitiveContains($0) }
+                !excludeTerms.contains { matches(item.name, $0) }
             }
         }
         return base

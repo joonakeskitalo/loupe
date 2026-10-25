@@ -295,6 +295,11 @@ struct LoupeCommands: Commands {
             Toggle("Include Subfolders", isOn: includeSubfoldersBinding)
                 .disabled(model == nil || model?.mode != .folders)
 
+            // Search matching. Off by default (search is case-insensitive);
+            // turning this on makes the free-text filter match case exactly.
+            Toggle("Case-Sensitive Search", isOn: caseSensitiveSearchBinding)
+                .disabled(model == nil)
+
             Divider()
 
             // Grid display options.
@@ -551,6 +556,7 @@ struct LoupeCommands: Commands {
     private var layoutBinding: Binding<ViewLayout> { binding(\.viewLayout, default: .grid) }
     private var modeBinding: Binding<BrowseMode> { binding(\.mode, default: .flattened) }
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
+    private var caseSensitiveSearchBinding: Binding<Bool> { binding(\.caseSensitiveSearch, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var fillGridCellsBinding: Binding<Bool> { binding(\.fillGridCells, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }
