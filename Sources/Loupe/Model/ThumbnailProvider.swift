@@ -189,6 +189,30 @@ private final class ThumbnailCacheBox: @unchecked Sendable {
 actor ThumbnailProvider {
     static let shared = ThumbnailProvider()
 
+    /// The outcome of one generation attempt. Distinguishes a produced image
+    /// and a genuine decode failure from a request that was *cancelled* before
+    /// it finished (a display change pulled the rug out while it was queued or
+    /// decoding).
+    ///
+    /// The distinction matters because requests dedupe: a `.visible` cell can
+    /// `await` an in-flight task that was originally a `.prefetch`, and that
+    /// prefetch can be cancelled by `cancelInFlight` when the displayed set
+    /// changes. Without this, the still-visible cell would see a bare `nil`,
+    /// treat it as a permanent decode failure, and never retry — which stranded
+    /// thumbnails in large folders (a cell that happened to share a cancelled
+    /// prefetch's task would show the fallback icon forever). `.cancelled` tells
+    /// the caller "this didn't fail, it was interrupted — ask again."
+    enum GenerationOutcome: Sendable {
+        case image(NSImage)
+        case failed
+        case cancelled
+
+        var image: NSImage? {
+            if case .image(let img) = self { return img }
+            return nil
+        }
+    }
+
     /// Scheduling priority for a thumbnail request. Higher raw value wins.
     enum Priority: Int, Comparable {
         /// Warming a cell near, but not in, the viewport. Yields to visible work.
@@ -209,7 +233,7 @@ actor ThumbnailProvider {
     /// lookup resolves. Standard actor code still reaches it via `cache`.
     nonisolated private let cacheBox = ThumbnailCacheBox()
     nonisolated private var cache: NSCache<NSString, NSImage> { cacheBox.cache }
-    private var inFlight: [URL: Task<NSImage?, Never>] = [:]
+    private var inFlight: [URL: Task<GenerationOutcome, Never>] = [:]
     /// The scheduling priority each in-flight URL was last requested at, so a
     /// filter change can cancel only the still-prefetch work (never a cell the
     /// user can see). Updated on create and on promotion; cleared in `finish`.
@@ -257,6 +281,93 @@ actor ThumbnailProvider {
         let cores = ProcessInfo.processInfo.activeProcessorCount
         return min(16, max(2, cores))
     }()
+
+    /// A much tighter general-gate cap used when the media being thumbnailed
+    /// lives on a slow volume — a rotational (spinning) HDD, a removable disk,
+    /// or a network mount. The default `maxConcurrent` (16–64) is tuned for a
+    /// fast internal SSD where seeks are effectively free; issuing that many
+    /// scattered reads to a seek-bound device collapses its throughput, so a
+    /// large folder on an external HDD would thrash and stall. A small cap keeps
+    /// the disk doing mostly sequential-ish work and lets thumbnails trickle in
+    /// steadily instead of freezing. Floored at 2 so there's still a little
+    /// overlap to hide per-request latency.
+    private static let maxConcurrentSlowVolume = 3
+
+    /// Cached slow/fast classification per volume (keyed by the volume's root
+    /// URL), so the costly resource-value probe runs once per disk rather than
+    /// once per file. `true` means "slow" (rotational, removable, or network).
+    private var slowVolumeCache: [URL: Bool] = [:]
+
+    /// Whether any URL currently admitted or waiting is on a slow volume. The
+    /// general gate's effective cap drops to `maxConcurrentSlowVolume` whenever
+    /// this is set, so a single external-HDD folder throttles the gate without
+    /// penalizing a mixed session's internal-SSD work once the slow work drains.
+    private var slowVolumeInUseCount = 0
+
+    /// URLs whose in-flight request counts toward `slowVolumeInUseCount`, so the
+    /// increment on request-start is matched by exactly one decrement when the
+    /// request ends (in `finish`/`abandon`) regardless of which path it took.
+    private var slowVolumeURLs: Set<URL> = []
+
+    /// Records (once) that `url`'s request is slow-volume work, bumping the
+    /// shared count. Called when a request is created. Idempotent per URL since
+    /// requests dedupe on URL.
+    private func noteSlowVolumeStart(_ url: URL) {
+        guard isSlowVolume(url) else { return }
+        guard slowVolumeURLs.insert(url).inserted else { return }
+        slowVolumeInUseCount += 1
+    }
+
+    /// Clears `url`'s slow-volume accounting when its request ends. No-op if the
+    /// URL wasn't slow-volume work.
+    private func noteSlowVolumeEnd(_ url: URL) {
+        guard slowVolumeURLs.remove(url) != nil else { return }
+        slowVolumeInUseCount -= 1
+    }
+
+    /// The general gate's current admission ceiling: the tight slow-volume cap
+    /// when slow-volume work is in play, otherwise the generous default.
+    private var effectiveMaxConcurrent: Int {
+        slowVolumeInUseCount > 0 ? Self.maxConcurrentSlowVolume : Self.maxConcurrent
+    }
+
+    /// Classifies the volume `url` lives on as slow (rotational / removable /
+    /// network) or fast, caching the result per volume. A failed probe is
+    /// treated as fast (the generous default) so an unreadable attribute never
+    /// needlessly throttles an internal SSD.
+    ///
+    /// "Slow" is the union of three signals from the file's volume:
+    ///   * not internal (`.volumeIsInternalKey == false`) — covers USB/Thunderbolt
+    ///     external disks, the common case here;
+    ///   * removable or ejectable — external spinning disks and the like;
+    ///   * not local (`.volumeIsLocalKey == false`) — network mounts (SMB/AFP/NFS),
+    ///     which are even more latency-bound than a local HDD.
+    private func isSlowVolume(_ url: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [
+            .volumeURLKey,
+            .volumeIsInternalKey,
+            .volumeIsRemovableKey,
+            .volumeIsEjectableKey,
+            .volumeIsLocalKey
+        ]
+        guard let values = try? url.resourceValues(forKeys: keys) else {
+            return false
+        }
+        // Key the cache by the volume root so every file on the same disk shares
+        // one probe. Fall back to the file URL if the volume URL is unavailable.
+        let volumeKey = values.volume ?? url
+        if let cached = slowVolumeCache[volumeKey] {
+            return cached
+        }
+
+        let notInternal = (values.volumeIsInternal == false)
+        let removable = (values.volumeIsRemovable == true) || (values.volumeIsEjectable == true)
+        let notLocal = (values.volumeIsLocal == false)
+        let slow = notInternal || removable || notLocal
+
+        slowVolumeCache[volumeKey] = slow
+        return slow
+    }
 
     /// Number of generations currently running (admitted through the gate).
     private var runningCount = 0
@@ -344,12 +455,41 @@ actor ThumbnailProvider {
         // Reuse or create the generation task, but DO NOT await it while the
         // actor is isolated — return the task's handle and await it outside, so
         // concurrent requests overlap instead of serializing.
-        let task = taskForThumbnail(
-            url: url, pixelSize: pixelSize, method: method,
-            videoPosition: videoPosition, priority: priority
-        )
-        return await task.value
+        //
+        // A request can dedupe onto an in-flight task that then gets cancelled
+        // by a display change (most often a `.visible` cell that joined a
+        // `.prefetch` already in flight). That comes back `.cancelled`, not a
+        // real failure. If THIS request wasn't itself cancelled — i.e. the cell
+        // still wants the image — ask again: `taskForThumbnail` starts fresh
+        // work since the cancelled task has cleared its in-flight slot. Bounded
+        // to a few attempts so a genuinely thrashing set can't spin here; in
+        // practice one retry settles it.
+        var attempt = 0
+        while true {
+            let task = taskForThumbnail(
+                url: url, pixelSize: pixelSize, method: method,
+                videoPosition: videoPosition, priority: priority
+            )
+            let outcome = await task.value
+
+            if case .cancelled = outcome {
+                attempt += 1
+                // Stop if this caller was itself cancelled (the cell is gone)
+                // or we've retried enough — don't busy-loop on a hot filter.
+                if Task.isCancelled || attempt >= Self.maxCancelRetries {
+                    return outcome.image
+                }
+                continue
+            }
+            return outcome.image
+        }
     }
+
+    /// How many times `thumbnail(for:…)` re-requests after a dedup'd task came
+    /// back `.cancelled`. A couple of attempts covers the realistic case (a
+    /// visible cell that joined a prefetch cancelled by one display change)
+    /// without spinning while the user scrubs a filter back and forth.
+    private static let maxCancelRetries = 3
 
     /// Synchronous, non-blocking lookup of an already-generated thumbnail.
     /// Returns the cached image if present, else `nil` — it never generates.
@@ -450,8 +590,10 @@ actor ThumbnailProvider {
 
         // Take a free slot immediately only when nobody is waiting; otherwise
         // queue so a lower-priority request can't jump an earlier high-priority
-        // waiter just because a slot happened to open at that instant.
-        if runningCount < Self.maxConcurrent, waiters.isEmpty {
+        // waiter just because a slot happened to open at that instant. The
+        // admission ceiling is `effectiveMaxConcurrent`, which tightens to the
+        // slow-volume cap while any slow-disk work is in flight.
+        if runningCount < effectiveMaxConcurrent, waiters.isEmpty {
             runningCount += 1
             return true
         }
@@ -636,18 +778,22 @@ actor ThumbnailProvider {
         method: ThumbnailMethod,
         videoPosition: VideoThumbnailPosition,
         priority: Priority
-    ) -> Task<NSImage?, Never> {
+    ) -> Task<GenerationOutcome, Never> {
         if let existing = inFlight[url] {
             promote(url: url, to: priority)
             return existing
         }
 
         inFlightPriority[url] = priority
+        // Track slow-volume work so the gate throttles while any such request
+        // is in play. Done here (new work only, not on the dedup fast path
+        // above) so each URL is counted once; `finish`/`abandon` clear it.
+        noteSlowVolumeStart(url)
 
         let kind = MediaKind.classify(url: url)
         let isRaw = kind == .image && MediaKind.isRawImage(url: url)
 
-        let task = Task<NSImage?, Never> { [weak self] in
+        let task = Task<GenerationOutcome, Never> { [weak self] in
             // Wait for a generation slot before touching any decoder, so no
             // more than `maxConcurrent` run at once and visible work is admitted
             // ahead of prefetch work. The returned flag says whether a slot was
@@ -658,10 +804,12 @@ actor ThumbnailProvider {
             // parked for a slot (a prefetch for an item that's no longer shown).
             // Bail before touching any decoder so freed capacity goes to the new
             // filtered set's work instead. Use `abandon` (not `finish`) when no
-            // slot was held so we never over-release the running count.
+            // slot was held so we never over-release the running count. Report
+            // `.cancelled` so a still-visible caller that dedup'd onto this task
+            // retries instead of recording a permanent failure.
             if Task.isCancelled {
                 await self?.abandon(url: url, hadSlot: slotTaken)
-                return nil
+                return .cancelled
             }
 
             var image: NSImage?
@@ -678,7 +826,7 @@ actor ThumbnailProvider {
                 image = await Self.quickLookThumbnail(for: url, pixelSize: pixelSize)
                 if kind == .video { await self?.releaseVideoSlot() }
                 await self?.finish(url: url, method: method, videoPosition: videoPosition, image: image)
-                return image
+                return Self.outcome(for: image)
             }
 
             // Fast path: images decode in-process via ImageIO, straight to the
@@ -731,11 +879,23 @@ actor ThumbnailProvider {
             }
 
             await self?.finish(url: url, method: method, videoPosition: videoPosition, image: image)
-            return image
+            return Self.outcome(for: image)
         }
 
         inFlight[url] = task
         return task
+    }
+
+    /// Maps a finished decode's optional image to a `GenerationOutcome`. A nil
+    /// image is reported as `.cancelled` (not `.failed`) when this task was
+    /// cancelled, so a still-visible caller retries rather than giving up: a
+    /// decode interrupted mid-flight by a display change can return nil even
+    /// though the file is perfectly decodable. A nil with no cancellation is a
+    /// genuine `.failed` (no decoder could produce a thumbnail — the cell shows
+    /// its type icon and does not retry).
+    nonisolated private static func outcome(for image: NSImage?) -> GenerationOutcome {
+        if let image { return .image(image) }
+        return Task.isCancelled ? .cancelled : .failed
     }
 
     /// Records a finished generation: stores the image under the method-aware
@@ -749,6 +909,7 @@ actor ThumbnailProvider {
     ) {
         inFlight[url] = nil
         inFlightPriority[url] = nil
+        noteSlowVolumeEnd(url)
         if let image {
             cache.setObject(
                 image,
@@ -768,6 +929,7 @@ actor ThumbnailProvider {
     private func abandon(url: URL, hadSlot: Bool) {
         inFlight[url] = nil
         inFlightPriority[url] = nil
+        noteSlowVolumeEnd(url)
         waiterWasCancelled.remove(url)
         if hadSlot { releaseSlot() }
     }
