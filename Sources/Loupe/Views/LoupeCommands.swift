@@ -26,12 +26,30 @@ struct LoupeCommands: Commands {
             // Copy the selected file(s) to the clipboard as file references, so
             // ⌘C here then ⌘V in Finder copies the actual files. Gated on a
             // selection; the disabled state releases ⌘C so a focused search
-            // field still copies text normally. Also released while the viewer
-            // is open, where the viewer owns ⌘C via its own hidden button —
-            // keeping exactly one owner of the key live (same pattern as ⌘⌫).
+            // field still copies text normally. Also released while the search
+            // field is focused (even with a grid selection present) and while
+            // the viewer is open, where the viewer owns ⌘C via its own hidden
+            // button — keeping exactly one owner of the key live (same pattern
+            // as ⌘A / ⌘⌫).
             Button(copyTitle) { model?.copyToClipboard() }
                 .keyboardShortcut("c", modifiers: .command)
-                .disabled(!hasSelection || viewerOpen)
+                .disabled(!hasSelection || viewerOpen || searchFocused)
+
+            // Cut — forwarded to the first responder. Like Paste below, this
+            // relays the standard `cut:` action so ⌘X cuts text in a focused
+            // search field. Replacing the whole `.pasteboard` group (above)
+            // dropped the system Cut item, leaving ⌘X with no owner; without
+            // this the keystroke never reached the field. Loupe itself is a
+            // read-only browser with nothing of its own to cut, so this is
+            // purely a relay to whatever text field has focus.
+            Button("Cut") {
+                NSApp.sendAction(
+                    #selector(NSText.cut(_:)),
+                    to: nil,
+                    from: nil
+                )
+            }
+            .keyboardShortcut("x", modifiers: .command)
 
             // Paste — forwarded to the first responder. Loupe itself is a
             // read-only browser with nothing to paste into, but replacing the
