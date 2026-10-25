@@ -196,6 +196,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Window ▸ "Show Tab Bar" / tab shortcuts are unavailable. Each window
         // then opts into preferring tabs via `WindowTabbingConfigurator`.
         NSWindow.allowsAutomaticWindowTabbing = true
+
+        // When launched via `swift run` (i.e. as a bare executable with no
+        // .app bundle / Info.plist), macOS treats Loupe as a non-activating
+        // background process: its window shows but the app never becomes
+        // frontmost, so the window can't become key and keyboard shortcuts
+        // never reach it. Forcing `.regular` here makes it a normal foreground
+        // app. The packaged .app already gets this from its bundle metadata, so
+        // setting it again there is harmless.
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    /// Pull the app to the front once launch finishes. Needed for the
+    /// `swift run` path — without an .app bundle the process starts inactive,
+    /// so the first window opens behind the terminal and can't take key focus
+    /// until the user clicks it. Activating here hands it keyboard focus
+    /// immediately. Harmless for the bundled launch, which is already active.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// Never auto-create a blank untitled window on launch/activation.
