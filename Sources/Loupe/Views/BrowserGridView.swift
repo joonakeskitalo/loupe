@@ -226,7 +226,12 @@ struct BrowserGridView: View {
                     suppressScrollForID = item.id
                     model.selectOnly(item.id)
                 }
-                gridFocused = true
+                // Only assert focus on an actual transition. Re-setting it true
+                // when the grid already holds focus made SwiftUI re-run the
+                // focusable's "scroll first responder into view" reveal on every
+                // click, nudging the scroll position a few points. Guarding the
+                // write keeps a click from moving the grid.
+                if !gridFocused { gridFocused = true }
             },
             double: { _ in
                 suppressScrollForID = item.id
@@ -434,7 +439,7 @@ struct BrowserGridView: View {
                                     },
                                     onChange: { rect in handleMarquee(rect) },
                                     onEmptyClick: {
-                                        gridFocused = true
+                                        if !gridFocused { gridFocused = true }
                                         model.clearSelection()
                                     }
                                 )
@@ -832,7 +837,7 @@ struct BrowserGridView: View {
             }
             return
         }
-        gridFocused = true
+        if !gridFocused { gridFocused = true }
         lastMarqueeRect = rect
         // Auto-scroll is suppressed for the whole drag via `marqueeRect != nil`
         // in the selection `onChange`, so no one-shot flag is needed here.

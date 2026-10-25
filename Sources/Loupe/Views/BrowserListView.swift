@@ -380,7 +380,12 @@ struct BrowserListView: View {
                 } else {
                     model.selectOnly(item.id)
                 }
-                listFocused = true
+                // Only assert focus on an actual transition. Re-setting it true
+                // when the list already holds focus made SwiftUI re-run the
+                // focusable's "scroll first responder into view" reveal on every
+                // click, nudging the scroll position. Guarding the write keeps a
+                // click from moving the list.
+                if !listFocused { listFocused = true }
             },
             double: { _ in
                 suppressNextScroll = true
