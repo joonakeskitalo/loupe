@@ -233,6 +233,27 @@ final class BrowserModel {
     /// Toggles the preview sidebar on/off (⌥⌘P / toolbar button).
     func togglePreviewSidebar() { showPreviewSidebar.toggle() }
 
+    /// The playback controller of the video currently shown in the preview
+    /// sidebar, if any. The preview registers it while a video is mounted and
+    /// clears it on teardown, letting the grid drive transport (O / U seek)
+    /// without owning the player. Not observed — it's a transient command
+    /// channel, not display state — and held weakly so the player can
+    /// deallocate normally when the preview goes away.
+    @ObservationIgnored weak var previewPlaybackController: (any PlaybackController)?
+
+    /// Seeks the preview sidebar's video by `seconds` (negative rewinds).
+    /// Returns true when there was a preview video to seek — so the caller can
+    /// treat the key as handled only when it did something. No-op (returns
+    /// false) when the preview sidebar is hidden or isn't showing a video.
+    @discardableResult
+    func seekPreviewVideo(by seconds: Double) -> Bool {
+        guard showPreviewSidebar, let controller = previewPlaybackController else {
+            return false
+        }
+        controller.skip(by: seconds)
+        return true
+    }
+
     /// When true, the grid hides the filename caption under each thumbnail for
     /// a denser, image-only layout.
     var hideFilenames = false

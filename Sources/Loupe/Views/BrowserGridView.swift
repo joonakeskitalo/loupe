@@ -261,6 +261,9 @@ struct BrowserGridView: View {
     /// sections in the grouped grid.
     private static let groupSpacing: CGFloat = 20
 
+    /// How many seconds O / U step the preview sidebar's video.
+    private static let previewSeekSeconds: Double = 5
+
     /// Number of columns that fit in a given width, matching the adaptive grid.
     /// Used as a fallback before any cells have reported their frames.
     private func columnCount(for width: CGFloat) -> Int {
@@ -498,6 +501,37 @@ struct BrowserGridView: View {
                                 }
                             }
                         }
+                        // When the displayed set changes (notably as a search
+                        // query is typed) the selected item can survive the
+                        // filter without `selectedItem` changing — so the
+                        // `onChange(of: selectedItem)` above never fires, and a
+                        // survivor that LazyVGrid hasn't realized stays
+                        // unhighlighted off-screen. Re-target the scroll at the
+                        // current selection whenever the display revision bumps
+                        // so the selected cell is realized and shows its
+                        // highlight. Marquee drags and the per-click suppress
+                        // one-shot are honored just like the selection handler.
+                        .onChange(of: model.displayRevision) { _, _ in
+                            guard marqueeRect == nil else { return }
+                            guard let sel = model.selectedItem,
+                                  let target = scrollTarget(for: sel) else { return }
+                            // No animation here: a filter change is a layout
+                            // jump, not a cursor move, so snap rather than glide.
+                            proxy.scrollTo(target, anchor: .center)
+                        }
+                        // The grid subtree is torn down and rebuilt whenever the
+                        // displayed set passes through empty and back — which
+                        // happens repeatedly while typing a search query, as an
+                        // intermediate keystroke matches nothing. On the rebuild
+                        // LazyVGrid only realizes the cells near the top, so a
+                        // still-selected survivor that's scrolled off never
+                        // repaints its highlight. Scroll it back into view as
+                        // the subtree reappears so the selection stays visible.
+                        .onAppear {
+                            guard let sel = model.selectedItem,
+                                  let target = scrollTarget(for: sel) else { return }
+                            proxy.scrollTo(target, anchor: .center)
+                        }
                     }
                     .onChange(of: geo.size.width, initial: true) { _, width in
                         // Don't recompute the column count mid-resize: the grid
@@ -585,7 +619,8 @@ struct BrowserGridView: View {
                 // selection (←/→ have no scroll action, which is why only
                 // up/down appeared broken). The KeyPress still carries the
                 // modifiers, so Shift-extend keeps working.
-                .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
+                .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow,
+                                   "i", "j", "k", "l", "o", "u"]) { press in
                     handleKey(press)
                 }
                 // Everything else (⌘A, F) via a catch-all handler.
@@ -749,12 +784,27 @@ struct BrowserGridView: View {
             return .handled
         }
 
+        // O / U step the preview sidebar's video forward / backward (only
+        // meaningful while the preview sidebar is showing a video). Handled
+        // before the navigation mapping so they don't fall through to it.
+        if press.modifiers.isEmpty, press.key == KeyEquivalent("o") {
+            if model.seekPreviewVideo(by: Self.previewSeekSeconds) { return .handled }
+            return .ignored
+        }
+        if press.modifiers.isEmpty, press.key == KeyEquivalent("u") {
+            if model.seekPreviewVideo(by: -Self.previewSeekSeconds) { return .handled }
+            return .ignored
+        }
+
+        // I/J/K/L mirror the arrow keys (I=up, J=left, K=down, L=right) so the
+        // selection can be driven from the home row without reaching for the
+        // arrows.
         let direction: BrowserModel.MoveDirection
         switch press.key {
-        case .leftArrow:  direction = .left
-        case .rightArrow: direction = .right
-        case .upArrow:    direction = .up
-        case .downArrow:  direction = .down
+        case .leftArrow,  KeyEquivalent("j"): direction = .left
+        case .rightArrow, KeyEquivalent("l"): direction = .right
+        case .upArrow,    KeyEquivalent("i"): direction = .up
+        case .downArrow,  KeyEquivalent("k"): direction = .down
         default:          return .ignored
         }
 

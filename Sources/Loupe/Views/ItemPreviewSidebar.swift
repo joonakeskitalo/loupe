@@ -87,7 +87,8 @@ struct ItemPreviewSidebar: View {
                 // reusing the previous item's view state. `isViewerActive`
                 // pauses a playing video preview while the fullscreen viewer is
                 // up, so two players don't play the same clip at once.
-                ItemPreviewContent(item: item, isViewerActive: model.isViewerPresented)
+                ItemPreviewContent(model: model, item: item,
+                                   isViewerActive: model.isViewerPresented)
                     .id(item.id)
             }
         } else {
@@ -180,6 +181,7 @@ struct ItemPreviewSidebar: View {
 /// same switch the fullscreen viewer uses. Owns the per-item image zoom state
 /// so an image preview can be zoomed/panned within the sidebar.
 private struct ItemPreviewContent: View {
+    var model: BrowserModel
     let item: MediaItem
     /// True while the fullscreen viewer is open. The preview pauses its video
     /// playback for the duration so the sidebar and the viewer don't both play
@@ -190,7 +192,8 @@ private struct ItemPreviewContent: View {
     @State private var zoomFactor: CGFloat = 1
 
     /// The preview's video backend, captured so we can pause/resume it when the
-    /// viewer opens and closes. Nil for non-video items.
+    /// viewer opens and closes, and so the grid's O / U seek can reach it via
+    /// the model. Nil for non-video items.
     @State private var playback: (any PlaybackController)?
 
     /// Light backing so an image/PDF that doesn't fill the panel letterboxes
@@ -206,6 +209,9 @@ private struct ItemPreviewContent: View {
             case .video, .audio:
                 VideoPlayerView(url: item.url) { controller in
                     playback = controller
+                    // Register with the model so the grid's O / U seek can
+                    // drive this player while the preview is showing.
+                    model.previewPlaybackController = controller
                     // If the viewer is already up when the player mounts (e.g.
                     // selection changed while the viewer is open), start paused.
                     if isViewerActive { controller.pause() }
@@ -225,6 +231,15 @@ private struct ItemPreviewContent: View {
         // Pause the preview when the viewer takes over; resume when it closes.
         .onChange(of: isViewerActive) { _, active in
             if active { playback?.pause() } else { playback?.play() }
+        }
+        // Drop the model's seek channel when this preview is torn down (the
+        // selection changed to a non-video, or the sidebar closed), so a stale
+        // controller for a gone item isn't driven by O / U. Only clear it if it
+        // still points at this preview's player.
+        .onDisappear {
+            if model.previewPlaybackController === playback {
+                model.previewPlaybackController = nil
+            }
         }
     }
 }
