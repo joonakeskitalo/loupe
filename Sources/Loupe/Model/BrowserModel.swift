@@ -504,13 +504,12 @@ final class BrowserModel {
     /// person. Changing it only re-sections the already-filtered list.
     var grouping: GroupingDimension = .none {
         didSet {
+            // `invalidateDisplayCache` kicks off the orientation-size prefetch
+            // itself whenever the new grouping is `.orientation` (so filter and
+            // scope changes refresh it too), so switching *into* orientation
+            // needs no extra call here. Switching *out* cancels the pass.
             invalidateDisplayCache()
-            if grouping == .orientation {
-                // Orientation needs pixel dimensions, which are otherwise only
-                // probed lazily per visible row. Kick off an eager pass so the
-                // sections fill in without the user scrolling the whole folder.
-                prefetchOrientationSizes()
-            } else if oldValue == .orientation {
+            if grouping != .orientation, oldValue == .orientation {
                 orientationPrefetchTask?.cancel()
             }
         }
@@ -1350,6 +1349,18 @@ final class BrowserModel {
         cachedDisplayedItemIndex = nil
         cachedIndexRevision = nil
         displayRevision &+= 1
+
+        // When orientation grouping is active, the displayed set may have just
+        // changed (a filter widened, the scope switched, subfolders toggled),
+        // bringing in items that were never probed for pixel dimensions. Those
+        // would otherwise sit in the "Unknown" bucket until each row scrolls
+        // into view. Re-run the eager probe so they settle into the right
+        // section on their own. The guard skips the prefetch's *own* per-probe
+        // invalidations (see `prefetchOrientationSizes`), which would otherwise
+        // restart the pass on every size that lands.
+        if grouping == .orientation, !isRefreshingOrientationSizes {
+            prefetchOrientationSizes()
+        }
     }
 
     private func passesChipFilters(_ item: MediaItem) -> Bool {
@@ -2803,6 +2814,12 @@ final class BrowserModel {
     /// pass still probing the folder's files off disk.
     private var orientationPrefetchTask: Task<Void, Never>?
 
+    /// True while `prefetchOrientationSizes` is invalidating the display cache
+    /// to publish a newly-probed size. `invalidateDisplayCache` checks this to
+    /// avoid restarting the prefetch in response to its own progress ticks,
+    /// which would cancel and relaunch the pass on every size that lands.
+    @ObservationIgnored private var isRefreshingOrientationSizes = false
+
     /// Probes pixel dimensions for every displayed item that isn't cached yet,
     /// so `groupedByOrientation` can place them deterministically instead of
     /// waiting for grid rows to lazily probe. Runs a bounded concurrent pass
@@ -2836,9 +2853,12 @@ final class BrowserModel {
                     if Task.isCancelled { break }
                     addNext()
                     // Rebuild the orientation sections as sizes arrive so items
-                    // migrate out of "Unknown" progressively.
+                    // migrate out of "Unknown" progressively. Flag the refresh
+                    // so this invalidation doesn't restart the prefetch pass.
                     if let self, self.grouping == .orientation {
+                        self.isRefreshingOrientationSizes = true
                         self.invalidateDisplayCache()
+                        self.isRefreshingOrientationSizes = false
                     }
                 }
             }
