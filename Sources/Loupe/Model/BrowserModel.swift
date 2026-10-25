@@ -2824,12 +2824,10 @@ final class BrowserModel {
         return out
     }
 
-    /// A compact fingerprint of the current grouped layout: each section's id
-    /// and item count, plus which sections are collapsed. It changes exactly
-    /// when the *shape* of the grouped view changes — a section appears,
-    /// disappears, grows, shrinks, or collapses — but not when only the
-    /// contents of a section are reordered or an unrelated display revision
-    /// ticks.
+    /// A compact fingerprint of the grouped layout's *section set*: which
+    /// sections exist (by id, in order) and which are collapsed. It changes
+    /// when a section appears, disappears, or collapses — but NOT when a
+    /// section merely gains or loses rows while staying present.
     ///
     /// The grouped grid/list key their lazy containers on this so SwiftUI
     /// rebuilds the container (and so recomputes its scrollable extent) when the
@@ -2837,12 +2835,22 @@ final class BrowserModel {
     /// section headers can keep a stale estimated content height after the
     /// groups change under them — e.g. renaming files reshuffles the filename-
     /// prefix buckets — leaving the bottom groups unreachable by scrolling.
+    ///
+    /// Why item counts are deliberately excluded: a full container rebuild
+    /// discards the scroll offset and snaps to the top. Deleting an item from a
+    /// section that still has other rows is exactly a count change with the
+    /// section set unchanged — folding counts in here rebuilt the container and
+    /// reset the scroll on every delete (the "scroll jumps to top on delete
+    /// while grouped" bug). Within-section row changes reflow the lazy layout
+    /// fine without an identity reset, so only genuine section-set changes need
+    /// the rebuild. A delete that empties a section still drops that section's
+    /// id, so the set changes and the rebuild still fires for that case.
     var groupLayoutSignature: String {
         guard grouping != .none else { return "flat" }
         var sig = ""
         for group in groupedDisplayedItems {
             let collapsed = collapsedGroupIDs.contains(group.id) ? "c" : "e"
-            sig += "\(group.id)#\(group.items.count)\(collapsed)|"
+            sig += "\(group.id)\(collapsed)|"
         }
         return sig
     }

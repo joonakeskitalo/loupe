@@ -407,14 +407,16 @@ struct BrowserGridView: View {
                             }
                             .padding(padding)
                             // Rebuild the grid when the grouped layout's shape
-                            // changes (a section appears/disappears/resizes —
+                            // set changes (a section appears/disappears —
                             // e.g. a rename reshuffles filename-prefix buckets)
                             // so the LazyVGrid remeasures its scrollable extent.
                             // Otherwise it can keep a stale, too-short content
                             // height after the sections change beneath it,
                             // leaving the bottom groups unreachable by scrolling.
-                            // Keyed to the shape only (ids + counts + collapsed),
-                            // so unrelated display ticks don't reset scroll.
+                            // Keyed to the section SET only (ids + collapsed),
+                            // not per-section counts, so deleting a row from a
+                            // surviving section doesn't rebuild the grid and
+                            // reset the scroll to the top.
                             .id(model.groupLayoutSignature)
                             // While the sidebar is resizing, pin the content to
                             // its pre-drag width and keep it leading-aligned so
