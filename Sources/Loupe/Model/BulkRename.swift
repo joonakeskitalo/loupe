@@ -65,6 +65,16 @@ struct BulkRenameConfig: Sendable, Equatable {
     /// Literal text to place at the end of the base name. Empty = disabled.
     var append: String = ""
 
+    // MARK: Find & replace
+
+    /// The substring to search for in the original base name. Empty = disabled.
+    var findText: String = ""
+    /// The text to substitute in place of each `findText` match. May be empty,
+    /// which deletes the matched text.
+    var replaceText: String = ""
+    /// Whether the `findText` match is case-sensitive.
+    var replaceCaseSensitive: Bool = false
+
     // MARK: Number sequence
 
     /// When true, a running number is inserted into the name.
@@ -99,7 +109,8 @@ struct BulkRenameConfig: Sendable, Equatable {
     /// Whether this config would change anything at all. Used to disable the
     /// Rename button when nothing is configured.
     var hasAnyComponent: Bool {
-        !prepend.isEmpty || !append.isEmpty || numbering || parentFolder || date
+        !prepend.isEmpty || !append.isEmpty || !findText.isEmpty
+            || numbering || parentFolder || date
     }
 }
 
@@ -197,8 +208,8 @@ enum BulkRenamer {
 
     /// Applies the config's components to a single base name. Order is fixed and
     /// deterministic so the result is predictable:
+    ///   core:      original base name, with find/replace applied first
     ///   prefixes:  date, parent folder, number, prepend text
-    ///   core:      original base name
     ///   suffixes:  append text, number, parent folder, date
     /// (A component only appears on the side its affix selects.)
     static func transform(
@@ -237,8 +248,18 @@ enum BulkRenamer {
             place(number, config.numberAffix)
         }
 
-        // Prepend / append literal text sit closest to the original name.
+        // Find & replace operates on the original name first, so prepend /
+        // append and the other components wrap the already-substituted text.
         var core = base
+        if !config.findText.isEmpty {
+            let options: String.CompareOptions = config.replaceCaseSensitive ? [] : [.caseInsensitive]
+            core = core.replacingOccurrences(
+                of: config.findText,
+                with: config.replaceText,
+                options: options
+            )
+        }
+        // Prepend / append literal text sit closest to the original name.
         if !config.prepend.isEmpty {
             core = config.prepend + core
         }

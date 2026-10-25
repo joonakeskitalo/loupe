@@ -893,8 +893,8 @@ private struct InfoRow: View {
 /// as the rename targets (`item` scopes a single-item panel; `nil` targets the
 /// whole selection, matching the export sections' convention).
 ///
-/// Each enabled component (prepend / append / number sequence / parent folder /
-/// current date) composes into the new name, and a live preview shows the first
+/// Each enabled component (prepend / append / find & replace / number sequence /
+/// parent folder / current date) composes into the new name, and a live preview shows the first
 /// couple of results before anything touches disk. The number sequence follows
 /// on-screen order so it lines up with what the user sees in the grid.
 private struct RenameSection: View {
@@ -915,6 +915,8 @@ private struct RenameSection: View {
         InfoSection(title: "Bulk Rename") {
             VStack(alignment: .leading, spacing: 12) {
                 prependAppend
+                subDivider
+                findReplaceControls
                 subDivider
                 numberingControls
                 subDivider
@@ -943,6 +945,17 @@ private struct RenameSection: View {
     private var prependAppend: some View {
         labeledField("Prepend", text: $model.renameConfig.prepend, placeholder: "text before")
         labeledField("Append", text: $model.renameConfig.append, placeholder: "text after")
+    }
+
+    // MARK: Find & replace
+
+    @ViewBuilder
+    private var findReplaceControls: some View {
+        labeledField("Find", text: $model.renameConfig.findText, placeholder: "text to replace")
+        labeledField("Replace", text: $model.renameConfig.replaceText, placeholder: "replacement")
+        Toggle("Case Sensitive", isOn: $model.renameConfig.replaceCaseSensitive)
+            .controlSize(.small)
+            .disabled(config.findText.isEmpty)
     }
 
     private func labeledField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
