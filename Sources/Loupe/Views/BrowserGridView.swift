@@ -519,6 +519,18 @@ struct BrowserGridView: View {
                             let clicked = suppressScrollForID
                             suppressScrollForID = nil
                             if let newValue, newValue == clicked { return }
+                            // A delete repoints the selection onto the survivor
+                            // already sitting in the trashed item's slot, so
+                            // re-centering would jump the scroll. Honor the
+                            // model's one-shot and skip this scroll. The flag is
+                            // cleared on the next runloop tick (not here) so the
+                            // sibling `displayedSetRevision` handler — which
+                            // fires for the same delete in an undefined order —
+                            // still sees it set and also skips.
+                            if model.suppressNextSelectionScroll {
+                                DispatchQueue.main.async { model.suppressNextSelectionScroll = false }
+                                return
+                            }
                             // Cells are identified by a string id (the item's
                             // own id when flat, a composite group+item id when
                             // grouped), so translate the selected item into the
@@ -539,8 +551,12 @@ struct BrowserGridView: View {
                         // so the selected cell is realized and shows its
                         // highlight. Marquee drags and the per-click suppress
                         // one-shot are honored just like the selection handler.
-                        .onChange(of: model.displayRevision) { _, _ in
+                        .onChange(of: model.displayedSetRevision) { _, _ in
                             guard marqueeRect == nil else { return }
+                            // A delete changes the set AND repoints the
+                            // selection onto the in-slot survivor; re-centering
+                            // would jump the scroll. Skip for that one change.
+                            guard !model.suppressNextSelectionScroll else { return }
                             guard let sel = model.selectedItem else { return }
                             // Defer to the next runloop tick so the grid has
                             // realized its new content before we scroll. When an
@@ -555,6 +571,14 @@ struct BrowserGridView: View {
                             // it and keeps it in view. The selection is re-read
                             // in the deferred block so a rapid follow-up change
                             // wins.
+                            //
+                            // Keyed on `displayedSetRevision` (not
+                            // `displayRevision`) so it fires only when the shown
+                            // set actually changed. A pure annotation — flag,
+                            // tag, color, hide, delete — under a view where the
+                            // item stays visible (e.g. "All Media") leaves the
+                            // set identical, so this never re-centers the
+                            // viewport for those.
                             DispatchQueue.main.async {
                                 guard marqueeRect == nil,
                                       let current = model.selectedItem,

@@ -390,6 +390,16 @@ final class BrowserModel {
     /// The anchor/primary item: the moving cursor for arrow-key navigation.
     var selectedItem: MediaItem.ID?
 
+    /// One-shot: set when the model moves the selection as a side effect of an
+    /// action that shouldn't scroll the viewport — notably delete, which
+    /// repoints the selection onto the survivor sitting in the same visual slot
+    /// the trashed item occupied. The grid/list read and clear it in their
+    /// `selectedItem` scroll handlers to skip the re-center for that one change,
+    /// so deleting an item leaves the scroll position put. Navigation (arrows /
+    /// j-l), clicks, and auto-advance when an item leaves a filtered view are
+    /// unaffected and still scroll.
+    @ObservationIgnored var suppressNextSelectionScroll = false
+
     /// Fixed anchor for Shift range selection (click or Shift+arrow). The
     /// selected range always spans from this anchor to `selectedItem`.
     private var rangeAnchor: MediaItem.ID?
@@ -1405,6 +1415,26 @@ final class BrowserModel {
     /// thumbnail prefetching at the new filtered set.
     private(set) var displayRevision = 0
 
+    /// Observed token that bumps ONLY when the actual displayed set changes —
+    /// i.e. when the ordered list of displayed item IDs differs from what it
+    /// was before. Unlike `displayRevision` (which bumps on every
+    /// `invalidateDisplayCache`, including pure annotations like flag/tag/color
+    /// under "All Media" that leave the visible set identical), this stays put
+    /// when nothing on screen actually moved.
+    ///
+    /// The grid/list use this to drive the "scroll a surviving selection back
+    /// into view" behavior: that re-center is only wanted when the displayed
+    /// set genuinely changed (search typing, folder/filter/sort switch), where
+    /// a still-selected cell may be unrealized off-screen. Keying it off
+    /// `displayRevision` instead made every annotation re-center the viewport
+    /// on the selection for no reason — the scroll-jump this separation fixes.
+    private(set) var displayedSetRevision = 0
+
+    /// Hash of the last displayed set's ordered IDs, used to decide whether a
+    /// cache rebuild actually changed what's shown (and so whether to bump
+    /// `displayedSetRevision`). `nil` until the first `displayedItems` build.
+    @ObservationIgnored private var lastDisplayedSetHash: Int?
+
     /// Items displayed in the grid: the scoped set with the active type and
     /// extension chip filters applied, then sorted. Memoized.
     var displayedItems: [MediaItem] {
@@ -1413,6 +1443,16 @@ final class BrowserModel {
         if let cachedDisplayedItems { return cachedDisplayedItems }
         let result = sorted(scopedItems.filter { passesChipFilters($0) })
         cachedDisplayedItems = result
+        // Bump `displayedSetRevision` only when the ordered ID list actually
+        // changed, so pure annotations (which rebuild the cache to an identical
+        // set) don't trip the views' "scroll survivor into view" handlers.
+        var hasher = Hasher()
+        for item in result { hasher.combine(item.id) }
+        let hash = hasher.finalize()
+        if hash != lastDisplayedSetHash {
+            lastDisplayedSetHash = hash
+            displayedSetRevision &+= 1
+        }
         return result
     }
 
@@ -4486,6 +4526,11 @@ final class BrowserModel {
             clearSelection()
             isViewerPresented = false
         } else if let idx = firstTrashedIndex {
+            // The survivor lands in the same visual slot the trashed item
+            // occupied, so it's already where the viewport is — re-centering it
+            // would jump the scroll. Suppress the one upcoming selection-driven
+            // scroll in the grid/list so deleting leaves the position put.
+            suppressNextSelectionScroll = true
             let next = min(idx, survivors.count - 1)
             // In the fullscreen viewer's multi-item mode, keep showing a full
             // block the same size as what was open instead of collapsing to a

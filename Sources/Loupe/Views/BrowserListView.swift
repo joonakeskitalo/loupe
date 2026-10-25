@@ -109,6 +109,17 @@ struct BrowserListView: View {
                             suppressNextScroll = false
                             return
                         }
+                        // A delete repoints the selection onto the survivor
+                        // already sitting in the trashed row's slot, so
+                        // re-centering would jump the scroll. Honor the model's
+                        // one-shot and skip this scroll. Cleared on the next
+                        // runloop tick (not here) so the sibling
+                        // `displayedSetRevision` handler — which fires for the
+                        // same delete in an undefined order — still sees it set.
+                        if model.suppressNextSelectionScroll {
+                            DispatchQueue.main.async { model.suppressNextSelectionScroll = false }
+                            return
+                        }
                         if let newValue {
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 proxy.scrollTo(newValue, anchor: .center)
@@ -126,7 +137,17 @@ struct BrowserListView: View {
                     // selection is re-read in the deferred block so a rapid
                     // follow-up change wins. Snap (no animation): a filter change
                     // is a layout jump, not a cursor move.
-                    .onChange(of: model.displayRevision) { _, _ in
+                    //
+                    // Keyed on `displayedSetRevision` (not `displayRevision`) so
+                    // it fires only when the shown set actually changed. A pure
+                    // annotation — flag, tag, color, hide, delete — under a view
+                    // where the item stays visible (e.g. "All Media") leaves the
+                    // set identical, so this never re-centers for those.
+                    .onChange(of: model.displayedSetRevision) { _, _ in
+                        // A delete changes the set AND repoints the selection
+                        // onto the in-slot survivor; re-centering would jump the
+                        // scroll. Skip for that one change.
+                        guard !model.suppressNextSelectionScroll else { return }
                         guard let sel = model.selectedItem else { return }
                         DispatchQueue.main.async {
                             guard let current = model.selectedItem, current == sel else { return }
