@@ -938,21 +938,11 @@ final class BrowserModel {
         // present item carries them, so "empty" tags persist in the sidebar.
         aiCategories = aiCategories.filter { present.contains($0.key) }
         facePersons = facePersons.filter { present.contains($0.key) }
-        // Drop a category filter that no longer matches anything.
-        if let filter = aiCategoryFilter, !aiCategories.values.contains(filter) {
-            aiCategoryFilter = nil
-        }
-        // Drop a person filter whose person no longer appears anywhere.
-        if let person = personFilter, !facePersons.values.contains(where: { $0.contains(person) }) {
-            personFilter = nil
-        }
-        // Drop a text-tag filter whose tag no longer exists (was deleted). An
-        // "empty" tag that still exists but currently matches nothing keeps the
-        // filter active (the grid just shows no items), so the filter only
-        // clears on an actual delete, not on a rescan.
-        if let filter = textTagFilter, !textTagOrder.contains(filter) {
-            textTagFilter = nil
-        }
+        // Drop category/person/text-tag filters that no longer match anything.
+        // An "empty" text tag that still exists keeps its filter active (the
+        // grid just shows no items), so a text-tag filter only clears on an
+        // actual tag delete, not on a rescan.
+        pruneDroppedFilters()
     }
 
     /// Drops any active type/extension chip filters that no longer have a
@@ -3754,11 +3744,18 @@ final class BrowserModel {
         rangeAnchor = ids.first
     }
 
-    /// Removes a set of (standardized) file URLs from every per-root scan
-    /// result and the flagged set, then rebuilds the merged state. Does not
-    /// touch the folder trees — empty folders simply remain until the next
-    /// refresh, which matches the existing refresh model.
+    /// Removes a set of (standardized) file URLs from the model after they've
+    /// been trashed. Does an incremental in-place removal rather than a full
+    /// `rebuildMerged()`: the merged `allItems` and `itemsByDirectory` are
+    /// already in their final sorted order, and deleting elements preserves
+    /// that order, so we just filter the trashed URLs out of the existing
+    /// structures (O(current items)) instead of re-concatenating every root
+    /// and re-sorting the whole library. The per-root scan results are updated
+    /// the same way so a later refresh/merge stays correct. Does not touch the
+    /// folder trees — empty folders simply remain until the next refresh,
+    /// which matches the existing refresh model.
     private func removeItemsFromModel(_ trashed: Set<URL>) {
+        // Per-root scan results: filter in place, preserving each list's order.
         for (root, result) in resultsByRoot {
             let newAll = result.allItems.filter { !trashed.contains($0.id.standardizedFileURL) }
             if newAll.count == result.allItems.count { continue }   // nothing here
@@ -3775,12 +3772,53 @@ final class BrowserModel {
                 tree: result.tree
             )
         }
+
+        // Merged state: drop the trashed items directly. `allItems` keeps its
+        // name sort and `itemsByDirectory` keeps each list's sort, so no
+        // re-sort is needed — only emptied directory buckets are removed.
+        allItems.removeAll { trashed.contains($0.id.standardizedFileURL) }
+        for (dir, items) in itemsByDirectory {
+            let kept = items.filter { !trashed.contains($0.id.standardizedFileURL) }
+            if kept.isEmpty {
+                itemsByDirectory[dir] = nil
+            } else if kept.count != items.count {
+                itemsByDirectory[dir] = kept
+            }
+        }
+
+        // Annotations for the removed files.
         flaggedItems.subtract(trashed)
+        hiddenItems.subtract(trashed)
         for url in trashed { colorTags[url] = nil }
         for url in trashed { textTags[url] = nil }
         for url in trashed { aiCategories[url] = nil }
         for url in trashed { facePersons[url] = nil }
-        rebuildMerged()
+
+        // Mirror the post-rebuild cleanup `rebuildMerged()` would have run, so
+        // chip/category/person/tag filters that now match nothing are dropped
+        // and the selection is reclamped. `clampSelection()` invalidates the
+        // display cache, which is what refreshes the grid/list.
+        pruneStaleChipFilters()
+        pruneDroppedFilters()
+        clampSelection()
+        if sortOrder == .codec { prefetchCodecs() }
+    }
+
+    /// The filter-dropping half of `pruneMissingMarks()` — clears category,
+    /// person, and text-tag filters that no longer match any present item.
+    /// Split out so the incremental delete path can reuse it without the
+    /// annotation-map pruning (that path clears the trashed files' annotations
+    /// directly). Factored to keep the two paths' filter behavior identical.
+    private func pruneDroppedFilters() {
+        if let filter = aiCategoryFilter, !aiCategories.values.contains(filter) {
+            aiCategoryFilter = nil
+        }
+        if let person = personFilter, !facePersons.values.contains(where: { $0.contains(person) }) {
+            personFilter = nil
+        }
+        if let filter = textTagFilter, !textTagOrder.contains(filter) {
+            textTagFilter = nil
+        }
     }
 
     // MARK: - Folder (sidebar) navigation
