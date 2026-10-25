@@ -200,12 +200,30 @@ struct BrowserGridView: View {
         // double-click delay. Command toggles, Shift extends a range.
         .onClick(
             single: { mods in
-                suppressScrollForID = item.id
                 if mods.command {
+                    // A ⌘-click that removes the primary item from the
+                    // selection makes some *other* already-selected item the
+                    // new primary (`selectedItem` moves to it). That's a
+                    // side-effect of deselecting, not a navigation, so it must
+                    // not scroll. Since the scroll is suppressed only for the id
+                    // the selection lands on, predict that id — the next
+                    // surviving selected item — and suppress it. (An ordinary
+                    // ⌘-click that *adds* or deselects a non-primary item lands
+                    // on this clicked item, so suppressing its id is correct
+                    // there too.)
+                    let deselectingPrimary = model.selectedItem == item.id
+                        && model.selectedItems.contains(item.id)
+                    if deselectingPrimary {
+                        suppressScrollForID = model.selectedItems.first { $0 != item.id }
+                    } else {
+                        suppressScrollForID = item.id
+                    }
                     model.toggleSelection(item.id)
                 } else if mods.shift {
+                    suppressScrollForID = item.id
                     model.extendSelection(to: item.id)
                 } else {
+                    suppressScrollForID = item.id
                     model.selectOnly(item.id)
                 }
                 gridFocused = true
