@@ -235,6 +235,11 @@ struct VideoPlayerView: View {
     /// flag/tag keys) keep working while a video happens to be showing.
     var capturesKeyboard: Bool = false
 
+    /// Lets the parent reach the surface's zoom state (to drive it from the
+    /// toolbar/keyboard and read back the current factor). Only the fullscreen
+    /// viewer passes this; inline previews leave the picture fit.
+    var onZoom: ((VideoZoomState) -> Void)? = nil
+
     /// True when the extension is one AVFoundation can't demux and mpv must
     /// handle. Reuses the single source of truth in `MediaItem`.
     private var needsMPV: Bool {
@@ -249,12 +254,14 @@ struct VideoPlayerView: View {
                 MPVVideoPlayerView(url: url, onController: onController,
                                    onPrevious: onPrevious, onNext: onNext,
                                    onArrow: onArrow,
-                                   capturesKeyboard: capturesKeyboard)
+                                   capturesKeyboard: capturesKeyboard,
+                                   onZoom: onZoom)
             } else {
                 AVVideoPlayerView(url: url, onController: onController,
                                   onPrevious: onPrevious, onNext: onNext,
                                   onArrow: onArrow,
-                                  capturesKeyboard: capturesKeyboard)
+                                  capturesKeyboard: capturesKeyboard,
+                                  onZoom: onZoom)
             }
         }
         .id(needsMPV)
@@ -270,21 +277,25 @@ struct AVVideoPlayerView: View {
     var onNext: (() -> Void)? = nil
     var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
     var capturesKeyboard: Bool = false
+    var onZoom: ((VideoZoomState) -> Void)? = nil
 
     @StateObject private var controller: VideoController
+    @StateObject private var zoom = VideoZoomState()
 
     init(url: URL,
          onController: ((any PlaybackController) -> Void)? = nil,
          onPrevious: (() -> Void)? = nil,
          onNext: (() -> Void)? = nil,
          onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil,
-         capturesKeyboard: Bool = false) {
+         capturesKeyboard: Bool = false,
+         onZoom: ((VideoZoomState) -> Void)? = nil) {
         self.url = url
         self.onController = onController
         self.onPrevious = onPrevious
         self.onNext = onNext
         self.onArrow = onArrow
         self.capturesKeyboard = capturesKeyboard
+        self.onZoom = onZoom
         _controller = StateObject(wrappedValue: VideoController(url: url))
     }
 
@@ -292,23 +303,33 @@ struct AVVideoPlayerView: View {
         VStack(spacing: 0) {
             // Video surface — AVPlayerView with its own controls disabled so
             // nothing is drawn over the frame. It also handles the spacebar.
-            PlayerSurface(
-                player: controller.player,
-                onToggle: { controller.togglePlay() },
-                onPrevious: onPrevious,
-                onNext: onNext,
-                onArrow: onArrow,
-                capturesKeyboard: capturesKeyboard
-            )
+            // Wrapped in the zoom container so pinch/toolbar zoom scales the
+            // picture without disturbing AVKit's internals.
+            ZoomableVideoContainer(zoom: zoom) {
+                PlayerSurface(
+                    player: controller.player,
+                    onToggle: { controller.togglePlay() },
+                    onPrevious: onPrevious,
+                    onNext: onNext,
+                    onArrow: onArrow,
+                    capturesKeyboard: capturesKeyboard
+                )
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             PlaybackControlBar(controller: controller)
         }
-        .onAppear { onController?(controller) }
+        .onAppear {
+            onController?(controller)
+            onZoom?(zoom)
+        }
         .onDisappear { controller.teardown() }
         .onChange(of: url) { _, newURL in
             controller.load(url: newURL)
+            // A fresh item starts fitted, never inheriting the old zoom.
+            zoom.fit()
             onController?(controller)
+            onZoom?(zoom)
         }
     }
 }
@@ -323,40 +344,49 @@ struct MPVVideoPlayerView: View {
     var onNext: (() -> Void)? = nil
     var onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil
     var capturesKeyboard: Bool = false
+    var onZoom: ((VideoZoomState) -> Void)? = nil
 
     @StateObject private var controller: MPVController
+    @StateObject private var zoom = VideoZoomState()
 
     init(url: URL,
          onController: ((any PlaybackController) -> Void)? = nil,
          onPrevious: (() -> Void)? = nil,
          onNext: (() -> Void)? = nil,
          onArrow: ((_ forward: Bool, _ shift: Bool) -> Void)? = nil,
-         capturesKeyboard: Bool = false) {
+         capturesKeyboard: Bool = false,
+         onZoom: ((VideoZoomState) -> Void)? = nil) {
         self.url = url
         self.onController = onController
         self.onPrevious = onPrevious
         self.onNext = onNext
         self.onArrow = onArrow
         self.capturesKeyboard = capturesKeyboard
+        self.onZoom = onZoom
         _controller = StateObject(wrappedValue: MPVController(url: url))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            MPVSurface(controller: controller, onPrevious: onPrevious, onNext: onNext,
-                       onArrow: onArrow, capturesKeyboard: capturesKeyboard)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZoomableVideoContainer(zoom: zoom) {
+                MPVSurface(controller: controller, onPrevious: onPrevious, onNext: onNext,
+                           onArrow: onArrow, capturesKeyboard: capturesKeyboard)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             PlaybackControlBar(controller: controller)
         }
         .onAppear {
             controller.start()
             onController?(controller)
+            onZoom?(zoom)
         }
         .onDisappear { controller.teardown() }
         .onChange(of: url) { _, newURL in
             controller.load(url: newURL)
+            zoom.fit()
             onController?(controller)
+            onZoom?(zoom)
         }
     }
 }

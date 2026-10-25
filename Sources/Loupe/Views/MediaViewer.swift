@@ -18,6 +18,10 @@ struct MediaViewer: View {
     /// libmpv) is driven through the `PlaybackController` protocol.
     @State private var videoController: (any PlaybackController)?
 
+    /// The active video's zoom state, so the toolbar zoom controls and the
+    /// ⌘+/−/0 hotkeys scale the picture and the "%" readout stays live.
+    @State private var videoZoom: VideoZoomState?
+
     /// Drives keyboard focus for the viewer. Set true on appear so arrow-key
     /// navigation and the other `onKeyPress` hotkeys work immediately after the
     /// viewer opens (e.g. from a double-click on a grid item), without the user
@@ -79,6 +83,7 @@ struct MediaViewer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { if showingSingleImage { zoomHotkeys } }
+            .background { if showingSingleVideo, let videoZoom { videoZoomHotkeys(videoZoom) } }
             // Bare "T" toggles the film strip whenever it's applicable.
             .background {
                 if canShowFilmStrip {
@@ -176,6 +181,7 @@ struct MediaViewer: View {
         .onChange(of: items.first?.id) { _, _ in
             if !showingSingleVideo {
                 videoController = nil
+                videoZoom = nil
                 clearViewerPlaybackController()
             }
             prefetchUpcomingImages()
@@ -399,7 +405,10 @@ struct MediaViewer: View {
                 onArrow: { forward, shift in _ = handleArrow(forward: forward, shift: shift) },
                 // Only the fullscreen viewer captures the transport keys; the
                 // sidebar/grid previews leave them to the browser's hotkeys.
-                capturesKeyboard: true
+                capturesKeyboard: true,
+                // Grab the surface's zoom state so the toolbar controls and
+                // ⌘+/−/0 hotkeys can scale the picture.
+                onZoom: { zoom in videoZoom = zoom }
             )
         case .pdf:
             PDFViewerRepresentable(url: item.url)
@@ -451,6 +460,8 @@ struct MediaViewer: View {
 
             if showingSingleImage {
                 zoomControls
+            } else if showingSingleVideo, let videoZoom {
+                VideoZoomControls(zoom: videoZoom)
             } else if isMulti {
                 Text("Grid")
                     .font(.caption)
@@ -569,6 +580,33 @@ struct MediaViewer: View {
                     videoController?.seek(toFraction: Double(digit) / 10.0)
                 }
             }
+        }
+        .disabled(model.showTagInput)
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    /// Invisible buttons carrying the video zoom shortcuts for a single video.
+    /// The bare number keys are already the percentage-seek keys here, so Fit
+    /// uses ⌘0 / bare Z only (never bare 0/1), and zoom in/out use the
+    /// symbol keys that don't clash with seeking.
+    @ViewBuilder
+    private func videoZoomHotkeys(_ zoom: VideoZoomState) -> some View {
+        ZStack {
+            // Zoom in: ⌘+, ⌘=, and bare = / +
+            hotkey("=", [.command]) { zoom.zoomIn() }
+            hotkey("+", [.command]) { zoom.zoomIn() }
+            hotkey("=", []) { zoom.zoomIn() }
+            hotkey("+", []) { zoom.zoomIn() }
+
+            // Zoom out: ⌘- and bare -
+            hotkey("-", [.command]) { zoom.zoomOut() }
+            hotkey("-", []) { zoom.zoomOut() }
+
+            // Fit: ⌘0 and bare Z (bare 0/1 are owned by the seek hotkeys).
+            hotkey("0", [.command]) { zoom.fit() }
+            hotkey("z", []) { zoom.fit() }
         }
         .disabled(model.showTagInput)
         .opacity(0)
