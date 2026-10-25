@@ -340,6 +340,17 @@ struct ContentView: View {
             Button("Zoom Grid In (plus)") { model.zoomGridIn() }
                 .keyboardShortcut("+", modifiers: .command)
                 .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
+
+            // ⌘F focuses the toolbar search field — the standard macOS "Find"
+            // shortcut. Lives here (not the menu bar) because the field's focus
+            // is view-local `@FocusState`. Suspended while the viewer or the
+            // tag-input overlay owns the keyboard, and while the field is
+            // already focused (a disabled Button releases ⌘F so the focused
+            // field gets native behavior). ⇧⌘F / ⌥⌘F stay with their own
+            // commands; only plain ⌘F lands here.
+            Button("Find") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
