@@ -416,12 +416,12 @@ actor ThumbnailProvider {
         return (maxCellPoints * maxScale).rounded()
     }()
 
-    /// Byte budget for cached thumbnails: 20% of physical RAM. NSCache evicts
+    /// Byte budget for cached thumbnails: 50% of physical RAM. NSCache evicts
     /// least-recently-used entries once the summed per-image cost exceeds this.
     /// Scaling to RAM lets memory-rich machines keep more thumbnails warm while
     /// staying conservative on smaller ones.
     private static let cacheByteLimit: Int = {
-        let fraction = 0.2
+        let fraction = 0.5
         let total = Double(ProcessInfo.processInfo.physicalMemory)
         return Int((total * fraction).rounded())
     }()
