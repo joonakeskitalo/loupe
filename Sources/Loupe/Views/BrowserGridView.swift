@@ -523,11 +523,30 @@ struct BrowserGridView: View {
                         // one-shot are honored just like the selection handler.
                         .onChange(of: model.displayRevision) { _, _ in
                             guard marqueeRect == nil else { return }
-                            guard let sel = model.selectedItem,
-                                  let target = scrollTarget(for: sel) else { return }
-                            // No animation here: a filter change is a layout
-                            // jump, not a cursor move, so snap rather than glide.
-                            proxy.scrollTo(target, anchor: .center)
+                            guard let sel = model.selectedItem else { return }
+                            // Defer to the next runloop tick so the grid has
+                            // realized its new content before we scroll. When an
+                            // annotation removes the selected cell from the
+                            // filtered set (e.g. flagging under the "Unmarked"
+                            // Library view, which auto-advances to the next
+                            // item), the display mutation and the new selection
+                            // land in the same update pass; scrolling inline
+                            // resolves against the old, taller layout and the
+                            // LazyVGrid then snaps to the top. Waiting a tick
+                            // lets the successor cell exist so the scroll targets
+                            // it and keeps it in view. The selection is re-read
+                            // in the deferred block so a rapid follow-up change
+                            // wins.
+                            DispatchQueue.main.async {
+                                guard marqueeRect == nil,
+                                      let current = model.selectedItem,
+                                      current == sel,
+                                      let target = scrollTarget(for: current) else { return }
+                                // No animation here: a filter change is a layout
+                                // jump, not a cursor move, so snap rather than
+                                // glide.
+                                proxy.scrollTo(target, anchor: .center)
+                            }
                         }
                         // The grid subtree is torn down and rebuilt whenever the
                         // displayed set passes through empty and back — which
@@ -603,6 +622,22 @@ struct BrowserGridView: View {
                 // focus unconditionally here would steal it from the search
                 // field mid-type.
                 .onAppear { if canAutoFocus { gridFocused = true } }
+                // Reclaim keyboard focus when the displayed set changes while
+                // the grid stays mounted. Annotating the selected item under a
+                // Library filter that hides it (e.g. flagging under "Unmarked")
+                // auto-advances the selection to the next item, but removing the
+                // old selected cell from the LazyVGrid tears out the responder
+                // that held first responder, so arrow keys go dead until the
+                // user clicks a cell. Re-asserting focus here keeps keyboard
+                // navigation flowing, mirroring the viewer/tag-input reclaim
+                // below. Gated so it never steals focus from the search field or
+                // while an overlay owns the keyboard. Deferred a tick so it runs
+                // after the grid has rebuilt its content.
+                .onChange(of: model.displayRevision) { _, _ in
+                    guard canAutoFocus, !searchFocused,
+                          !model.isViewerPresented, !model.showTagInput else { return }
+                    DispatchQueue.main.async { gridFocused = true }
+                }
                 // Reclaim keyboard focus when the viewer closes. The grid stays
                 // mounted beneath the viewer overlay, so its `.onAppear` never
                 // fires again on dismiss; without this the arrow keys stay dead

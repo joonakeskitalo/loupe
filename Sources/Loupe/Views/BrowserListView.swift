@@ -115,12 +115,46 @@ struct BrowserListView: View {
                             }
                         }
                     }
+                    // Keep the selection in view when the displayed set changes
+                    // while the list stays mounted. Annotating the selected row
+                    // under a Library filter that hides it (e.g. flagging under
+                    // "Unmarked") auto-advances to the next item; the row
+                    // removal and the new selection land in the same update
+                    // pass, so an inline scroll resolves against the old layout
+                    // and the LazyVStack snaps to the top. Defer a runloop tick
+                    // so the successor row exists before we scroll to it. The
+                    // selection is re-read in the deferred block so a rapid
+                    // follow-up change wins. Snap (no animation): a filter change
+                    // is a layout jump, not a cursor move.
+                    .onChange(of: model.displayRevision) { _, _ in
+                        guard let sel = model.selectedItem else { return }
+                        DispatchQueue.main.async {
+                            guard let current = model.selectedItem, current == sel else { return }
+                            proxy.scrollTo(current, anchor: .center)
+                        }
+                    }
                   }
                 }
                 .focusable()
                 .focused($listFocused)
                 .focusEffectDisabled()
                 .onAppear { if canAutoFocus { listFocused = true } }
+                // Reclaim keyboard focus when the displayed set changes while
+                // the list stays mounted. Annotating the selected row under a
+                // Library filter that hides it (e.g. flagging under "Unmarked")
+                // auto-advances the selection, but removing the old selected row
+                // from the LazyVStack tears out the responder that held first
+                // responder, so arrow keys go dead until the user clicks a row.
+                // Re-asserting focus here keeps keyboard navigation flowing,
+                // mirroring the viewer/tag-input reclaim below. Gated so it
+                // never steals focus from the search field or while an overlay
+                // owns the keyboard; deferred a tick so it runs after the list
+                // has rebuilt its rows.
+                .onChange(of: model.displayRevision) { _, _ in
+                    guard canAutoFocus, !searchFocused,
+                          !model.isViewerPresented, !model.showTagInput else { return }
+                    DispatchQueue.main.async { listFocused = true }
+                }
                 // Reclaim keyboard focus when the viewer closes. The list stays
                 // mounted beneath the viewer overlay, so its `.onAppear` never
                 // fires again on dismiss; without this the arrow keys stay dead
