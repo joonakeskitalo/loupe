@@ -92,7 +92,7 @@ final class BrowserModel {
                let item = primarySelectedItem {
                 selectedFolder = item.parentDirectory
             }
-            clampSelection()
+            requestClampSelection()
         }
     }
     var sortOrder: SortOrder = .name {
@@ -341,7 +341,7 @@ final class BrowserModel {
     /// All folders selected in the sidebar (used in `.folders` mode). Supports
     /// multi-selection; the grid shows the union of every selected folder.
     var selectedFolders: Set<URL> = [] {
-        didSet { clampSelection() }
+        didSet { requestClampSelection() }
     }
 
     /// The anchor/primary selected folder: the folder most recently clicked and
@@ -367,7 +367,7 @@ final class BrowserModel {
     /// When true, a selected folder also shows media from all of its
     /// subdirectories; when false, only files directly inside it.
     var includeSubfolders = false {
-        didSet { clampSelection() }
+        didSet { requestClampSelection() }
     }
 
     /// Selects a single folder, replacing any existing selection.
@@ -440,15 +440,17 @@ final class BrowserModel {
     /// turning this on clears any active color-tag filter.
     var showFlaggedOnly = false {
         didSet {
-            if showFlaggedOnly {
-                if showHiddenOnly { showHiddenOnly = false }
-                if showUnmarkedOnly { showUnmarkedOnly = false }
-                if colorTagFilter != nil { colorTagFilter = nil }
-                if aiCategoryFilter != nil { aiCategoryFilter = nil }
-                if personFilter != nil { personFilter = nil }
-                if textTagFilter != nil { textTagFilter = nil }
+            withFilterMutation {
+                if showFlaggedOnly {
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -457,15 +459,17 @@ final class BrowserModel {
     /// Mutually exclusive with the other Library views.
     var showUnmarkedOnly = false {
         didSet {
-            if showUnmarkedOnly {
-                if showFlaggedOnly { showFlaggedOnly = false }
-                if showHiddenOnly { showHiddenOnly = false }
-                if colorTagFilter != nil { colorTagFilter = nil }
-                if aiCategoryFilter != nil { aiCategoryFilter = nil }
-                if personFilter != nil { personFilter = nil }
-                if textTagFilter != nil { textTagFilter = nil }
+            withFilterMutation {
+                if showUnmarkedOnly {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -486,15 +490,17 @@ final class BrowserModel {
     /// other Library filters, like `showFlaggedOnly`.
     var showHiddenOnly = false {
         didSet {
-            if showHiddenOnly {
-                if showFlaggedOnly { showFlaggedOnly = false }
-                if showUnmarkedOnly { showUnmarkedOnly = false }
-                if colorTagFilter != nil { colorTagFilter = nil }
-                if aiCategoryFilter != nil { aiCategoryFilter = nil }
-                if personFilter != nil { personFilter = nil }
-                if textTagFilter != nil { textTagFilter = nil }
+            withFilterMutation {
+                if showHiddenOnly {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -518,14 +524,14 @@ final class BrowserModel {
     // instance, would leave it empty — so the toggle yields there).
 
     /// When true, flagged items are hidden from the grid/list.
-    var hideFlaggedItems = false { didSet { clampSelection() } }
+    var hideFlaggedItems = false { didSet { requestClampSelection() } }
 
     /// When true, text-tagged items are hidden from the grid/list.
-    var hideTaggedItems = false { didSet { clampSelection() } }
+    var hideTaggedItems = false { didSet { requestClampSelection() } }
 
     /// When true, color-coded (color-tagged) items are hidden from the
     /// grid/list.
-    var hideColorCodedItems = false { didSet { clampSelection() } }
+    var hideColorCodedItems = false { didSet { requestClampSelection() } }
 
     /// Distinct text tags in the order they were first created this session, so
     /// the overlay and sidebar list them in creation order rather than by
@@ -537,15 +543,17 @@ final class BrowserModel {
     /// no color filter is active. Mutually exclusive with `showFlaggedOnly`.
     var colorTagFilter: ColorTag? {
         didSet {
-            if colorTagFilter != nil {
-                if showFlaggedOnly { showFlaggedOnly = false }
-                if showHiddenOnly { showHiddenOnly = false }
-                if showUnmarkedOnly { showUnmarkedOnly = false }
-                if aiCategoryFilter != nil { aiCategoryFilter = nil }
-                if personFilter != nil { personFilter = nil }
-                if textTagFilter != nil { textTagFilter = nil }
+            withFilterMutation {
+                if colorTagFilter != nil {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -554,15 +562,17 @@ final class BrowserModel {
     /// Library filters.
     var textTagFilter: String? {
         didSet {
-            if textTagFilter != nil {
-                if showFlaggedOnly { showFlaggedOnly = false }
-                if showHiddenOnly { showHiddenOnly = false }
-                if showUnmarkedOnly { showUnmarkedOnly = false }
-                if colorTagFilter != nil { colorTagFilter = nil }
-                if aiCategoryFilter != nil { aiCategoryFilter = nil }
-                if personFilter != nil { personFilter = nil }
+            withFilterMutation {
+                if textTagFilter != nil {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -580,15 +590,17 @@ final class BrowserModel {
     /// with the person filter and the flagged/color-tag Library views.
     var aiCategoryFilter: String? {
         didSet {
-            if aiCategoryFilter != nil {
-                if showFlaggedOnly { showFlaggedOnly = false }
-                if showHiddenOnly { showHiddenOnly = false }
-                if showUnmarkedOnly { showUnmarkedOnly = false }
-                if colorTagFilter != nil { colorTagFilter = nil }
-                if personFilter != nil { personFilter = nil }
-                if textTagFilter != nil { textTagFilter = nil }
+            withFilterMutation {
+                if aiCategoryFilter != nil {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -713,15 +725,17 @@ final class BrowserModel {
     /// and the flagged/color-tag Library views.
     var personFilter: Int? {
         didSet {
-            if personFilter != nil {
-                if showFlaggedOnly { showFlaggedOnly = false }
-                if showHiddenOnly { showHiddenOnly = false }
-                if showUnmarkedOnly { showUnmarkedOnly = false }
-                if colorTagFilter != nil { colorTagFilter = nil }
-                if aiCategoryFilter != nil { aiCategoryFilter = nil }
-                if textTagFilter != nil { textTagFilter = nil }
+            withFilterMutation {
+                if personFilter != nil {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
+                }
+                requestClampSelection()
             }
-            clampSelection()
         }
     }
 
@@ -746,12 +760,12 @@ final class BrowserModel {
 
     /// Active media-type chip filters (empty = all types).
     var selectedKinds: Set<MediaKind> = [] {
-        didSet { clampSelection() }
+        didSet { requestClampSelection() }
     }
 
     /// Active file-extension chip filters, lowercased (empty = all extensions).
     var selectedExtensions: Set<String> = [] {
-        didSet { clampSelection() }
+        didSet { requestClampSelection() }
     }
 
     /// Whether the full-screen/detail viewer is presented.
@@ -995,28 +1009,30 @@ final class BrowserModel {
     /// groupings that depend on them, returning the window's marks to a clean
     /// slate. Does not touch the open folders.
     func clearAllAnnotations() {
-        flaggedItems = []
-        hiddenItems = []
-        colorTags = [:]
-        textTags = [:]
-        textTagOrder = []
-        aiCategories = [:]
-        facePersons = [:]
+        withFilterMutation {
+            flaggedItems = []
+            hiddenItems = []
+            colorTags = [:]
+            textTags = [:]
+            textTagOrder = []
+            aiCategories = [:]
+            facePersons = [:]
 
-        // Drop every filter / Library view that keyed off those annotations.
-        showFlaggedOnly = false
-        showHiddenOnly = false
-        showUnmarkedOnly = false
-        colorTagFilter = nil
-        textTagFilter = nil
-        aiCategoryFilter = nil
-        personFilter = nil
-        hideFlaggedItems = false
-        hideTaggedItems = false
-        hideColorCodedItems = false
-        if grouping == .person || grouping == .category { grouping = .none }
+            // Drop every filter / Library view that keyed off those annotations.
+            showFlaggedOnly = false
+            showHiddenOnly = false
+            showUnmarkedOnly = false
+            colorTagFilter = nil
+            textTagFilter = nil
+            aiCategoryFilter = nil
+            personFilter = nil
+            hideFlaggedItems = false
+            hideTaggedItems = false
+            hideColorCodedItems = false
+            if grouping == .person || grouping == .category { grouping = .none }
 
-        clampSelection()
+            requestClampSelection()
+        }
     }
 
     /// Removes all folders AND clears every annotation/filter, giving a
@@ -1593,38 +1609,44 @@ final class BrowserModel {
     /// just this type (clicking the only active chip clears it). An additive
     /// click (Shift/Command) toggles this type within the current selection.
     func selectKind(_ kind: MediaKind, additive: Bool) {
-        if additive {
-            if selectedKinds.contains(kind) {
-                selectedKinds.remove(kind)
+        withFilterMutation {
+            if additive {
+                if selectedKinds.contains(kind) {
+                    selectedKinds.remove(kind)
+                } else {
+                    selectedKinds.insert(kind)
+                }
             } else {
-                selectedKinds.insert(kind)
+                let isOnlyThis = selectedKinds == [kind] && selectedExtensions.isEmpty
+                selectedExtensions = []
+                selectedKinds = isOnlyThis ? [] : [kind]
             }
-        } else {
-            let isOnlyThis = selectedKinds == [kind] && selectedExtensions.isEmpty
-            selectedExtensions = []
-            selectedKinds = isOnlyThis ? [] : [kind]
         }
     }
 
     /// Click an extension chip. Mirrors `selectKind`.
     func selectExtension(_ ext: String, additive: Bool) {
         let key = ext.lowercased()
-        if additive {
-            if selectedExtensions.contains(key) {
-                selectedExtensions.remove(key)
+        withFilterMutation {
+            if additive {
+                if selectedExtensions.contains(key) {
+                    selectedExtensions.remove(key)
+                } else {
+                    selectedExtensions.insert(key)
+                }
             } else {
-                selectedExtensions.insert(key)
+                let isOnlyThis = selectedExtensions == [key] && selectedKinds.isEmpty
+                selectedKinds = []
+                selectedExtensions = isOnlyThis ? [] : [key]
             }
-        } else {
-            let isOnlyThis = selectedExtensions == [key] && selectedKinds.isEmpty
-            selectedKinds = []
-            selectedExtensions = isOnlyThis ? [] : [key]
         }
     }
 
     func clearChipFilters() {
-        selectedKinds = []
-        selectedExtensions = []
+        withFilterMutation {
+            selectedKinds = []
+            selectedExtensions = []
+        }
     }
 
     /// Human-readable description of where search is scoped right now.
@@ -1880,6 +1902,53 @@ final class BrowserModel {
                 }
             }
             .map(\.item)
+    }
+
+    // MARK: - Filter mutation batching
+
+    /// Nesting depth of an in-flight `withFilterMutation` batch. While > 0, the
+    /// filter `didSet`s skip their per-assignment `clampSelection()` and instead
+    /// record the need in `pendingClamp`; a single clamp runs when the outermost
+    /// batch unwinds.
+    ///
+    /// This collapses the "filter switch storm": a sidebar action that sets
+    /// several mutually-exclusive filters in sequence (e.g. "All Media" clears
+    /// seven of them) would otherwise reclamp once per assignment AND again for
+    /// every reentrant clear each `didSet` performs, each reclamp running a full
+    /// `invalidateDisplayCache()` + `displayedItems` rebuild (and, under
+    /// orientation/type grouping, a cancel+relaunch of the metadata prefetch).
+    /// On a large folder those repeated synchronous O(n) passes on the main
+    /// thread are the beach-ball freeze. Batching does the work once.
+    @ObservationIgnored private var filterMutationDepth = 0
+
+    /// Set by `requestClampSelection()` when a clamp was asked for while a batch
+    /// was open, so the batch knows to clamp once on unwind.
+    @ObservationIgnored private var pendingClamp = false
+
+    /// Runs `body` as a single filter-mutation batch: any `clampSelection()`
+    /// the mutations trigger is deferred and performed exactly once when the
+    /// outermost batch completes. Reentrant-safe (nested calls share the one
+    /// trailing clamp). Use it to wrap UI actions that flip several filters at
+    /// once so the displayed set is rebuilt a single time.
+    func withFilterMutation(_ body: () -> Void) {
+        filterMutationDepth += 1
+        body()
+        filterMutationDepth -= 1
+        if filterMutationDepth == 0, pendingClamp {
+            pendingClamp = false
+            clampSelection()
+        }
+    }
+
+    /// Called by the filter `didSet`s. Clamps immediately when no batch is open;
+    /// otherwise defers to the enclosing `withFilterMutation` so a cascade of
+    /// filter changes reclamps only once.
+    private func requestClampSelection() {
+        if filterMutationDepth > 0 {
+            pendingClamp = true
+        } else {
+            clampSelection()
+        }
     }
 
     // MARK: - Selection helpers
@@ -2450,9 +2519,11 @@ final class BrowserModel {
     /// Unhide every item, and leave the "Hidden" Library view if it's active
     /// (it would otherwise show an empty list).
     func clearHidden() {
-        hiddenItems = []
-        if showHiddenOnly { showHiddenOnly = false }
-        clampSelection()
+        withFilterMutation {
+            hiddenItems = []
+            if showHiddenOnly { showHiddenOnly = false }
+            requestClampSelection()
+        }
     }
 
     var hiddenCount: Int { hiddenItems.count }
@@ -2690,16 +2761,20 @@ final class BrowserModel {
             textTags[id] = updated.isEmpty ? nil : updated
         }
         textTagOrder.removeAll { $0 == tag }
-        if textTagFilter == tag { textTagFilter = nil }
-        clampSelection()
+        withFilterMutation {
+            if textTagFilter == tag { textTagFilter = nil }
+            requestClampSelection()
+        }
     }
 
     /// Removes every text tag in the window.
     func clearTextTags() {
-        textTags = [:]
-        textTagOrder = []
-        textTagFilter = nil
-        clampSelection()
+        withFilterMutation {
+            textTags = [:]
+            textTagOrder = []
+            textTagFilter = nil
+            requestClampSelection()
+        }
     }
 
     // MARK: - AI classification
@@ -3348,10 +3423,12 @@ final class BrowserModel {
     /// Clear every AI category in the window and drop any active category
     /// filter/grouping so the grid returns to a flat, unfiltered view.
     func clearAICategories() {
-        aiCategories = [:]
-        aiCategoryFilter = nil
-        if grouping == .category { grouping = .none }
-        clampSelection()
+        withFilterMutation {
+            aiCategories = [:]
+            aiCategoryFilter = nil
+            if grouping == .category { grouping = .none }
+            requestClampSelection()
+        }
     }
 
     // MARK: - AI category editing (manual corrections)
@@ -3381,9 +3458,11 @@ final class BrowserModel {
         for (id, category) in aiCategories where category == source {
             aiCategories[id] = destination
         }
-        if aiCategoryFilter == source { aiCategoryFilter = destination }
-        invalidateDisplayCache()
-        clampSelection()
+        withFilterMutation {
+            if aiCategoryFilter == source { aiCategoryFilter = destination }
+            invalidateDisplayCache()
+            requestClampSelection()
+        }
     }
 
     /// Rename a category in place (relabels every item carrying it).
@@ -3427,9 +3506,11 @@ final class BrowserModel {
         for (id, value) in aiCategories where value == category {
             aiCategories[id] = ""
         }
-        if aiCategoryFilter == category { aiCategoryFilter = nil }
-        invalidateDisplayCache()
-        clampSelection()
+        withFilterMutation {
+            if aiCategoryFilter == category { aiCategoryFilter = nil }
+            invalidateDisplayCache()
+            requestClampSelection()
+        }
     }
 
     // MARK: - Face recognition
@@ -3713,10 +3794,12 @@ final class BrowserModel {
 
     /// Clear all recognized people and drop any person filter/grouping.
     func clearFaces() {
-        facePersons = [:]
-        personFilter = nil
-        if grouping == .person { grouping = .none }
-        clampSelection()
+        withFilterMutation {
+            facePersons = [:]
+            personFilter = nil
+            if grouping == .person { grouping = .none }
+            requestClampSelection()
+        }
     }
 
     // MARK: - People editing (manual corrections)
@@ -3733,9 +3816,11 @@ final class BrowserModel {
             updated.insert(destination)
             facePersons[id] = updated
         }
-        if personFilter == source { personFilter = destination }
-        invalidateDisplayCache()
-        clampSelection()
+        withFilterMutation {
+            if personFilter == source { personFilter = destination }
+            invalidateDisplayCache()
+            requestClampSelection()
+        }
     }
 
     /// Move the target files (clicked item or selection) to `person`: the
@@ -3813,9 +3898,11 @@ final class BrowserModel {
             updated.remove(person)
             facePersons[id] = updated
         }
-        if personFilter == person { personFilter = nil }
-        invalidateDisplayCache()
-        clampSelection()
+        withFilterMutation {
+            if personFilter == person { personFilter = nil }
+            invalidateDisplayCache()
+            requestClampSelection()
+        }
     }
 
     // MARK: - File actions
