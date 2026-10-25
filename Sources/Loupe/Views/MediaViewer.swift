@@ -410,7 +410,7 @@ struct MediaViewer: View {
 
             if model.canTrashSelection {
                 Button {
-                    model.moveToTrash()
+                    Task { await model.moveToTrash() }
                 } label: {
                     Image(systemName: "trash")
                         .font(.body)
@@ -620,7 +620,7 @@ struct MediaViewer: View {
     /// Disabled (releasing the shortcut) when there's nothing to trash.
     @ViewBuilder
     private var trashHotkey: some View {
-        hotkey(.deleteBackspace, .command) { model.moveToTrash() }
+        hotkey(.deleteBackspace, .command) { Task { await model.moveToTrash() } }
             .disabled(!model.canTrashSelection || model.showTagInput)
             .opacity(0)
             .frame(width: 0, height: 0)

@@ -213,7 +213,7 @@ struct LoupeCommands: Commands {
             Button("Clear People") { model?.clearFaces() }
                 .disabled((model?.withFacesCount ?? 0) == 0)
 
-            Button("Move to Trash") { model?.moveToTrash() }
+            Button("Move to Trash") { if let model { Task { await model.moveToTrash() } } }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 // A disabled Button releases its shortcut, so gating on
                 // eligibility means the menu owns ⌘⌫ only when it should (not

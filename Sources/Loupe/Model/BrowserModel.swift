@@ -3730,8 +3730,17 @@ final class BrowserModel {
     /// full rescan. The selection advances to the next surviving item in
     /// display order so keyboard-driven culling stays on a sensible cursor, and
     /// the viewer closes if nothing is left to show.
+    ///
+    /// `async` on purpose: `FileManager.trashItem` is a synchronous, blocking
+    /// filesystem operation (it resolves the item, moves the data to the
+    /// volume's trash, and records Put-Back metadata), and the loop is serial.
+    /// Running it on the `@MainActor` stalled the run loop — a visible beachball
+    /// when trashing many files at once, large files, or anything on a slow
+    /// volume (external HDD / network mount). The trash I/O is hopped onto a
+    /// detached task; only the model mutation (which must stay on the main
+    /// actor) runs here. Callers invoke it from a `Task`.
     @discardableResult
-    func moveToTrash(_ item: MediaItem? = nil) -> Int {
+    func moveToTrash(_ item: MediaItem? = nil) async -> Int {
         let urls = actionURLs(preferring: item)
         guard !urls.isEmpty else { return 0 }
 
@@ -3747,18 +3756,24 @@ final class BrowserModel {
         // multi-image view can be re-formed at the same size afterward.
         let selectedCountBeforeTrash = selectedItems.count
 
-        var trashed: Set<URL> = []
-        let fm = FileManager.default
-        for url in urls {
-            do {
-                try fm.trashItem(at: url, resultingItemURL: nil)
-                trashed.insert(url.standardizedFileURL)
-            } catch {
-                // Skip files that can't be trashed (e.g. permissions); the rest
-                // still go. The failed file simply stays in the view.
-                NSLog("Loupe: failed to trash \(url.path): \(error.localizedDescription)")
+        // The blocking Trash moves run off the main thread so the UI stays
+        // responsive; we come back with the set that actually made it to the
+        // Trash and update the model on the main actor.
+        let trashed: Set<URL> = await Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            var done: Set<URL> = []
+            for url in urls {
+                do {
+                    try fm.trashItem(at: url, resultingItemURL: nil)
+                    done.insert(url.standardizedFileURL)
+                } catch {
+                    // Skip files that can't be trashed (e.g. permissions); the
+                    // rest still go. The failed file simply stays in the view.
+                    NSLog("Loupe: failed to trash \(url.path): \(error.localizedDescription)")
+                }
             }
-        }
+            return done
+        }.value
 
         guard !trashed.isEmpty else { return 0 }
 

@@ -792,7 +792,7 @@ struct BrowserGridView: View {
         Divider()
 
         Button("Move to Trash\(suffix)", systemImage: "trash", role: .destructive) {
-            model.moveToTrash(item)
+            Task { await model.moveToTrash(item) }
         }
         // No .keyboardShortcut here: a shortcut on a context-menu button is
         // registered globally for every item while the grid is visible, so
