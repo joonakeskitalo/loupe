@@ -546,14 +546,23 @@ private struct WindowTabbingConfigurator: NSViewRepresentable {
             window.tabbingIdentifier = Self.tabbingIdentifier
             window.tabbingMode = .preferred
 
-            // Join this freshly attached window to an existing Loupe window's
-            // tab group so new windows/tabs open IN the same window by default.
+            // Only force a merge for a window that opened STANDALONE (⌘N /
+            // openWindow). A window created by `newWindowForTab:` (⌘T) is
+            // already placed in its source window's tab group by AppKit, so
+            // re-adding it here would reparent an already-tabbed window and
+            // make it visibly flicker/jump. `tabGroup.windows.count > 1` means
+            // it's already sharing a group — leave it alone.
+            //
+            // `tabGroup` is non-nil even for a lone window, so guard on the
+            // member count rather than on `tabGroup != nil`.
+            if let group = window.tabGroup, group.windows.count > 1 { return }
+
             // `tabbingMode = .preferred` alone defers to the macOS "Prefer tabs
             // when opening documents" system setting, so with that set to
-            // "manually"/"in full screen only" a new window floated free. Force
-            // the merge: find another visible Loupe window that isn't already
-            // sharing this one's tab group and add this window as a tab of it.
-            guard (window.tabGroup?.windows.count ?? 0) <= 1 else { return }
+            // "manually"/"in full screen only" a new standalone window floated
+            // free. Force the merge: find another visible Loupe window that
+            // isn't already sharing this one's tab group and add this window as
+            // a tab of it.
             let host = NSApp.windows.first { other in
                 other !== window
                     && other.tabbingIdentifier == Self.tabbingIdentifier

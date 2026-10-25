@@ -140,15 +140,14 @@ enum WindowTabs {
     static func newTab(openWindow: () -> Void) {
         if let window = NSApp.keyWindow,
            window.responds(to: #selector(NSWindow.newWindowForTab(_:))) {
+            // `newWindowForTab:` creates the new window AND adds it to this
+            // window's tab group in one atomic AppKit step, so the tab never
+            // appears as a standalone window first. We deliberately do NOT
+            // re-tab or re-order it here: doing so reparents a window that is
+            // already correctly tabbed, which makes it flicker/jump. The
+            // configurator on the new window likewise skips merging once it
+            // sees it is already in a tab group.
             window.newWindowForTab(nil)
-            // Keep the new tab grouped with the window it was spawned from even
-            // if the system would otherwise float it (belt-and-suspenders when
-            // the global "prefer tabs" setting is off).
-            if let newWindow = NSApp.keyWindow, newWindow != window,
-               window.tabGroup?.windows.contains(newWindow) == false {
-                window.addTabbedWindow(newWindow, ordered: .above)
-                newWindow.makeKeyAndOrderFront(nil)
-            }
             return
         }
         openWindow()
