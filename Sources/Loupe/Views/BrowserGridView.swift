@@ -287,6 +287,10 @@ struct BrowserGridView: View {
     /// How many seconds O / U step the preview sidebar's video.
     private static let previewSeekSeconds: Double = 5
 
+    /// How many seconds ⇧O / ⇧U step the preview sidebar's video — a bigger,
+    /// one-minute jump, matching the viewer's ⇧O / ⇧U.
+    private static let previewSeekMinuteSeconds: Double = 60
+
     /// Number of columns that fit in a given width, matching the adaptive grid.
     /// Used as a fallback before any cells have reported their frames.
     private func columnCount(for width: CGFloat) -> Int {
@@ -897,14 +901,23 @@ struct BrowserGridView: View {
         }
 
         // O / U step the preview sidebar's video forward / backward (only
-        // meaningful while the preview sidebar is showing a video). Handled
-        // before the navigation mapping so they don't fall through to it.
-        if press.modifiers.isEmpty, press.key == KeyEquivalent("o") {
-            if model.seekPreviewVideo(by: Self.previewSeekSeconds) { return .handled }
-            return .ignored
-        }
-        if press.modifiers.isEmpty, press.key == KeyEquivalent("u") {
-            if model.seekPreviewVideo(by: -Self.previewSeekSeconds) { return .handled }
+        // meaningful while the preview sidebar is showing a video). ⇧O / ⇧U
+        // make the bigger one-minute jump, matching the viewer. Handled before
+        // the navigation mapping so they don't fall through to it. Only plain
+        // or Shift-only presses count — any other modifier (⌘/⌃/⌥) falls
+        // through so it isn't swallowed here.
+        // Match on the lowercased character so a Shift-held press (which some
+        // paths deliver as "O"/"U") is still recognized; Shift is read from
+        // `press.modifiers`, not the key's case.
+        let seekChar = press.characters.lowercased()
+        if seekChar == "o" || seekChar == "u" {
+            let onlyShiftOrNone = press.modifiers.subtracting(.shift).isEmpty
+            guard onlyShiftOrNone else { return .ignored }
+            let magnitude = press.modifiers.contains(.shift)
+                ? Self.previewSeekMinuteSeconds
+                : Self.previewSeekSeconds
+            let delta = seekChar == "o" ? magnitude : -magnitude
+            if model.seekPreviewVideo(by: delta) { return .handled }
             return .ignored
         }
 
