@@ -85,6 +85,8 @@ struct ItemInfoSidebar: View {
                     }
                 }
 
+                RenameSection(model: model, item: nil)
+
                 if items.contains(where: { $0.kind == .image }) {
                     ExportSection(model: model, item: nil)
                 }
@@ -204,6 +206,8 @@ private struct SingleItemInfo: View {
                         .controlSize(.small)
                         .padding(.top, 2)
                 }
+
+                RenameSection(model: model, item: item)
 
                 if item.kind == .image {
                     ExportSection(model: model, item: item)
@@ -789,5 +793,230 @@ private struct InfoRow: View {
                 .textSelection(.enabled)
         }
         .font(.callout)
+    }
+}
+
+/// Bulk-rename controls embedded in the info sidebar. Works for both a single
+/// file and a multi-selection: it operates on whatever `BrowserModel` resolves
+/// as the rename targets (`item` scopes a single-item panel; `nil` targets the
+/// whole selection, matching the export sections' convention).
+///
+/// Each enabled component (prepend / append / number sequence / parent folder /
+/// current date) composes into the new name, and a live preview shows the first
+/// couple of results before anything touches disk. The number sequence follows
+/// on-screen order so it lines up with what the user sees in the grid.
+private struct RenameSection: View {
+    @Bindable var model: BrowserModel
+    var item: MediaItem?
+
+    @State private var config = BulkRenameConfig()
+    @State private var isRenaming = false
+    // Re-evaluated on each render so the date preview stays current; captured
+    // once at apply time inside the model.
+    private var previewDate: Date { Date() }
+
+    var body: some View {
+        InfoSection(title: "Bulk Rename") {
+            VStack(alignment: .leading, spacing: 12) {
+                prependAppend
+                Divider()
+                numberingControls
+                Divider()
+                parentFolderControls
+                dateControls
+                Divider()
+                preview
+                renameButton
+            }
+        }
+    }
+
+    // MARK: Prepend / append
+
+    @ViewBuilder
+    private var prependAppend: some View {
+        labeledField("Prepend", text: $config.prepend, placeholder: "text before")
+        labeledField("Append", text: $config.append, placeholder: "text after")
+    }
+
+    private func labeledField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+        }
+    }
+
+    // MARK: Number sequence
+
+    @ViewBuilder
+    private var numberingControls: some View {
+        Toggle("Number Sequence", isOn: $config.numbering)
+            .controlSize(.small)
+
+        if config.numbering {
+            VStack(alignment: .leading, spacing: 6) {
+                affixPicker(selection: $config.numberAffix)
+
+                HStack(spacing: 6) {
+                    stepperRow("Start", value: $config.numberStart, range: 0...1_000_000)
+                }
+                HStack(spacing: 6) {
+                    stepperRow("Step", value: $config.numberStep, range: 1...1000)
+                }
+                HStack(spacing: 6) {
+                    stepperRow("Digits", value: $config.numberPadding, range: 1...8)
+                }
+            }
+            .padding(.leading, 4)
+        }
+    }
+
+    private func stepperRow(_ label: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+            TextField("", value: value, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 60)
+                .onChange(of: value.wrappedValue) { _, newValue in
+                    let clamped = min(max(newValue, range.lowerBound), range.upperBound)
+                    if clamped != newValue { value.wrappedValue = clamped }
+                }
+            Stepper("", value: value, in: range)
+                .labelsHidden()
+                .controlSize(.small)
+            Spacer()
+        }
+    }
+
+    // MARK: Parent folder
+
+    @ViewBuilder
+    private var parentFolderControls: some View {
+        Toggle("Parent Folder Name", isOn: $config.parentFolder)
+            .controlSize(.small)
+        if config.parentFolder {
+            affixPicker(selection: $config.parentFolderAffix)
+                .padding(.leading, 4)
+        }
+    }
+
+    // MARK: Date
+
+    @ViewBuilder
+    private var dateControls: some View {
+        Toggle("Current Date", isOn: $config.date)
+            .controlSize(.small)
+        if config.date {
+            VStack(alignment: .leading, spacing: 6) {
+                affixPicker(selection: $config.dateAffix)
+                Picker("Format", selection: $config.dateFormat) {
+                    ForEach(RenameDateFormat.allCases, id: \.self) { fmt in
+                        Text(fmt.displayName).tag(fmt)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+            }
+            .padding(.leading, 4)
+        }
+    }
+
+    private func affixPicker(selection: Binding<RenameAffix>) -> some View {
+        Picker("Position", selection: selection) {
+            ForEach(RenameAffix.allCases, id: \.self) { affix in
+                Text(affix.displayName).tag(affix)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+    }
+
+    // MARK: Preview
+
+    @ViewBuilder
+    private var preview: some View {
+        let plans = model.renamePreview(using: config, item: item, now: previewDate)
+        let changing = plans.filter(\.isChange)
+
+        if !config.hasAnyComponent {
+            Text("Add a component to preview new names.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        } else if changing.isEmpty {
+            Text("No names would change.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Preview")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(changing.prefix(3)) { plan in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(plan.originalName)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.turn.down.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            Text(plan.newName)
+                                .font(.caption2.weight(.medium))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                if changing.count > 3 {
+                    Text("+\(changing.count - 3) more")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: Apply
+
+    @ViewBuilder
+    private var renameButton: some View {
+        let changingCount = model.renamePreview(using: config, item: item, now: previewDate)
+            .filter(\.isChange).count
+
+        Button {
+            isRenaming = true
+            Task {
+                await model.renameSelection(using: config, item: item)
+                isRenaming = false
+            }
+        } label: {
+            HStack {
+                if isRenaming {
+                    ProgressView().controlSize(.mini)
+                }
+                Text(buttonTitle(changingCount))
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .controlSize(.small)
+        .disabled(isRenaming || !config.hasAnyComponent || changingCount == 0 || !model.canRenameSelection)
+        .padding(.top, 2)
+    }
+
+    private func buttonTitle(_ count: Int) -> String {
+        guard count > 0 else { return "Rename" }
+        return count == 1 ? "Rename 1 File" : "Rename \(count) Files"
     }
 }

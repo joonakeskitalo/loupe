@@ -920,6 +920,85 @@ final class BrowserModel {
         }
     }
 
+    /// Rewrites every URL-keyed structure in the model from old to new URLs for
+    /// the given mapping, re-sorts the name-ordered lists, rebuilds the merged
+    /// state, and reselects the renamed files by their new URLs. Lives here
+    /// (not in the rename extension) because it touches private storage; the
+    /// public rename API in `BrowserModel+Rename.swift` calls it after the
+    /// filesystem moves succeed. Mirrors `removeItemsFromModel`'s in-place
+    /// philosophy but replaces identities instead of dropping them.
+    func applyRenameMapping(_ mapping: [URL: URL]) {
+        guard !mapping.isEmpty else { return }
+
+        // Snapshot the selection/anchor so we can carry them onto the new URLs.
+        let previousSelected = selectedItems
+        let previousPrimary = selectedItem
+        let previousAnchor = rangeAnchor
+
+        func remap(_ url: URL) -> URL { mapping[url.standardizedFileURL] ?? url }
+
+        func sortedByName(_ items: [MediaItem]) -> [MediaItem] {
+            items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
+
+        func rekey<Value>(_ dict: [URL: Value]) -> [URL: Value] {
+            var out: [URL: Value] = [:]
+            out.reserveCapacity(dict.count)
+            for (key, value) in dict { out[remap(key)] = value }
+            return out
+        }
+
+        // Per-root scan results: rebuild each MediaItem whose URL changed, then
+        // re-sort both the flat list and each directory bucket (name changed).
+        for (root, result) in resultsByRoot {
+            var touched = false
+            let newAll: [MediaItem] = result.allItems.map { oldItem in
+                if let newURL = mapping[oldItem.id.standardizedFileURL] {
+                    touched = true
+                    return MediaItem(url: newURL)
+                }
+                return oldItem
+            }
+            guard touched else { continue }
+
+            var newByDir: [URL: [MediaItem]] = [:]
+            for (dir, items) in result.itemsByDirectory {
+                newByDir[dir] = items.map { oldItem in
+                    mapping[oldItem.id.standardizedFileURL].map { MediaItem(url: $0) } ?? oldItem
+                }
+            }
+            resultsByRoot[root] = ScanResult(
+                root: result.root,
+                allItems: sortedByName(newAll),
+                itemsByDirectory: newByDir.mapValues(sortedByName),
+                tree: result.tree
+            )
+        }
+
+        // Re-key the in-session annotation maps and the codec cache. Flags and
+        // hidden marks are URL sets; the tag/category/person maps are keyed by
+        // URL; `codecsByURL` caches probe results by URL.
+        flaggedItems = Set(flaggedItems.map(remap))
+        hiddenItems = Set(hiddenItems.map(remap))
+        colorTags = rekey(colorTags)
+        textTags = rekey(textTags)
+        aiCategories = rekey(aiCategories)
+        facePersons = rekey(facePersons)
+        codecsByURL = rekey(codecsByURL)
+
+        // Rebuild the merged lists/trees from the updated per-root results
+        // (this also reclamps the selection and refreshes the display cache),
+        // then land the selection back on the renamed files by their new URLs.
+        rebuildMerged()
+
+        let present = Set(allItems.map(\.id))
+        selectedItems = Set(previousSelected.map(remap)).intersection(present)
+        selectedItem = previousPrimary.map(remap).flatMap { present.contains($0) ? $0 : nil }
+            ?? selectedItems.first
+        rangeAnchor = previousAnchor.map(remap).flatMap { present.contains($0) ? $0 : nil }
+            ?? selectedItem
+    }
+
     /// Merge all per-root scan results into the flattened item list, the
     /// directory map, and the ordered list of trees.
     private func rebuildMerged() {
