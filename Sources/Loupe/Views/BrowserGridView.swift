@@ -101,7 +101,20 @@ struct BrowserGridView: View {
     /// pass promptly when the displayed set changes (the id flips). The
     /// provider skips anything already cached or in flight, and `.visible`
     /// requests always preempt this, so it never delays on-screen cells.
+    ///
+    /// Suspended while a folder scan is in flight: the scan walks the directory
+    /// tree sequentially, and on a slow/removable disk (external HDD) flooding
+    /// the device with the warm pass's scattered thumbnail reads at the same
+    /// time collapses throughput — both the scan and the thumbnails stall. The
+    /// pass is keyed on `model.isScanning` (see `WarmAllKey`), so it simply
+    /// doesn't enqueue anything until the scan finishes, then starts with the
+    /// disk to itself. Visible cells are unaffected: they request at `.visible`
+    /// directly from their own cell task, not through this pass.
     private func warmRemainingThumbnails() async {
+        // Don't compete with an in-flight scan for the disk. When scanning ends
+        // the key flips and this task re-runs to warm the settled set.
+        guard !model.isScanning else { return }
+
         let items = model.visualOrderItems
         guard !items.isEmpty else { return }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
@@ -462,7 +475,8 @@ struct BrowserGridView: View {
                     revision: model.displayRevision,
                     method: model.thumbnailMethod,
                     videoPosition: model.videoThumbnailPosition,
-                    size: model.thumbnailSize
+                    size: model.thumbnailSize,
+                    isScanning: model.isScanning
                 )) {
                     await warmRemainingThumbnails()
                 }
@@ -869,10 +883,12 @@ private struct GridContentWidth: ViewModifier {
 /// set or the thumbnail-generation options change. `revision` captures set
 /// membership and order (it's bumped on every display change); the thumbnail
 /// method/position/size are included so changing them re-warms under the new
-/// key the cache is stored under.
+/// key the cache is stored under. `isScanning` is included so the pass pauses
+/// while a scan holds the disk and resumes (re-running the task) once it ends.
 private struct WarmAllKey: Equatable {
     let revision: Int
     let method: ThumbnailMethod
     let videoPosition: VideoThumbnailPosition
     let size: Double
+    let isScanning: Bool
 }
