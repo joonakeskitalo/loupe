@@ -25,6 +25,26 @@ struct SearchFieldFocusedKey: FocusedValueKey {
     typealias Value = Bool
 }
 
+/// The presentation value for one Loupe window. Carries the batch of
+/// folders/files to open (empty = an empty window) plus a unique `id`.
+///
+/// The id is essential: `WindowGroup(for:)` keys windows by their presentation
+/// value, and `openWindow(value:)` with a value that already has a window on
+/// screen just *activates that window* instead of opening a new one. Every
+/// "New Window"/"New Tab" opened an empty batch (`[]`), so after the first such
+/// window SwiftUI treated every later request as a duplicate and refused to
+/// open more — which is why a third window could never be created. A fresh
+/// `UUID` per request makes each value distinct, so a new window always opens.
+struct WindowRequest: Codable, Hashable {
+    var id: UUID = UUID()
+    var urls: [URL] = []
+    /// When true, this window should join the frontmost window's tab group as a
+    /// new tab (⌘T) instead of opening standalone (⌘N). The actual host group is
+    /// recorded in `WindowTabs.pendingTabHosts` keyed by `id`, because the new
+    /// window must merge into whatever window was key *before* it opened.
+    var wantsTab: Bool = false
+}
+
 extension FocusedValues {
     var activeBrowserModel: BrowserModel? {
         get { self[ActiveBrowserModelKey.self] }
@@ -51,14 +71,18 @@ struct LoupeApp: App {
         // Each window owns its own BrowserModel (created in ContentView), so
         // windows browse independently. The window value is a batch of folder/
         // file URLs to open on launch (empty = an empty window).
-        WindowGroup(for: [URL].self) { $urls in
-            ContentView(initialURLs: urls ?? [])
+        WindowGroup(for: WindowRequest.self) { $request in
+            ContentView(
+                initialURLs: request?.urls ?? [],
+                tabRequestID: (request?.wantsTab == true) ? request?.id : nil
+            )
                 .frame(minWidth: 900, minHeight: 600)
                 .onAppear {
                     // How the bridge opens a brand-new window when no empty
-                    // window is available to reuse.
+                    // window is available to reuse. Each request gets a fresh
+                    // id so it never collides with an existing window.
                     OpenURLBridge.shared.open = { batch in
-                        openWindow(value: batch)
+                        openWindow(value: WindowRequest(urls: batch))
                     }
                 }
         }
@@ -80,22 +104,23 @@ struct LoupeApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Window") {
-                    openWindow(value: [URL]())
+                    openWindow(value: WindowRequest())
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
-                // ⌘T opens another window; because every Loupe window prefers
-                // tabbing (see WindowTabbingConfigurator), the new one joins the
-                // frontmost window as a tab. Routed through the window's tab
-                // action so it lands in the active window's tab group.
+                // ⌘T opens a new window (unique request, so it always opens)
+                // that merges itself into the frontmost window's tab group once
+                // on screen — see `WindowTabs.makeTabRequest` / `claimTabHost`.
+                // ⌘N above leaves `wantsTab` false, so it stays standalone.
                 Button("New Tab") {
-                    WindowTabs.newTab(openWindow: { openWindow(value: [URL]()) })
+                    let request = WindowTabs.makeTabRequest()
+                    openWindow(value: request)
                 }
                 .keyboardShortcut("t", modifiers: .command)
 
                 Button("Open Folder in New Window…") {
                     let urls = chooseFolders()
-                    if !urls.isEmpty { openWindow(value: urls) }
+                    if !urls.isEmpty { openWindow(value: WindowRequest(urls: urls)) }
                 }
                 .keyboardShortcut("o", modifiers: .command)
             }
@@ -124,51 +149,59 @@ struct LoupeApp: App {
     }
 }
 
-/// Drives native macOS window-tab actions on the frontmost (key) window.
+/// Coordinates Loupe's window tabbing.
 ///
-/// AppKit exposes tabbing through responder-chain actions on `NSWindow`
-/// (`newWindowForTab:`, `selectNextTab:`, `selectPreviousTab:`). SwiftUI's
-/// `WindowGroup` doesn't surface these, so these helpers invoke them directly
-/// on the key window — the same calls the system's own Window-menu items use.
+/// ⌘T can't use AppKit's `newWindowForTab:` because SwiftUI's `WindowGroup`
+/// owns window creation (that selector no-ops / misbehaves for SwiftUI
+/// windows). Instead, ⌘T opens an ordinary new window via `openWindow` and that
+/// window merges itself into the previously-frontmost window's tab group once
+/// it's on screen (`makeTabRequest` records the host; `claimTabHost` performs
+/// the `addTabbedWindow`). Tab *navigation* (⌃Tab / ⌃⇧Tab) still uses the
+/// native `selectNextTab:` / `selectPreviousTab:` on the key window.
 @MainActor
 enum WindowTabs {
-    /// True while a ⌘T-spawned window is being created by AppKit's
-    /// `newWindowForTab:`. `WindowTabbingConfigurator` reads this to know the
-    /// window it's attaching to was already placed in a tab group by AppKit,
-    /// so it must NOT try to merge it again. Checking the live `tabGroup`
-    /// instead races AppKit's own registration (the configurator runs in a
-    /// `DispatchQueue.main.async` that can fire before the new window is listed
-    /// in its group), and that race is what made the window reparent and jump.
-    private(set) static var isCreatingTab = false
+    /// Pending tab hosts, keyed by the `WindowRequest.id` of the window being
+    /// opened as a tab. `newWindowForTab:` doesn't work for SwiftUI
+    /// `WindowGroup` windows (SwiftUI owns window creation), so ⌘T instead opens
+    /// a normal new window via `openWindow` and the new window merges itself
+    /// into this recorded host's tab group once it's on screen (see
+    /// `claimTabHost`). We record the host at ⌘T time because, by the time the
+    /// new window appears, it — not the old window — is key.
+    private static var pendingTabHosts: [UUID: Weak] = [:]
 
-    /// Opens a new tab in the frontmost window. Prefers AppKit's
-    /// `newWindowForTab:` (which adds a tab to the key window's group); if no
-    /// window can service it (e.g. none is open yet), falls back to opening a
-    /// fresh window via SwiftUI, which — because Loupe windows prefer tabbing —
-    /// still joins any existing window as a tab.
-    static func newTab(openWindow: () -> Void) {
-        if let window = NSApp.keyWindow,
-           window.responds(to: #selector(NSWindow.newWindowForTab(_:))) {
-            // `newWindowForTab:` creates the new window AND adds it to this
-            // window's tab group in one atomic AppKit step, so the tab never
-            // appears as a standalone window first. We deliberately do NOT
-            // re-tab or re-order it here: doing so reparents a window that is
-            // already correctly tabbed, which makes it flicker/jump. The flag
-            // tells the new window's `WindowTabbingConfigurator` to leave the
-            // window alone (it's already tabbed), without depending on the
-            // tab-group membership being observable yet.
-            isCreatingTab = true
-            window.newWindowForTab(nil)
-            // Clear once the current run loop turn (and the configurator's
-            // async hop) has had a chance to see the flag. The new window's
-            // view is created synchronously within newWindowForTab, so its
-            // configurator's async block is already enqueued by now; this
-            // deferred reset lets that block observe `true`, then restores the
-            // standalone (⌘N) behavior for the next window.
-            DispatchQueue.main.async { isCreatingTab = false }
-            return
+    private final class Weak { weak var window: NSWindow?; init(_ w: NSWindow?) { window = w } }
+
+    /// Builds the `WindowRequest` for a ⌘T "New Tab": a fresh window request
+    /// flagged `wantsTab`, with the current key window recorded as the group to
+    /// join. The caller hands the result to `openWindow`.
+    static func makeTabRequest() -> WindowRequest {
+        var request = WindowRequest()
+        request.wantsTab = true
+        pendingTabHosts[request.id] = Weak(NSApp.keyWindow)
+        // Don't let the map grow unbounded if a request never gets claimed
+        // (e.g. the open was vetoed); drop stale entries whose window is gone.
+        pendingTabHosts = pendingTabHosts.filter { $0.value.window != nil }
+        return request
+    }
+
+    /// Called by a newly-opened window flagged `wantsTab`. Adds `newWindow` to
+    /// the recorded host's tab group and selects it. Returns true when it
+    /// merged (so the caller knows the window became a tab). The host lookup is
+    /// consumed so it can't fire twice.
+    @discardableResult
+    static func claimTabHost(for id: UUID, newWindow: NSWindow) -> Bool {
+        guard let host = pendingTabHosts.removeValue(forKey: id)?.window,
+              host !== newWindow, host.isVisible else {
+            return false
         }
-        openWindow()
+        // Add next to the tab the user is looking at (the group's selected
+        // window, or the host itself when it isn't tabbed yet), then surface
+        // the new tab.
+        let anchor = host.tabGroup?.selectedWindow ?? host
+        anchor.addTabbedWindow(newWindow, ordered: .above)
+        newWindow.makeKeyAndOrderFront(nil)
+        newWindow.tabGroup?.selectedWindow = newWindow
+        return true
     }
 
     /// Selects the next tab in the frontmost window's tab group (⌃Tab).
@@ -210,8 +243,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: ["NSQuitAlwaysKeepsWindows": false])
         // Allow Loupe's windows to merge into native macOS tabs. Without this
         // the window group's windows always open as separate windows and the
-        // Window ▸ "Show Tab Bar" / tab shortcuts are unavailable. Each window
-        // then opts into preferring tabs via `WindowTabbingConfigurator`.
+        // Window ▸ "Show Tab Bar" / tab shortcuts are unavailable. Windows share
+        // a tabbing identifier (set in `WindowTabbingConfigurator`) so ⌘T and
+        // "Merge All Windows" can group them.
         NSWindow.allowsAutomaticWindowTabbing = true
 
         // When launched via `swift run` (i.e. as a bare executable with no

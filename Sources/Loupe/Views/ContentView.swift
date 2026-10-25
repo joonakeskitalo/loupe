@@ -5,6 +5,11 @@ struct ContentView: View {
     /// Folders/files to open when this window first appears (empty shows the
     /// drop zone).
     let initialURLs: [URL]
+    /// Set when this window was opened as a ⌘T "New Tab": the id of the
+    /// `WindowRequest` whose recorded host group this window should join once it
+    /// has a backing `NSWindow`. Nil for ⌘N / normal windows (which stay
+    /// standalone). See `WindowTabs.claimTabHost`.
+    let tabRequestID: UUID?
 
     @State private var model = BrowserModel()
     @State private var isTargeted = false
@@ -34,8 +39,14 @@ struct ContentView: View {
     /// Sidebar column visibility, toggled by ⌘S.
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
-    init(initialURLs: [URL] = []) {
+    /// Tracks whether this window already performed its ⌘T tab-merge, so a later
+    /// `hostWindow` re-resolve (which happens on layout changes) doesn't try to
+    /// re-tab an already-tabbed window.
+    @State private var didClaimTab = false
+
+    init(initialURLs: [URL] = [], tabRequestID: UUID? = nil) {
         self.initialURLs = initialURLs
+        self.tabRequestID = tabRequestID
     }
 
     var body: some View {
@@ -70,7 +81,11 @@ struct ContentView: View {
         .background(WindowTabbingConfigurator())
         // Capture the hosting NSWindow so drop handling can distinguish a drag
         // that began in this window from one dragged over from another window.
-        .background(WindowReader { hostWindow = $0 })
+        // Also drives the ⌘T tab merge once the window exists.
+        .background(WindowReader { window in
+            hostWindow = window
+            claimTabIfNeeded(window)
+        })
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
         }
@@ -488,6 +503,16 @@ struct ContentView: View {
         .help(help)
     }
 
+    /// For a window opened as a ⌘T "New Tab", merge it into the recorded host's
+    /// tab group once its backing `NSWindow` exists. Runs at most once per
+    /// window (guarded by `didClaimTab`), since `WindowReader` re-resolves the
+    /// window on later layout passes.
+    private func claimTabIfNeeded(_ window: NSWindow?) {
+        guard let window, let tabRequestID, !didClaimTab else { return }
+        didClaimTab = true
+        WindowTabs.claimTabHost(for: tabRequestID, newWindow: window)
+    }
+
     /// Toggles the sidebar between hidden and shown (⌘S).
     private func toggleSidebar() {
         withAnimation {
@@ -556,14 +581,21 @@ struct ContentView: View {
     }
 }
 
-/// Configures the hosting `NSWindow` to participate in Loupe's native tab
-/// group. Gives every Loupe window the same `tabbingIdentifier` (so they can
-/// merge into one tabbed window) and sets `tabbingMode = .preferred` so opening
-/// another window joins the current one as a tab instead of floating free.
+/// Gives every Loupe window the same `tabbingIdentifier` so they *can* be
+/// tabbed together, and leaves everything else to AppKit.
 ///
-/// SwiftUI's `WindowGroup` doesn't expose tabbing directly, so we reach the
-/// underlying window once it's attached. The tab bar, ⌘T "New Tab", and the
-/// tab-cycling commands all then work through AppKit's standard tab machinery.
+/// Explicitly does NOT force windows into a shared tab group. Tabs are created
+/// deliberately by ⌘T, whose new window merges itself into the frontmost
+/// window's group via `WindowTabs.claimTabHost`; a plain ⌘N / `openWindow` stays
+/// a standalone window. An earlier version set `tabbingMode = .preferred` and manually
+/// `addTabbedWindow`'d every new window into the group. That fought AppKit and
+/// SwiftUI's `openWindow`: it merged ⌘N windows that should be standalone, and
+/// once a group already existed the manual re-tabbing failed so no third tab
+/// (and no new window) ever appeared. Setting only the identifier — and letting
+/// AppKit own tab creation/placement — is what makes both ⌘T and ⌘N behave.
+///
+/// SwiftUI's `WindowGroup` doesn't expose the backing `NSWindow`, so we attach a
+/// zero-size AppKit view and reach `view.window` once it's in the hierarchy.
 private struct WindowTabbingConfigurator: NSViewRepresentable {
     static let tabbingIdentifier = "com.loupe.browser.window"
 
@@ -571,39 +603,12 @@ private struct WindowTabbingConfigurator: NSViewRepresentable {
         let view = NSView(frame: .zero)
         DispatchQueue.main.async { [weak view] in
             guard let window = view?.window else { return }
+            // Shared identifier lets these windows merge into one tab group
+            // (via ⌘T and the Window ▸ Merge All Windows menu). `.automatic`
+            // tabbing mode respects the user's system "prefer tabs" setting and,
+            // crucially, does not force a standalone ⌘N window into the group.
             window.tabbingIdentifier = Self.tabbingIdentifier
-            window.tabbingMode = .preferred
-
-            // Only force a merge for a window that opened STANDALONE (⌘N /
-            // openWindow). A window created by `newWindowForTab:` (⌘T) is
-            // already placed in its source window's tab group by AppKit, so
-            // re-adding it here would reparent an already-tabbed window and
-            // make it visibly flicker/jump.
-            //
-            // We can't reliably detect that from `window.tabGroup` here: this
-            // async block can run before AppKit has listed the new window in
-            // its group, so the membership check races and sometimes misses,
-            // letting us wrongly re-tab (the jump). Instead, `WindowTabs` sets
-            // `isCreatingTab` for the duration of a ⌘T creation; honor it.
-            if WindowTabs.isCreatingTab { return }
-            if let group = window.tabGroup, group.windows.count > 1 { return }
-
-            // `tabbingMode = .preferred` alone defers to the macOS "Prefer tabs
-            // when opening documents" system setting, so with that set to
-            // "manually"/"in full screen only" a new standalone window floated
-            // free. Force the merge: find another visible Loupe window that
-            // isn't already sharing this one's tab group and add this window as
-            // a tab of it.
-            let host = NSApp.windows.first { other in
-                other !== window
-                    && other.tabbingIdentifier == Self.tabbingIdentifier
-                    && other.isVisible
-                    && other.tabGroup?.windows.contains(window) != true
-            }
-            if let host {
-                host.addTabbedWindow(window, ordered: .above)
-                window.makeKeyAndOrderFront(nil)
-            }
+            window.tabbingMode = .automatic
         }
         return view
     }
