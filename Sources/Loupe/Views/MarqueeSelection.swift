@@ -19,23 +19,29 @@ extension View {
     /// `onPreferenceChange` then re-runs the grid body and re-derives the column
     /// count each tick — a measurable scroll cost proportional to the number of
     /// on-screen cells. The frames are only actually needed during a marquee
-    /// drag (to hit-test the rubber band), so reporting is gated: when `active`
-    /// is false the background is empty and no preference is emitted, so plain
-    /// scrolling pays nothing. The grid arms `active` on marquee mouse-down.
-    @ViewBuilder
+    /// drag (to hit-test the rubber band), so reporting is gated: when inactive
+    /// the `GeometryReader` emits the EMPTY default, so the aggregated
+    /// preference stays constant and `onPreferenceChange` doesn't fire while
+    /// scrolling — plain scrolling pays nothing.
+    ///
+    /// Crucially the `GeometryReader` background is attached UNCONDITIONALLY:
+    /// the view's structure (and therefore its SwiftUI identity) must not change
+    /// when `active` toggles. The previous form switched between `background(…)`
+    /// and bare `self`, which restructured every cell the instant a background
+    /// press armed `active = true`. That restructuring tore down and rebuilt the
+    /// cell subtrees mid-interaction and stranded the old cells — leaving their
+    /// selection border painted on screen after the selection had cleared (the
+    /// "stale blue border" bug). Keeping the structure fixed and only varying
+    /// the emitted preference VALUE avoids the teardown entirely.
     func reportCellFrame(id: URL, in space: String, active: Bool) -> some View {
-        if active {
-            background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: CellFramesKey.self,
-                        value: [id: geo.frame(in: .named(space))]
-                    )
-                }
-            )
-        } else {
-            self
-        }
+        background(
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: CellFramesKey.self,
+                    value: active ? [id: geo.frame(in: .named(space))] : [:]
+                )
+            }
+        )
     }
 }
 

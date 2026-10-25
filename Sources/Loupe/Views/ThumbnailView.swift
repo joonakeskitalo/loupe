@@ -177,10 +177,21 @@ struct ThumbnailView: View {
                     .help(personCount == 1 ? "1 person" : "\(personCount) people")
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
-            )
+            // Selection border. Inserted/removed CONDITIONALLY rather than
+            // drawn as a persistent `RoundedRectangle` whose stroke color flips
+            // between `accentColor` and `clear`. The persistent-shape form left
+            // the blue border painted on screen after the selection cleared:
+            // the cell's `body` re-ran with the cleared color (verified), but
+            // SwiftUI elided the repaint because the overlaid shape kept the
+            // same identity and only its resolved `ShapeStyle` changed — a known
+            // `LazyVGrid` cell quirk. Gating the whole overlay on `isSelected`
+            // makes SwiftUI add/remove a view, which always repaints.
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.accentColor, lineWidth: 3)
+                }
+            }
 
             if !hideFilename {
                 Text(item.name)
@@ -192,10 +203,15 @@ struct ThumbnailView: View {
             }
         }
         .padding(gridItemPadding)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
-        )
+        // Same conditional-insertion treatment as the border overlay above, so
+        // the selection fill reliably disappears when the selection clears
+        // instead of lingering as a stale tint.
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.accentColor.opacity(0.15))
+            }
+        }
         // Re-run when the item OR the thumbnail method changes, so switching
         // method (e.g. to fix black .mp4 thumbnails) refreshes visible cells
         // instead of leaving the old image until the next scroll.

@@ -700,10 +700,19 @@ struct BrowserGridView: View {
     private func handleMarquee(_ rect: CGRect?) {
         marqueeRect = rect
         guard let rect else {
-            // Drag (or bare press) ended. The cell frames are reported a layout
-            // pass AFTER `marqueeActive` armed on mouse-down, and SwiftUI holds
-            // those layout/preference updates until the run loop turns — which,
-            // for a quick drag, can be after this mouse-up. So `cellFrames` is
+            // Bare press with no drag (`lastMarqueeRect` never set): there's no
+            // rubber band to hit-test, so finalize immediately. Without this the
+            // marquee stayed "active" after a plain background click, which kept
+            // per-cell frame reporting armed indefinitely. (The separate
+            // `onEmptyClick` path clears the selection for this case.)
+            guard lastMarqueeRect != nil else {
+                finishMarquee()
+                return
+            }
+            // Drag ended. The cell frames are reported a layout pass AFTER
+            // `marqueeActive` armed on mouse-down, and SwiftUI holds those
+            // layout/preference updates until the run loop turns — which, for a
+            // quick drag, can be after this mouse-up. So `cellFrames` is
             // frequently still empty right here.
             if let lastMarqueeRect, !cellFrames.isEmpty {
                 // Frames are present: do the authoritative final hit-test now

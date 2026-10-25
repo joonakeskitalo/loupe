@@ -643,9 +643,17 @@ private struct ListRowView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, verticalPadding)
         .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-        .background(
-            isSelected ? Color.accentColor.opacity(0.15) : Color.clear
-        )
+        // Conditionally inserted (not a persistent view whose fill flips to
+        // `.clear`) so the selection tint reliably disappears when the
+        // selection clears. A persistent fill-switching background could linger
+        // on screen after clearing because SwiftUI elides the repaint when only
+        // the resolved color changes — the same lazy-container quirk the grid's
+        // `ThumbnailView` works around.
+        .background {
+            if isSelected {
+                Color.accentColor.opacity(0.15)
+            }
+        }
         // Only load a thumbnail when the row actually shows one; at the
         // smallest size we display a file-type icon and skip the work.
         .task(id: showsThumbnail ? "\(method.rawValue)@\(videoPosition.rawValue)@\(item.id.absoluteString)" : nil) {
