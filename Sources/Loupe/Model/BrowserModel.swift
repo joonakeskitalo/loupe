@@ -2440,6 +2440,10 @@ final class BrowserModel {
     /// hidden) we leave the user's selection intact.
     private func selectAfterHiding(_ id: MediaItem.ID?) {
         guard selectedItems.isEmpty, let id else { return }
+        // Same as `advanceAfterAnnotating`: follow the successor for keyboard
+        // flow, but don't scroll the viewport — the user hid the item and the
+        // position should stay put.
+        suppressNextSelectionScroll = true
         selectOnly(id)
     }
 
@@ -2528,6 +2532,13 @@ final class BrowserModel {
     /// current item in a filtered view.
     private func advanceAfterAnnotating(_ id: MediaItem.ID?) {
         guard selectedItems.isEmpty, let id else { return }
+        // Moving the selection onto the successor keeps keyboard navigation
+        // flowing, but it must NOT scroll the viewport: the annotated item just
+        // dropped out of a filtered view and the user wants the position to
+        // stay put, not snap-center on the successor. Suppress the one upcoming
+        // selection-driven scroll in the grid/list (the same one-shot delete
+        // uses).
+        suppressNextSelectionScroll = true
         selectOnly(id)
     }
 
