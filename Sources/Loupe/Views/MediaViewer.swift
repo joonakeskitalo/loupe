@@ -616,7 +616,8 @@ struct MediaViewer: View {
 
     /// Viewer-wide letter hotkeys: J/L step between items, F or I flags the
     /// current item. For a single video/audio item, K toggles play/pause, U/O
-    /// skip back/forward 15 seconds, and ,/. step one frame back/forward.
+    /// skip back/forward 15 seconds, ⇧U/⇧O skip back/forward one minute, and
+    /// ,/. step one frame back/forward.
     ///
     /// J/L (and, for a multi-selection, the arrow keys) page by the current
     /// selection's size: with 3 images open side by side, Right selects the
@@ -648,6 +649,9 @@ struct MediaViewer: View {
                 hotkey("k", []) { videoController?.togglePlay() }
                 hotkey("u", []) { videoController?.skip(by: -15) }
                 hotkey("o", []) { videoController?.skip(by: 15) }
+                // ⇧U / ⇧O make a bigger jump: back/forward one minute.
+                hotkey("u", .shift) { videoController?.skip(by: -60) }
+                hotkey("o", .shift) { videoController?.skip(by: 60) }
                 hotkey(",", []) { videoController?.stepFrame(by: -1) }
                 hotkey(".", []) { videoController?.stepFrame(by: 1) }
                 // ⇧⌘S grabs the frame at the current position as a PNG next to
