@@ -651,20 +651,34 @@ private struct KeyWindowSceneValues: ViewModifier {
 private struct WindowReader: NSViewRepresentable {
     let onResolve: (NSWindow?) -> Void
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async { [weak view] in
-            onResolve(view?.window)
-        }
+    func makeNSView(context: Context) -> WindowResolvingView {
+        let view = WindowResolvingView()
+        view.onResolve = onResolve
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: WindowResolvingView, context: Context) {
+        nsView.onResolve = onResolve
         // The window can attach after the first layout pass (and change when a
         // tab is torn out into its own window), so keep the binding current.
         DispatchQueue.main.async { [weak nsView] in
-            onResolve(nsView?.window)
+            nsView?.onResolve?(nsView?.window)
         }
+    }
+}
+
+/// Zero-size helper view that reports its hosting `NSWindow` the *instant* it
+/// enters the window hierarchy (`viewDidMoveToWindow`), not a run-loop turn
+/// later. That early, synchronous callback is what lets a ⌘T window hide itself
+/// (alpha 0) and merge into its tab group before the window server composites a
+/// first standalone frame — eliminating the tab-creation flicker. The async
+/// safety net in `WindowReader.updateNSView` still covers later window changes.
+private final class WindowResolvingView: NSView {
+    var onResolve: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onResolve?(window)
     }
 }
 

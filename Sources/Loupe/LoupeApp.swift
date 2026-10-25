@@ -194,13 +194,22 @@ enum WindowTabs {
               host !== newWindow, host.isVisible else {
             return false
         }
+        // The new window is briefly a standalone window before we reparent it
+        // into the tab group — SwiftUI has already placed and shown it by the
+        // time this runs. Hiding it (alpha 0) across the merge avoids the
+        // one-frame flash of a separate window appearing then snapping into the
+        // tab bar. `addTabbedWindow` reparents fine while hidden; we restore the
+        // alpha once it's a tab.
+        newWindow.alphaValue = 0
         // Add next to the tab the user is looking at (the group's selected
-        // window, or the host itself when it isn't tabbed yet), then surface
-        // the new tab.
+        // window, or the host itself when it isn't tabbed yet), then select the
+        // new tab. `addTabbedWindow(ordered: .above)` already orders it in front
+        // within the group, so no extra `makeKeyAndOrderFront` reorder is needed
+        // (that reorder was itself part of the visible jump).
         let anchor = host.tabGroup?.selectedWindow ?? host
         anchor.addTabbedWindow(newWindow, ordered: .above)
-        newWindow.makeKeyAndOrderFront(nil)
         newWindow.tabGroup?.selectedWindow = newWindow
+        newWindow.alphaValue = 1
         return true
     }
 
