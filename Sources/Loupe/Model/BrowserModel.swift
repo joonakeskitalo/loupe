@@ -4291,12 +4291,30 @@ final class BrowserModel {
 
         guard !trashed.isEmpty else { return 0 }
 
-        removeItemsFromModel(trashed)
-
-        // Choose a new primary selection: the item that now occupies the first
-        // trashed slot, or the last surviving item if we trashed the tail.
-        // Index against the same visual order used to record `firstTrashedIndex`.
-        let survivors = visualOrderItems.map(\.id)
+        // Choose the new primary selection BEFORE mutating the model, and apply
+        // it FIRST, so the whole delete is a single selection transition:
+        // deleted-item → next-item, with no transient empty-selection state in
+        // between.
+        //
+        // Why this matters: `removeItemsFromModel` calls `clampSelection()`,
+        // which drops the now-missing selected id and leaves `selectedItem` nil
+        // when nothing else is selected. If we let that happen and only set the
+        // next selection afterwards, the preview sidebar observes two writes —
+        // deleted → nil → next. The nil step tears the sidebar down to its
+        // empty state, and when the next item then remounts, SwiftUI's identity
+        // diffing on the `.id(item.id)` subtree can reuse the old video surface
+        // (keyed on the AVPlayer object) while the controller swaps underneath,
+        // leaving a dead/paused player on screen — the "next video doesn't
+        // play" bug. Selecting the survivor up front keeps `clampSelection` a
+        // no-op for the primary (the survivor is still present), so the sidebar
+        // sees exactly one clean transition to a new `.id` and rebuilds the
+        // player for the next item.
+        //
+        // The survivor order is the pre-removal visual order with the trashed
+        // ids filtered out; it matches the order the model will hold after
+        // removal (deletion preserves relative order), so indexing by
+        // `firstTrashedIndex` lands on the same visual slot as before.
+        let survivors = order.filter { !trashed.contains($0.standardizedFileURL) }
         if survivors.isEmpty {
             clearSelection()
             isViewerPresented = false
@@ -4314,9 +4332,12 @@ final class BrowserModel {
             } else {
                 selectOnly(survivors[next])
             }
-        } else {
-            clampSelection()
         }
+
+        // Now drop the trashed items. `clampSelection()` inside leaves the
+        // just-chosen survivor selection intact (it's still present), so no
+        // intermediate empty-selection write reaches the UI.
+        removeItemsFromModel(trashed)
 
         return trashed.count
     }
