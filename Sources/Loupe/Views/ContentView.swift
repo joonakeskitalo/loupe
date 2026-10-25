@@ -298,7 +298,7 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
+        ToolbarItem(id: "mode", placement: .navigation) {
             Picker("View", selection: $model.mode) {
                 ForEach(BrowseMode.allCases, id: \.self) { mode in
                     Label(mode.rawValue, systemImage: mode.symbol).tag(mode)
@@ -317,7 +317,7 @@ struct ContentView: View {
             .help("When on, a selected folder also shows media from its subfolders.")
         }
 
-        ToolbarItem {
+        ToolbarItem(id: "refresh") {
             Button {
                 model.refresh()
             } label: {
@@ -418,7 +418,7 @@ struct ContentView: View {
                 .help(model.viewLayout == .grid ? "Thumbnail size" : "Row size")
         }
 
-        ToolbarItem {
+        ToolbarItem(id: "open") {
             Button {
                 model.selectFirstIfNeeded()
                 model.isViewerPresented = true
