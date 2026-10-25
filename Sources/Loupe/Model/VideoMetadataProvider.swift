@@ -13,8 +13,11 @@ struct MediaMetadata: Sendable, Equatable {
     /// Clip length in seconds (videos only). Nil for images or when the
     /// container reports no usable duration.
     var duration: Double?
+    /// Overall bitrate in bits per second (videos only). Nil for images or
+    /// when the container reports no usable bitrate.
+    var bitrate: Int64?
 
-    static let empty = MediaMetadata(codec: nil, pixelSize: nil, duration: nil)
+    static let empty = MediaMetadata(codec: nil, pixelSize: nil, duration: nil, bitrate: nil)
 }
 
 /// A main-actor snapshot of already-resolved metadata, so list rows can render
@@ -147,7 +150,8 @@ actor VideoMetadataProvider {
         else {
             return .empty
         }
-        return MediaMetadata(codec: nil, pixelSize: PixelSize(width: width, height: height), duration: nil)
+        return MediaMetadata(codec: nil, pixelSize: PixelSize(width: width, height: height),
+                             duration: nil, bitrate: nil)
     }
 
     // MARK: - Video
@@ -205,7 +209,21 @@ actor VideoMetadataProvider {
             duration = Double(durationTicks) / Double(AV_TIME_BASE)
         }
 
-        return MediaMetadata(codec: codec, pixelSize: pixelSize, duration: duration)
+        // Overall container bitrate in bits per second. FFmpeg reports 0 when
+        // unknown (e.g. some streamed containers), so only surface a positive
+        // value; fall back to deriving it from file size / duration when the
+        // container doesn't carry one but we know both.
+        var bitrate: Int64?
+        let reportedBitrate = formatCtx?.pointee.bit_rate ?? 0
+        if reportedBitrate > 0 {
+            bitrate = Int64(reportedBitrate)
+        } else if let duration, duration > 0,
+                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size > 0 {
+            bitrate = Int64(Double(size) * 8 / duration)
+        }
+
+        return MediaMetadata(codec: codec, pixelSize: pixelSize, duration: duration, bitrate: bitrate)
     }
 
     /// Returns true when the stream's display-matrix side data rotates the

@@ -512,7 +512,13 @@ final class BrowserModel {
             // scope changes refresh it too), so switching *into* orientation
             // needs no extra call here. Switching *out* cancels the pass.
             invalidateDisplayCache()
-            if grouping != .orientation, oldValue == .orientation {
+            // Both orientation and type grouping drive the shared metadata
+            // prefetch; cancel it when switching to a dimension that needs
+            // neither so it stops probing the folder's files off disk.
+            let usesPrefetch: (GroupingDimension) -> Bool = {
+                $0 == .orientation || $0 == .type
+            }
+            if !usesPrefetch(grouping), usesPrefetch(oldValue) {
                 orientationPrefetchTask?.cancel()
             }
         }
@@ -1353,15 +1359,16 @@ final class BrowserModel {
         cachedIndexRevision = nil
         displayRevision &+= 1
 
-        // When orientation grouping is active, the displayed set may have just
-        // changed (a filter widened, the scope switched, subfolders toggled),
-        // bringing in items that were never probed for pixel dimensions. Those
-        // would otherwise sit in the "Unknown" bucket until each row scrolls
-        // into view. Re-run the eager probe so they settle into the right
-        // section on their own. The guard skips the prefetch's *own* per-probe
-        // invalidations (see `prefetchOrientationSizes`), which would otherwise
-        // restart the pass on every size that lands.
-        if grouping == .orientation, !isRefreshingOrientationSizes {
+        // When orientation or type grouping is active, the displayed set may
+        // have just changed (a filter widened, the scope switched, subfolders
+        // toggled), bringing in items that were never probed for metadata.
+        // Those would otherwise sit in the "Unknown" / "resolving…" bucket
+        // until each row scrolls into view. Re-run the eager probe so they
+        // settle into the right section on their own. The guard skips the
+        // prefetch's *own* per-probe invalidations (see
+        // `prefetchOrientationSizes`), which would otherwise restart the pass
+        // on every item that lands.
+        if grouping == .orientation || grouping == .type, !isRefreshingOrientationSizes {
             prefetchOrientationSizes()
         }
     }
@@ -2734,26 +2741,139 @@ final class BrowserModel {
         }
     }
 
-    /// Sections the displayed items by their `MediaKind` — Images, Videos,
-    /// PDFs, Audio, Markdown, Text, Other. Each item lands in exactly one
-    /// bucket. Sections are ordered by `MediaKind.groupSortRank` (visual media
-    /// first, "Other" last) and use the kind's plural name and SF Symbol for
-    /// the header. Needs no prefetch — every item's kind is known at scan time.
+    /// A resolution tier for "Group by Type", derived from a video's displayed
+    /// pixel height. Buckets videos into the familiar resolution labels (4K,
+    /// 1080p, 720p, …) so clips of the same shape group together regardless of
+    /// a few off-by-a-pixel differences in exact dimensions.
+    private enum ResolutionTier {
+        case uhd4K, qhd1440, fhd1080, hd720, sd480, low
+
+        init(height: Int) {
+            switch height {
+            case 2160...:      self = .uhd4K
+            case 1440..<2160:  self = .qhd1440
+            case 1080..<1440:  self = .fhd1080
+            case 720..<1080:   self = .hd720
+            case 480..<720:    self = .sd480
+            default:           self = .low
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .uhd4K:    return "4K"
+            case .qhd1440:  return "1440p"
+            case .fhd1080:  return "1080p"
+            case .hd720:    return "720p"
+            case .sd480:    return "480p"
+            case .low:      return "SD"
+            }
+        }
+
+        /// Highest resolution first within a codec/extension group.
+        var sortRank: Int {
+            switch self {
+            case .uhd4K:   return 0
+            case .qhd1440: return 1
+            case .fhd1080: return 2
+            case .hd720:   return 3
+            case .sd480:   return 4
+            case .low:     return 5
+            }
+        }
+    }
+
+    /// Sections the displayed items by file type. Non-video items bucket by
+    /// `MediaKind` + extension (e.g. "Images · JPG"), both known at scan time.
+    /// Videos bucket more finely by container extension, codec, and resolution
+    /// tier (e.g. "MP4 · H.264 · 1080p"), since those distinguish otherwise
+    /// identical-looking clips.
+    ///
+    /// Codec and resolution come from the lazy metadata pipeline
+    /// (`MediaMetadataCache` / `codecsByURL`), so a video whose metadata hasn't
+    /// resolved yet lands in a residual "Videos (resolving…)" bucket.
+    /// `invalidateDisplayCache` kicks off `prefetchTypeMetadata` whenever type
+    /// grouping is active, probing those videos in the background so they
+    /// migrate into their precise sections as the data arrives.
     private var groupedByType: [CategoryGroup] {
         let items = displayedItems
-        var buckets: [MediaKind: [MediaItem]] = [:]
-        for item in items {
-            buckets[item.kind, default: []].append(item)
+
+        // Each bucket keeps a stable sort key so sections read in a sensible
+        // order: non-video kinds first (by `groupSortRank`), then videos
+        // grouped by extension → codec → resolution.
+        struct Bucket {
+            let id: String
+            let title: String
+            let symbol: String
+            let sortKey: String
+            var items: [MediaItem] = []
+            var isResidual = false
         }
-        return buckets.keys
-            .sorted { $0.groupSortRank < $1.groupSortRank }
-            .map { kind in
-                CategoryGroup(
-                    id: "type-\(kind.rawValue)",
-                    title: kind.displayName,
-                    symbol: kind.fallbackSymbol,
-                    items: buckets[kind] ?? [])
+        var buckets: [String: Bucket] = [:]
+        func append(_ item: MediaItem, to bucket: Bucket) {
+            buckets[bucket.id, default: bucket].items.append(item)
+        }
+
+        var unresolvedVideos: [MediaItem] = []
+
+        for item in items {
+            if item.kind == .video {
+                let ext = item.url.pathExtension.uppercased()
+                let codec = resolvedCodec(for: item)
+                let height = MediaMetadataCache.cached(for: item.url)?.pixelSize?.height ?? 0
+
+                // Needs both codec and dimensions to form a precise bucket;
+                // until then it waits in the residual group.
+                guard let codec, height > 0 else {
+                    unresolvedVideos.append(item)
+                    continue
+                }
+                let tier = ResolutionTier(height: height)
+                let title = [ext, codec.uppercased(), tier.title]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " · ")
+                // Prefix "1" so every video group sorts after non-video kinds;
+                // then extension, codec, and resolution rank order the videos.
+                let sortKey = "1\(ext)\u{1}\(codec.lowercased())\u{1}\(tier.sortRank)"
+                append(item, to: Bucket(
+                    id: "type-video-\(ext)-\(codec.lowercased())-\(tier.sortRank)",
+                    title: title, symbol: "film", sortKey: sortKey))
+            } else {
+                let ext = item.url.pathExtension.uppercased()
+                let title = ext.isEmpty
+                    ? item.kind.displayName
+                    : "\(item.kind.displayName) · \(ext)"
+                // Prefix "0" + the kind's rank keeps non-video kinds ahead of
+                // videos and in the canonical kind order; extension sorts within.
+                let sortKey = String(format: "0%02d", item.kind.groupSortRank) + "\u{1}" + ext
+                append(item, to: Bucket(
+                    id: "type-\(item.kind.rawValue)-\(ext)",
+                    title: title, symbol: item.kind.fallbackSymbol, sortKey: sortKey))
             }
+        }
+
+        var groups = buckets.values
+            .sorted { $0.sortKey.localizedStandardCompare($1.sortKey) == .orderedAscending }
+            .map { CategoryGroup(id: $0.id, title: $0.title, symbol: $0.symbol, items: $0.items) }
+
+        if !unresolvedVideos.isEmpty {
+            groups.append(CategoryGroup(
+                id: "\u{0}resolvingvideos", title: "Videos (resolving…)",
+                symbol: "film", items: unresolvedVideos, isResidual: true))
+        }
+        return groups
+    }
+
+    /// The resolved codec for a video, preferring the eagerly-populated
+    /// `codecsByURL` (filled by the codec sort / type prefetch) and falling
+    /// back to whatever the shared metadata cache holds. Returns nil when the
+    /// codec hasn't been probed yet or couldn't be determined.
+    private func resolvedCodec(for item: MediaItem) -> String? {
+        if let codec = codecsByURL[item.url], !codec.isEmpty { return codec }
+        if let codec = MediaMetadataCache.cached(for: item.url)?.codec, !codec.isEmpty {
+            return codec
+        }
+        return nil
     }
 
     /// The shape of an image/video, derived from its pixel dimensions.
@@ -2846,12 +2966,14 @@ final class BrowserModel {
     /// which would cancel and relaunch the pass on every size that lands.
     @ObservationIgnored private var isRefreshingOrientationSizes = false
 
-    /// Probes pixel dimensions for every displayed item that isn't cached yet,
-    /// so `groupedByOrientation` can place them deterministically instead of
-    /// waiting for grid rows to lazily probe. Runs a bounded concurrent pass
-    /// (like the codec prefetch), bumping the display revision as sizes land so
-    /// the sections rebuild progressively. Cheap: each probe only reads file
-    /// headers (ImageIO for images, FFmpeg stream info for video).
+    /// Probes metadata (pixel dimensions + codec) for every displayed item
+    /// that isn't cached yet, so `groupedByOrientation` and `groupedByType` can
+    /// place them deterministically instead of waiting for grid rows to lazily
+    /// probe. Runs a bounded concurrent pass (like the codec prefetch), bumping
+    /// the display revision as data lands so the sections rebuild
+    /// progressively. Cheap: each probe only reads file headers (ImageIO for
+    /// images, FFmpeg stream info for video). Shared by the orientation and
+    /// type grouping dimensions, which both depend on this cached metadata.
     private func prefetchOrientationSizes() {
         orientationPrefetchTask?.cancel()
         let pending = displayedItems.filter {
@@ -2878,10 +3000,11 @@ final class BrowserModel {
                     inFlight -= 1
                     if Task.isCancelled { break }
                     addNext()
-                    // Rebuild the orientation sections as sizes arrive so items
-                    // migrate out of "Unknown" progressively. Flag the refresh
-                    // so this invalidation doesn't restart the prefetch pass.
-                    if let self, self.grouping == .orientation {
+                    // Rebuild the orientation / type sections as data arrives
+                    // so items migrate out of the "Unknown" / "resolving…"
+                    // bucket progressively. Flag the refresh so this
+                    // invalidation doesn't restart the prefetch pass.
+                    if let self, self.grouping == .orientation || self.grouping == .type {
                         self.isRefreshingOrientationSizes = true
                         self.invalidateDisplayCache()
                         self.isRefreshingOrientationSizes = false

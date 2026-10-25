@@ -168,6 +168,9 @@ private struct SingleItemInfo: View {
                     if item.kind == .video, let codec = metadata.codec {
                         InfoRow(label: "Codec", value: codec.uppercased())
                     }
+                    if item.kind == .video, let bitrate = metadata.bitrate {
+                        InfoRow(label: "Bitrate", value: bitrateString(bitrate))
+                    }
                 }
 
                 InfoSection(title: "Dates") {
@@ -374,6 +377,17 @@ private struct SingleItemInfo: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%d:%02d", m, s)
+    }
+
+    /// Formats an overall bitrate (bits per second) as Mbps or kbps, e.g.
+    /// "12.4 Mbps" or "850 kbps".
+    private func bitrateString(_ bitsPerSecond: Int64) -> String {
+        let mbps = Double(bitsPerSecond) / 1_000_000
+        if mbps >= 1 {
+            return String(format: "%.1f Mbps", mbps)
+        }
+        let kbps = Double(bitsPerSecond) / 1_000
+        return String(format: "%.0f kbps", kbps)
     }
 }
 
