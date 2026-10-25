@@ -146,6 +146,21 @@ struct LoupeCommands: Commands {
             Button(quickExportTitle) { model?.quickExportSelection() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!canQuickExport)
+
+            Divider()
+
+            // Grab the frame at the current playback position of the selected
+            // video as a PNG saved next to the source. The ⇧⌘S equivalent is
+            // held by the viewer's own hotkey while it's open (so the viewer
+            // wins focus), so this menu owner drops its key equivalent then —
+            // mirroring how the zoom/select commands yield to the viewer.
+            Button("Capture Still from Video") { model?.captureVideoStill() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                // A disabled Button releases its ⇧⌘S equivalent, so while the
+                // viewer is open its own capture hotkey owns the key; the menu
+                // reclaims it when the viewer is closed (e.g. capturing from the
+                // preview sidebar's player).
+                .disabled(!canCaptureStill || viewerOpen)
         }
 
         // MARK: Item actions — placed after the Edit menu's pasteboard group.
@@ -386,6 +401,7 @@ struct LoupeCommands: Commands {
                     Text("Type").tag(GroupingDimension.type)
                     Text("Folder").tag(GroupingDimension.folder)
                     Text("Orientation").tag(GroupingDimension.orientation)
+                    Text("Filename Prefix").tag(GroupingDimension.filenamePrefix)
                     Text("Category").tag(GroupingDimension.category)
                     Text("Person").tag(GroupingDimension.person)
                 }
@@ -477,6 +493,11 @@ struct LoupeCommands: Commands {
 
     /// Enabled when the selection has at least one video to transcode.
     private var canExportVideo: Bool { model?.canExportVideoSelection ?? false }
+
+    /// Enabled when the selected video can have a still captured — an
+    /// AVFoundation-decodable video is the primary selection and a player is
+    /// actively driving it (so there's a real position to grab).
+    private var canCaptureStill: Bool { model?.canCaptureVideoStill() ?? false }
 
     /// Enabled when the selection has any exportable media (image or video).
     private var canQuickExport: Bool { model?.canQuickExportSelection() ?? false }

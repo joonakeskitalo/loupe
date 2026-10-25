@@ -174,7 +174,10 @@ struct MediaViewer: View {
             onArrow: { forward, shift in handleArrow(forward: forward, shift: shift) }
         ))
         .onChange(of: items.first?.id) { _, _ in
-            if !showingSingleVideo { videoController = nil }
+            if !showingSingleVideo {
+                videoController = nil
+                clearViewerPlaybackController()
+            }
             prefetchUpcomingImages()
         }
         .onChange(of: items.count) { _, _ in prefetchUpcomingImages() }
@@ -192,6 +195,16 @@ struct MediaViewer: View {
             // even before the user clicks inside the viewer. Deferred to the
             // next runloop tick so the focusable view is installed first.
             DispatchQueue.main.async { isFocused = true }
+        }
+        .onDisappear { clearViewerPlaybackController() }
+    }
+
+    /// Drops the viewer's registration with the model's playback-controller
+    /// channel, but only when the model still points at *this* viewer's
+    /// controller — so a newer player that registered first isn't cleared.
+    private func clearViewerPlaybackController() {
+        if let videoController, model.viewerPlaybackController === videoController {
+            model.viewerPlaybackController = nil
         }
     }
 
@@ -370,7 +383,13 @@ struct MediaViewer: View {
         case .video, .audio:
             VideoPlayerView(
                 url: item.url,
-                onController: { controller in videoController = controller },
+                onController: { controller in
+                    videoController = controller
+                    // Register with the model so menu-bar / hotkey commands
+                    // (e.g. "Capture Still from Video") can read the live
+                    // playback position while the viewer owns the player.
+                    model.viewerPlaybackController = controller
+                },
                 onPrevious: { model.moveSelection(by: -1) },
                 onNext: { model.moveSelection(by: 1) },
                 // ←/→ navigation is routed through the player surface's key
@@ -593,6 +612,12 @@ struct MediaViewer: View {
                 hotkey("o", []) { videoController?.skip(by: 15) }
                 hotkey(",", []) { videoController?.stepFrame(by: -1) }
                 hotkey(".", []) { videoController?.stepFrame(by: 1) }
+                // ⇧⌘S grabs the frame at the current position as a PNG next to
+                // the source. Disabled for mpv-only containers (mkv/webm),
+                // which have no AVFoundation frame API.
+                if model.canCaptureVideoStill() {
+                    hotkey("s", [.command, .shift]) { model.captureVideoStill() }
+                }
             }
         }
         // Suspend the viewer's single-key hotkeys while the tag-input overlay

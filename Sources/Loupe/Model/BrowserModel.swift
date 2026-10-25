@@ -53,6 +53,10 @@ enum GroupingDimension: String, CaseIterable {
     /// Buckets items by media kind — Images, Videos, PDFs, Audio, etc. — using
     /// each file's `MediaKind` classification.
     case type = "Type"
+    /// Buckets items by the leading part of their filename before the first
+    /// underscore (e.g. "IMG_0001.jpg" and "IMG_0002.jpg" group under "IMG").
+    /// Names with no underscore fall into a residual group.
+    case filenamePrefix = "Filename Prefix"
 }
 
 @MainActor
@@ -240,6 +244,21 @@ final class BrowserModel {
     /// channel, not display state — and held weakly so the player can
     /// deallocate normally when the preview goes away.
     @ObservationIgnored weak var previewPlaybackController: (any PlaybackController)?
+
+    /// The playback controller of the video shown in the fullscreen viewer, if
+    /// any. The viewer registers it while a single video/audio item is up and
+    /// clears it on teardown. Like `previewPlaybackController` this is a
+    /// transient command channel (not display state) held weakly, used by the
+    /// "Capture Still from Video" command to read the live playback position.
+    @ObservationIgnored weak var viewerPlaybackController: (any PlaybackController)?
+
+    /// The playback controller currently driving a video on screen, preferring
+    /// the fullscreen viewer's over the preview sidebar's when both exist. Nil
+    /// when nothing is playing. Drives the still-capture command's access to
+    /// the current playback position.
+    var activePlaybackController: (any PlaybackController)? {
+        viewerPlaybackController ?? previewPlaybackController
+    }
 
     /// Seeks the preview sidebar's video by `seconds` (negative rewinds).
     /// Returns true when there was a preview video to seek — so the caller can
@@ -2701,6 +2720,7 @@ final class BrowserModel {
         case .folder:      result = groupedByFolder
         case .orientation: result = groupedByOrientation
         case .type:        result = groupedByType
+        case .filenamePrefix: result = groupedByFilenamePrefix
         case .category, .none: result = groupedByCategoryGroups
         }
         cacheGroups(result, at: displayRevision)
@@ -2821,6 +2841,56 @@ final class BrowserModel {
                 symbol: "folder",
                 items: buckets[dir] ?? [])
         }
+    }
+
+    /// Sections the displayed items by the leading part of their filename up to
+    /// (but not including) the first underscore — e.g. "IMG_0001.jpg" and
+    /// "IMG_0002.jpg" both land under "IMG". The name is known at scan time, so
+    /// this needs no metadata probe. Prefixes are ordered naturally (so numeric
+    /// runs sort sensibly), and files whose name has no underscore collect in a
+    /// residual "No Prefix" group shown last.
+    private var groupedByFilenamePrefix: [CategoryGroup] {
+        let items = displayedItems
+        var buckets: [String: [MediaItem]] = [:]
+        var order: [String] = []
+        var noPrefix: [MediaItem] = []
+        for item in items {
+            guard let prefix = Self.filenamePrefix(for: item.name) else {
+                noPrefix.append(item)
+                continue
+            }
+            if buckets[prefix] == nil { order.append(prefix) }
+            buckets[prefix, default: []].append(item)
+        }
+        let sorted = order.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        var groups = sorted.map { prefix in
+            CategoryGroup(
+                id: "prefix-\(prefix)",
+                title: prefix,
+                symbol: "textformat.abc",
+                items: buckets[prefix] ?? [])
+        }
+        if !noPrefix.isEmpty {
+            groups.append(CategoryGroup(
+                id: "\u{0}noprefix", title: "No Prefix",
+                symbol: "textformat.abc.dottedunderline",
+                items: noPrefix, isResidual: true))
+        }
+        return groups
+    }
+
+    /// The grouping key for "Group by Filename Prefix": the substring of a
+    /// filename before its first underscore, or `nil` when there's no
+    /// underscore (the whole name would otherwise be its own singleton group).
+    /// The extension is ignored first so a name like "report.pdf" with no
+    /// underscore is treated as prefix-less rather than yielding "report.pdf".
+    nonisolated static func filenamePrefix(for name: String) -> String? {
+        let stem = (name as NSString).deletingPathExtension
+        guard let underscore = stem.firstIndex(of: "_") else { return nil }
+        let prefix = stem[stem.startIndex..<underscore]
+        return prefix.isEmpty ? nil : String(prefix)
     }
 
     /// A resolution tier for "Group by Type", derived from a video's displayed
@@ -3924,6 +3994,68 @@ final class BrowserModel {
 
         guard panel.runModal() == .OK, let directory = panel.url else { return }
         exportImages(toDirectory: directory, item: item)
+    }
+
+    // MARK: - Video still capture
+
+    /// The video whose frame a "Capture Still" action would grab: the
+    /// right-clicked `item` when given, otherwise the primary selection. Only a
+    /// video AVFoundation can decode qualifies — the mpv-only containers
+    /// (`.mkv` / `.webm`) have no reachable frame API, so they're excluded.
+    private func stillCaptureTarget(_ item: MediaItem? = nil) -> MediaItem? {
+        let candidate = item ?? primarySelectedItem
+        guard let candidate, candidate.kind == .video,
+              VideoStillCapturer.canCapture(url: candidate.url) else {
+            return nil
+        }
+        return candidate
+    }
+
+    /// Whether a still can be captured right now: a capturable video is the
+    /// primary selection (or `item`) and a player is actively driving it, so
+    /// there's a real playback position to grab. Used to enable the menu
+    /// command and in-viewer hotkey.
+    func canCaptureVideoStill(_ item: MediaItem? = nil) -> Bool {
+        stillCaptureTarget(item) != nil && activePlaybackController != nil
+    }
+
+    /// Captures the frame at the current playback position from the selected
+    /// video (or `item`) and writes it as a PNG next to the source file,
+    /// revealing the result in Finder. No-op when there's no capturable video
+    /// playing. Reports failures through an alert.
+    ///
+    /// The frame is grabbed fresh from the file at the controller's reported
+    /// time rather than from the live decoder, so it works the same whether the
+    /// video is in the fullscreen viewer or the preview sidebar.
+    func captureVideoStill(_ item: MediaItem? = nil) {
+        guard let target = stillCaptureTarget(item),
+              let controller = activePlaybackController else { return }
+
+        let seconds = controller.currentTime
+        let url = target.url
+        let directory = target.parentDirectory
+
+        Task { @MainActor in
+            do {
+                let written = try await VideoStillCapturer.capture(
+                    url: url, at: seconds, toDirectory: directory)
+                NSWorkspace.shared.activateFileViewerSelecting([written])
+            } catch {
+                presentStillCaptureFailure(url: url)
+            }
+        }
+    }
+
+    /// Shows a modal alert when a still capture couldn't be written — e.g. the
+    /// frame failed to decode or the folder isn't writable.
+    private func presentStillCaptureFailure(url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn’t Capture Still"
+        alert.informativeText =
+            "Loupe couldn’t save a screenshot from “\(url.lastPathComponent)” at the current position."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Video export (transcode)
