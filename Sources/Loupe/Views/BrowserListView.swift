@@ -717,12 +717,41 @@ private struct ListRowView: View {
         guard showsThumbnail else { return }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: thumbSize, height: thumbSize)
-        if let result = await ThumbnailProvider.shared.thumbnail(
-            for: item.url, size: target, scale: scale, method: method, videoPosition: videoPosition
-        ) {
-            image = result
+
+        // Retry transient misses, same as the grid cell (see
+        // `ThumbnailView.loadThumbnail`): `.cancelled` means a display change
+        // cut the request short, so ask again; `.failed` is retried a few times
+        // with backoff before we leave the row showing its type icon, so a
+        // momentary decode failure in a large folder recovers instead of
+        // stranding the row permanently.
+        for attempt in 0..<Self.maxLoadAttempts {
+            if Task.isCancelled { return }
+            let outcome = await ThumbnailProvider.shared.thumbnailOutcome(
+                for: item.url, size: target, scale: scale,
+                method: method, videoPosition: videoPosition
+            )
+            switch outcome {
+            case .image(let img):
+                image = img
+                return
+            case .cancelled:
+                continue
+            case .failed:
+                if attempt == Self.maxLoadAttempts - 1 { return }
+                let delay = Self.retryBaseDelay * UInt64(attempt + 1)
+                try? await Task.sleep(nanoseconds: delay)
+                if Task.isCancelled { return }
+            }
         }
     }
+
+    /// Retry budget for genuine `.failed` results; `.cancelled` rounds don't
+    /// count. Matches `ThumbnailView`'s policy so grid and list recover from a
+    /// transient miss identically.
+    private static let maxLoadAttempts = 4
+
+    /// Base backoff between `.failed` retries, scaled by attempt number.
+    private static let retryBaseDelay: UInt64 = 300_000_000
 
     private func probeMetadata() async {
         guard item.kind == .video || item.kind == .image else { return }

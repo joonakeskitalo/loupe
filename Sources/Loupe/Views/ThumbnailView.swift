@@ -33,7 +33,6 @@ struct ThumbnailView: View {
     var videoPosition: VideoThumbnailPosition = .defaultPosition
 
     @State private var image: NSImage?
-    @State private var didFail = false
 
     /// The image to draw right now: the one this cell loaded, or — when the
     /// cell was just (re)created by `LazyVGrid` on scroll and hasn't loaded yet
@@ -217,23 +216,63 @@ struct ThumbnailView: View {
 
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let target = CGSize(width: size, height: size)
-        // This cell is on (or very near) screen, so it's visible-priority: it
-        // jumps ahead of any prefetch work the grid queued for the viewport
-        // edges. Re-requesting an already-queued prefetch here promotes it.
-        let result = await ThumbnailProvider.shared.thumbnail(
-            for: item.url,
-            size: target,
-            scale: scale,
-            method: method,
-            videoPosition: videoPosition,
-            priority: .visible
-        )
-        if let result {
-            image = result
-        } else {
-            didFail = true
+
+        // Request at visible priority, retrying transient misses. A nil result
+        // used to be treated as a permanent failure, so a cell that happened to
+        // dedupe onto a cancelled prefetch — or hit a momentary QuickLook/XPC or
+        // ImageIO failure under load — showed the fallback icon forever and
+        // never asked again (`.task(id:)` only re-runs when the item or options
+        // change). That's the "missing thumbnails in large folders, worst toward
+        // the end" symptom. Now we distinguish the outcomes:
+        //   * `.image`   — done.
+        //   * `.cancelled` — interrupted by a display change; ask again.
+        //   * `.failed`  — no decoder could produce a thumbnail. Usually genuine
+        //     (the file has none), but transient failures surface here too, so
+        //     retry a few times with backoff before settling on the type icon.
+        for attempt in 0..<Self.maxLoadAttempts {
+            if Task.isCancelled { return }
+            let outcome = await ThumbnailProvider.shared.thumbnailOutcome(
+                for: item.url,
+                size: target,
+                scale: scale,
+                method: method,
+                videoPosition: videoPosition,
+                priority: .visible
+            )
+            switch outcome {
+            case .image(let img):
+                image = img
+                return
+            case .cancelled:
+                // Interrupted, not failed. Loop straight back and re-request
+                // without counting it against the failure budget.
+                continue
+            case .failed:
+                // Last attempt: give up and let the cell show its type icon.
+                if attempt == Self.maxLoadAttempts - 1 { return }
+                // Back off before retrying so a transient resource crunch (a
+                // throttled QuickLook agent in a big folder) has room to clear,
+                // and we don't hammer a truly-undecodable file. Grows per
+                // attempt; bail if the cell goes away meanwhile.
+                let delay = Self.retryBaseDelay * UInt64(attempt + 1)
+                try? await Task.sleep(nanoseconds: delay)
+                if Task.isCancelled { return }
+            }
         }
     }
+
+    /// How many times `loadThumbnail` asks before it settles on the type icon.
+    /// `.cancelled` rounds don't count against this — only genuine `.failed`
+    /// results do — so this bounds retries of real failures, letting a transient
+    /// decode miss recover while a truly undecodable file stops after a few
+    /// tries instead of spinning.
+    private static let maxLoadAttempts = 4
+
+    /// Base backoff between `.failed` retries, multiplied by the attempt number
+    /// so successive retries wait longer (~0.3s, 0.6s, 0.9s). Long enough for a
+    /// momentary QuickLook/ImageIO resource crunch to clear, short enough that a
+    /// recoverable thumbnail fills in without a visible stall.
+    private static let retryBaseDelay: UInt64 = 300_000_000
 }
 
 /// Clips the thumbnail to the cell's rounded rect, but only in fill mode. In

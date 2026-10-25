@@ -442,9 +442,31 @@ actor ThumbnailProvider {
         videoPosition: VideoThumbnailPosition = .defaultPosition,
         priority: Priority = .visible
     ) async -> NSImage? {
+        await thumbnailOutcome(
+            for: url, size: size, scale: scale, method: method,
+            videoPosition: videoPosition, priority: priority
+        ).image
+    }
+
+    /// Like `thumbnail(for:…)` but surfaces the full `GenerationOutcome` so the
+    /// caller can tell a genuine, permanent decode failure (`.failed` — show the
+    /// type icon and stop) from an interruption (`.cancelled` — a display change
+    /// cut the work short; ask again). A plain `NSImage?` collapses both to
+    /// `nil`, which is what left transient misses stuck as a fallback icon: the
+    /// cell couldn't distinguish "this file has no thumbnail" from "that attempt
+    /// got cut short." The cell retries on `.cancelled` and only gives up on
+    /// `.failed`.
+    func thumbnailOutcome(
+        for url: URL,
+        size: CGSize,
+        scale: CGFloat,
+        method: ThumbnailMethod = .hybrid,
+        videoPosition: VideoThumbnailPosition = .defaultPosition,
+        priority: Priority = .visible
+    ) async -> GenerationOutcome {
         let key = Self.cacheKey(url: url, method: method, videoPosition: videoPosition)
         if let cached = cache.object(forKey: key) {
-            return cached
+            return .image(cached)
         }
 
         // Clamp the requested resolution so we never decode/store more pixels
@@ -477,11 +499,11 @@ actor ThumbnailProvider {
                 // Stop if this caller was itself cancelled (the cell is gone)
                 // or we've retried enough — don't busy-loop on a hot filter.
                 if Task.isCancelled || attempt >= Self.maxCancelRetries {
-                    return outcome.image
+                    return outcome
                 }
                 continue
             }
-            return outcome.image
+            return outcome
         }
     }
 
@@ -553,7 +575,12 @@ actor ThumbnailProvider {
     ///
     /// `keeping` is the set of URLs still displayed (the new displayed set).
     func cancelInFlight(notIn keeping: Set<URL>) {
-        for url in inFlightPriority.keys where !keeping.contains(url) {
+        // Snapshot the keys before cancelling. `task.cancel()` can synchronously
+        // resume a parked waiter whose task body then hops back onto the actor
+        // and runs `finish`/`abandon`, mutating `inFlight`/`inFlightPriority`.
+        // Iterating the live `keys` view while that happens is undefined; the
+        // snapshot makes the pass stable.
+        for url in Array(inFlightPriority.keys) where !keeping.contains(url) {
             inFlight[url]?.cancel()
         }
     }
@@ -822,6 +849,14 @@ actor ThumbnailProvider {
             // still goes through the tight video gate so a cluster of slow
             // QuickLook video renders can't monopolize the general slots.
             if method == .nativeMacOS {
+                // Checkpoint before the QuickLook XPC hop (the only slow stage
+                // on this path): don't start it for a request already abandoned
+                // by a folder/filter change. No sub-slot held yet, so `finish`
+                // releases the general slot exactly once.
+                if Task.isCancelled {
+                    await self?.finish(url: url, method: method, videoPosition: videoPosition, image: nil)
+                    return .cancelled
+                }
                 if kind == .video { await self?.acquireVideoSlot() }
                 image = await Self.quickLookThumbnail(for: url, pixelSize: pixelSize)
                 if kind == .video { await self?.releaseVideoSlot() }
@@ -852,6 +887,22 @@ actor ThumbnailProvider {
                 if isRaw { await self?.releaseRawSlot() }
             }
 
+            // Cancellation checkpoint between decode stages. A single decoder
+            // call can't be interrupted once it's blocked on a slow disk, but
+            // we can refuse to START the next slow stage (the QuickLook XPC hop
+            // or the video decode) for a request whose folder/filter is already
+            // gone. On a slow external HDD this is what keeps abandoned work
+            // from chaining ImageIO-miss → QuickLook → video and holding a
+            // scarce slot across several slow operations while the new folder's
+            // visible cells wait. No sub-slot (video/raw) is held here, so
+            // routing straight to `finish` releases the one general slot exactly
+            // once. `finish` with a nil image caches nothing; `outcome` reports
+            // `.cancelled` so a still-visible caller retries with fresh work.
+            if image == nil, Task.isCancelled {
+                await self?.finish(url: url, method: method, videoPosition: videoPosition, image: nil)
+                return .cancelled
+            }
+
             // General path / image fallback: QuickLook. Covers PDFs, documents,
             // and anything ImageIO couldn't decode. Skipped for video, which has
             // its own decode chain below (QuickLook rarely adds value there and
@@ -866,7 +917,13 @@ actor ThumbnailProvider {
             // containers neither QuickLook nor AVFoundation decode (notably
             // .mkv and .webm). This path is CPU-heavy, so it goes through the
             // tight video gate to keep a cluster of slow decodes from
-            // monopolizing the cores.
+            // monopolizing the cores. Re-check cancellation first: the video
+            // decode is the single most expensive stage, so never start it for
+            // an abandoned request.
+            if image == nil, kind == .video, Task.isCancelled {
+                await self?.finish(url: url, method: method, videoPosition: videoPosition, image: nil)
+                return .cancelled
+            }
             if image == nil, kind == .video {
                 await self?.acquireVideoSlot()
                 image = await Self.videoFrame(
