@@ -240,10 +240,28 @@ struct VideoPlayerView: View {
     /// viewer passes this; inline previews leave the picture fit.
     var onZoom: ((VideoZoomState) -> Void)? = nil
 
+    /// Resolved video metadata for `url`, used to detect streams AVFoundation
+    /// can't render (notably `hev1`-tagged HEVC). Seeded synchronously from the
+    /// shared cache on appear and filled in by a probe on a miss, so the
+    /// backend can switch to mpv once the codec/tag is known.
+    @State private var metadata: MediaMetadata?
+
     /// True when the extension is one AVFoundation can't demux and mpv must
-    /// handle. Reuses the single source of truth in `MediaItem`.
-    private var needsMPV: Bool {
+    /// handle (Matroska / WebM — the single source of truth in `MediaItem`).
+    private var extensionNeedsMPV: Bool {
         MediaKind.videoExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    /// Which backend decodes this item. mpv is used for the containers
+    /// AVFoundation can't demux (.mkv/.webm) AND for streams it demuxes but
+    /// can't display — specifically `hev1`-tagged HEVC, which otherwise plays
+    /// as audio-only behind the QuickTime logo. mpv decodes HEVC regardless of
+    /// the sample-entry tag. Until the probe resolves, assume AVFoundation
+    /// (the common case); the view rebuilds onto mpv if the probe says so.
+    private var needsMPV: Bool {
+        if extensionNeedsMPV { return true }
+        if let metadata, !metadata.isAVFoundationPlayableVideo { return true }
+        return false
     }
 
     var body: some View {
@@ -265,6 +283,26 @@ struct VideoPlayerView: View {
             }
         }
         .id(needsMPV)
+        .task(id: url) { await resolveMetadata() }
+    }
+
+    /// Resolves `url`'s metadata so `needsMPV` can account for the codec/tag.
+    /// Only matters for the extensions AVFoundation would otherwise take; the
+    /// mpv-only containers already route to mpv by extension. Reads the
+    /// synchronous cache first (no flicker when already probed), then probes.
+    private func resolveMetadata() async {
+        // Only video items can hit the HEVC-tag problem. Skip the mpv-only
+        // containers (already routed by extension) and anything that isn't a
+        // video (e.g. an audio file shown in this same player).
+        guard !extensionNeedsMPV, MediaKind.classify(url: url) == .video else { return }
+        if let cached = MediaMetadataCache.cached(for: url) {
+            metadata = cached
+            return
+        }
+        let probed = await VideoMetadataProvider.shared.metadata(for: url, kind: .video)
+        // Ignore a stale result if the view has since moved to another item.
+        guard self.url == url else { return }
+        metadata = probed
     }
 }
 

@@ -8,6 +8,13 @@ struct MediaMetadata: Sendable, Equatable {
     /// Video codec name, e.g. "h264", "hevc", "vp9". Nil for images or when it
     /// can't be determined.
     var codec: String?
+    /// The container's sample-entry fourcc for the video stream, lowercased —
+    /// e.g. "hvc1", "hev1", "avc1". This is the codec *tag*, distinct from the
+    /// codec name (`codec`): HEVC can be carried as either `hvc1` or `hev1`, and
+    /// the difference matters because AVFoundation only decodes `hvc1`-tagged
+    /// HEVC (a `hev1`-tagged clip shows the QuickTime placeholder with audio
+    /// only). Nil for images or when the tag is absent/zero.
+    var codecTag: String?
     /// Pixel width/height. Nil when it can't be determined.
     var pixelSize: PixelSize?
     /// Clip length in seconds (videos only). Nil for images or when the
@@ -17,7 +24,19 @@ struct MediaMetadata: Sendable, Equatable {
     /// when the container reports no usable bitrate.
     var bitrate: Int64?
 
-    static let empty = MediaMetadata(codec: nil, pixelSize: nil, duration: nil, bitrate: nil)
+    static let empty = MediaMetadata(codec: nil, codecTag: nil, pixelSize: nil, duration: nil, bitrate: nil)
+
+    /// Whether AVFoundation can be expected to decode this video's picture.
+    /// HEVC carried with any tag other than `hvc1` (notably `hev1`) is the
+    /// known failure: AVFoundation plays the audio but shows only the QuickTime
+    /// logo. Everything else is assumed AVFoundation-playable (the backend
+    /// falls back to libmpv when this is false). Conservative: an unknown tag on
+    /// an HEVC stream is treated as NOT playable so it routes to mpv, which
+    /// decodes HEVC regardless of the sample-entry tag.
+    var isAVFoundationPlayableVideo: Bool {
+        guard let codec, codec == "hevc" else { return true }
+        return codecTag == "hvc1"
+    }
 }
 
 /// A main-actor snapshot of already-resolved metadata, so list rows can render
@@ -190,6 +209,12 @@ actor VideoMetadataProvider {
             if !name.isEmpty, name != "none" { codec = name }
         }
 
+        // The container's sample-entry fourcc (e.g. "hvc1"/"hev1"/"avc1"),
+        // decoded from the little-endian `codec_tag`. Used to tell apart HEVC
+        // variants AVFoundation can vs. can't decode. Zero means the container
+        // carried no tag.
+        let codecTag = Self.fourCC(codecpar.pointee.codec_tag)
+
         var pixelSize: PixelSize?
         var w = Int(codecpar.pointee.width)
         var h = Int(codecpar.pointee.height)
@@ -223,7 +248,29 @@ actor VideoMetadataProvider {
             bitrate = Int64(Double(size) * 8 / duration)
         }
 
-        return MediaMetadata(codec: codec, pixelSize: pixelSize, duration: duration, bitrate: bitrate)
+        return MediaMetadata(codec: codec, codecTag: codecTag,
+                             pixelSize: pixelSize, duration: duration, bitrate: bitrate)
+    }
+
+    /// Decodes a little-endian fourcc (`codec_tag`) into a lowercased 4-char
+    /// string, e.g. 0x31637668 → "hvc1". Returns nil when the tag is zero or
+    /// contains non-printable bytes (so a garbage tag doesn't masquerade as a
+    /// real fourcc).
+    private static func fourCC(_ tag: UInt32) -> String? {
+        guard tag != 0 else { return nil }
+        var bytes: [UInt8] = [
+            UInt8(tag & 0xFF),
+            UInt8((tag >> 8) & 0xFF),
+            UInt8((tag >> 16) & 0xFF),
+            UInt8((tag >> 24) & 0xFF)
+        ]
+        // Trim trailing spaces/nulls some tags pad with, but reject control
+        // bytes that signal this isn't a textual fourcc.
+        guard bytes.allSatisfy({ $0 == 0 || $0 == 0x20 || ($0 >= 0x21 && $0 <= 0x7E) })
+        else { return nil }
+        while let last = bytes.last, last == 0 || last == 0x20 { bytes.removeLast() }
+        guard !bytes.isEmpty else { return nil }
+        return String(decoding: bytes, as: UTF8.self).lowercased()
     }
 
     /// Returns true when the stream's display-matrix side data rotates the
