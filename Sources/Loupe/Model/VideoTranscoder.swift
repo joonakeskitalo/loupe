@@ -236,7 +236,11 @@ enum VideoTranscoder {
         encCtx.pointee.framerate = frameRate
 
         encCtx.pointee.gop_size = 12
-        encCtx.pointee.max_b_frames = 2
+        // B-frames cost throughput (frame reordering + extra motion
+        // estimation). On the hardware VideoToolbox path, encoding speed is the
+        // priority, so disable them there; keep a couple for the software x264
+        // path where they meaningfully improve compression.
+        encCtx.pointee.max_b_frames = chosenCodec.isVideoToolbox ? 0 : 2
 
         var opts: OpaquePointer? = nil // AVDictionary*
         defer { av_dict_free(&opts) }
@@ -346,10 +350,14 @@ enum VideoTranscoder {
         }
 
         // MARK: Scaler (source pix fmt -> YUV420P at target size)
+        // Fast bilinear is the quickest swscale path; at the downscale ratios
+        // used here the quality difference from plain bilinear is negligible,
+        // and it cuts the per-frame CPU cost that the hardware encoder would
+        // otherwise stall waiting on.
         guard let sws = sws_getContext(
             Int32(srcW), Int32(srcH), AVPixelFormat(decCtx.pointee.pix_fmt.rawValue),
             Int32(dstW), Int32(evenDstH), AV_PIX_FMT_YUV420P,
-            Int32(SWS_BILINEAR.rawValue), nil, nil, nil
+            Int32(SWS_FAST_BILINEAR.rawValue), nil, nil, nil
         ) else {
             throw TranscodeError.scaler
         }

@@ -132,6 +132,15 @@ struct LoupeApp: App {
 /// on the key window — the same calls the system's own Window-menu items use.
 @MainActor
 enum WindowTabs {
+    /// True while a ⌘T-spawned window is being created by AppKit's
+    /// `newWindowForTab:`. `WindowTabbingConfigurator` reads this to know the
+    /// window it's attaching to was already placed in a tab group by AppKit,
+    /// so it must NOT try to merge it again. Checking the live `tabGroup`
+    /// instead races AppKit's own registration (the configurator runs in a
+    /// `DispatchQueue.main.async` that can fire before the new window is listed
+    /// in its group), and that race is what made the window reparent and jump.
+    private(set) static var isCreatingTab = false
+
     /// Opens a new tab in the frontmost window. Prefers AppKit's
     /// `newWindowForTab:` (which adds a tab to the key window's group); if no
     /// window can service it (e.g. none is open yet), falls back to opening a
@@ -144,10 +153,19 @@ enum WindowTabs {
             // window's tab group in one atomic AppKit step, so the tab never
             // appears as a standalone window first. We deliberately do NOT
             // re-tab or re-order it here: doing so reparents a window that is
-            // already correctly tabbed, which makes it flicker/jump. The
-            // configurator on the new window likewise skips merging once it
-            // sees it is already in a tab group.
+            // already correctly tabbed, which makes it flicker/jump. The flag
+            // tells the new window's `WindowTabbingConfigurator` to leave the
+            // window alone (it's already tabbed), without depending on the
+            // tab-group membership being observable yet.
+            isCreatingTab = true
             window.newWindowForTab(nil)
+            // Clear once the current run loop turn (and the configurator's
+            // async hop) has had a chance to see the flag. The new window's
+            // view is created synchronously within newWindowForTab, so its
+            // configurator's async block is already enqueued by now; this
+            // deferred reset lets that block observe `true`, then restores the
+            // standalone (⌘N) behavior for the next window.
+            DispatchQueue.main.async { isCreatingTab = false }
             return
         }
         openWindow()

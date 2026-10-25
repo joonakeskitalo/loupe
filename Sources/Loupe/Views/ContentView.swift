@@ -550,11 +550,14 @@ private struct WindowTabbingConfigurator: NSViewRepresentable {
             // openWindow). A window created by `newWindowForTab:` (⌘T) is
             // already placed in its source window's tab group by AppKit, so
             // re-adding it here would reparent an already-tabbed window and
-            // make it visibly flicker/jump. `tabGroup.windows.count > 1` means
-            // it's already sharing a group — leave it alone.
+            // make it visibly flicker/jump.
             //
-            // `tabGroup` is non-nil even for a lone window, so guard on the
-            // member count rather than on `tabGroup != nil`.
+            // We can't reliably detect that from `window.tabGroup` here: this
+            // async block can run before AppKit has listed the new window in
+            // its group, so the membership check races and sometimes misses,
+            // letting us wrongly re-tab (the jump). Instead, `WindowTabs` sets
+            // `isCreatingTab` for the duration of a ⌘T creation; honor it.
+            if WindowTabs.isCreatingTab { return }
             if let group = window.tabGroup, group.windows.count > 1 { return }
 
             // `tabbingMode = .preferred` alone defers to the macOS "Prefer tabs
