@@ -3934,7 +3934,7 @@ final class BrowserModel {
 
     /// The encoder used for a video export — software H.264 (max compatibility)
     /// or hardware H.265 via VideoToolbox (much faster, smaller files).
-    var exportVideoCodec: VideoTranscoder.Codec = .h264
+    var exportVideoCodec: VideoTranscoder.Codec = .hevcVideoToolbox
 
     /// When true, a video export targets a fixed perceptual quality
     /// (`exportVideoConstantQuality`) rather than an automatic bitrate. On by
