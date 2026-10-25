@@ -245,9 +245,19 @@ final class ZoomHostView: NSView {
 
     /// Re-center the transform when the view is resized so the anchor stays at
     /// the middle (the position is in the superlayer's coordinate space).
+    ///
+    /// Wrapped in a non-animated transaction: when the viewer animates the
+    /// media area's width (e.g. toggling the info sidebar), AppKit drives this
+    /// host through intermediate frames. Without disabling implicit actions the
+    /// layer's `position` would animate toward each new center on CA's own
+    /// timeline, so the hosted video briefly trails off-center (it flashes in a
+    /// corner) before catching up. Snapping each frame keeps it centered.
     override func layout() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         super.layout()
         layer?.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        CATransaction.commit()
     }
 }
 

@@ -587,6 +587,23 @@ final class KeyablePlayerView: AVPlayerView {
         refreshMonitor()
     }
 
+    // When the viewer's layout animates — most visibly toggling the info
+    // sidebar, which animates the media area's width — AppKit drives this
+    // view's frame through intermediate sizes. AVPlayerView is layer-backed,
+    // so without this its `AVPlayerLayer` (and the aspect-fit video rect it
+    // computes) implicitly animates toward each new frame on its own timeline.
+    // For a frame or two the fitted picture is positioned against a stale,
+    // wider bounds and lands in a corner — the "video flashes in the top-right"
+    // glitch. Pinning the relayout inside a non-animated CATransaction makes
+    // the surface snap straight to each frame so the picture never detaches
+    // from its centered position.
+    override func layout() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        super.layout()
+        CATransaction.commit()
+    }
+
     /// Install the monitor only when in a window AND this surface owns the
     /// keyboard; otherwise tear it down.
     private func refreshMonitor() {
