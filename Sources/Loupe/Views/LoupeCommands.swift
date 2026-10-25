@@ -429,6 +429,16 @@ struct LoupeCommands: Commands {
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(model == nil || (model?.classifiedCount ?? 0) == 0)
 
+            // Quick toggle for filename-prefix grouping (⌥⌘G flips between
+            // grouping by the leading filename segment and a flat list). Like
+            // folder grouping it needs no AI pass, so it's live whenever the
+            // window has content.
+            Button(groupByFilenamePrefixToggleTitle) {
+                model?.grouping = model?.grouping == .filenamePrefix ? .none : .filenamePrefix
+            }
+            .keyboardShortcut("g", modifiers: [.command, .option])
+            .disabled(model == nil || !(model?.hasContent ?? false))
+
             Divider()
 
             // Sort submenu.
@@ -579,6 +589,10 @@ struct LoupeCommands: Commands {
 
     private var groupByCategoryToggleTitle: String {
         model?.grouping == .category ? "Ungroup" : "Group by Category"
+    }
+
+    private var groupByFilenamePrefixToggleTitle: String {
+        model?.grouping == .filenamePrefix ? "Ungroup" : "Group by Filename Prefix"
     }
 
     // MARK: - Bindings into the focused model
