@@ -34,6 +34,25 @@ enum ImageCopyScale: String, CaseIterable, Sendable {
         case .max128: return min(sourceLongestEdge, 128)
         }
     }
+
+    /// A short filename-safe token describing the scale, appended to exported
+    /// file names (mirrors `VideoTranscoder.Resolution.fileNameToken`). Returns
+    /// `nil` for `.original`, which leaves the source at full resolution — there
+    /// is no resize worth encoding into the name. The "Fit N px" presets report
+    /// the cap (e.g. "2048px"); the percentage presets report the percentage
+    /// (e.g. "50pct").
+    var fileNameToken: String? {
+        switch self {
+        case .original: return nil
+        case .half: return "50pct"
+        case .quarter: return "25pct"
+        case .max2048: return "2048px"
+        case .max1024: return "1024px"
+        case .max512: return "512px"
+        case .max256: return "256px"
+        case .max128: return "128px"
+        }
+    }
 }
 
 /// Encoding format for a copied image. Independent of the metadata toggle:

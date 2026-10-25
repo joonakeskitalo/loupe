@@ -3276,8 +3276,9 @@ final class BrowserModel {
     /// can show progress.
     ///
     /// Falls back to the persisted export prefs when the caller doesn't pass an
-    /// override. Output files are named after the source (de-duped within the
-    /// destination so an export never clobbers an existing file).
+    /// override. Output files are named after the source with the chosen size /
+    /// quality settings appended (de-duped within the destination so an export
+    /// never clobbers an existing file).
     func exportImages(
         toDirectory directory: URL,
         item: MediaItem? = nil,

@@ -15,9 +15,10 @@ enum ImageExporter {
 
     /// Renders every image in `urls` off the main thread and writes each to
     /// `directory`, reporting progress as it goes. Output files are named after
-    /// the source with the format's extension, de-duped against the destination
-    /// so an export never overwrites an existing file (a numeric suffix is
-    /// added: "name 2.jpg", "name 3.jpg", …).
+    /// the source with the chosen size / quality settings appended and the
+    /// format's extension — e.g. "photo_1024px_q90.jpg" — de-duped against the
+    /// destination so an export never overwrites an existing file (a numeric
+    /// suffix is added: "name 2.jpg", "name 3.jpg", …).
     ///
     /// The decode + re-encode is CPU-heavy (especially many large or RAW images
     /// at Original size), so the renders run concurrently across the machine's
@@ -102,15 +103,30 @@ enum ImageExporter {
                 }
             }
 
+            // Append the chosen settings (size + JPEG quality) to each output
+            // name so exports with different settings are distinguishable and
+            // self-describing, e.g. "photo_1024px_q90.jpg" — the still-image
+            // counterpart to VideoExporter's "clip_1080p_h265_cq70.mp4".
+            let settingsSuffix = Self.settingsSuffix(
+                scale: scale,
+                maxLongEdge: maxLongEdge,
+                format: format,
+                jpegQuality: jpegQuality
+            )
+
             // Serialized tail: allocate unique names and write, in input order.
             var usedNames = Set<String>()
             var count = 0
             for index in 0..<total {
                 guard let r = rendered[index] else { continue }
 
+                let baseName = settingsSuffix.isEmpty
+                    ? r.baseName
+                    : "\(r.baseName)_\(settingsSuffix)"
+
                 let dest = Self.uniqueDestination(
                     directory: directory,
-                    baseName: r.baseName,
+                    baseName: baseName,
                     ext: format.fileExtension,
                     usedNames: &usedNames,
                     fileManager: fm
@@ -127,6 +143,40 @@ enum ImageExporter {
         }.value
 
         return Result(written: written, total: total)
+    }
+
+    /// Builds the settings token appended to exported file names, joining the
+    /// size and (for JPEG) quality tokens with underscores — e.g. "1024px_q90",
+    /// "2048px", "q80", or "" when nothing distinguishes the output (original
+    /// size, PNG). Mirrors how `VideoExporter` assembles its resolution / codec
+    /// / rate-control tokens.
+    ///
+    /// A custom long-edge cap overrides the scale preset (the same precedence
+    /// `ImageRenderer` applies), so when one is set its pixel value is used for
+    /// the size token instead of the preset's.
+    nonisolated private static func settingsSuffix(
+        scale: ImageCopyScale,
+        maxLongEdge: Int?,
+        format: ImageCopyFormat,
+        jpegQuality: Double?
+    ) -> String {
+        var tokens: [String] = []
+
+        if let maxLongEdge, maxLongEdge > 0 {
+            tokens.append("\(maxLongEdge)px")
+        } else if let sizeToken = scale.fileNameToken {
+            tokens.append(sizeToken)
+        }
+
+        // Quality only applies to JPEG (PNG is lossless). `jpegQuality` is the
+        // 0...1 value actually handed to the encoder; render it back to the
+        // 0...100 scale the user set it on.
+        if format == .jpeg, let jpegQuality {
+            let q = Int((max(0, min(1, jpegQuality)) * 100).rounded())
+            tokens.append("q\(q)")
+        }
+
+        return tokens.joined(separator: "_")
     }
 
     /// Builds a destination URL in `directory` for `baseName`.`ext`, appending
