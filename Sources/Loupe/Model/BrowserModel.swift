@@ -2761,6 +2761,29 @@ final class BrowserModel {
         return out
     }
 
+    /// A compact fingerprint of the current grouped layout: each section's id
+    /// and item count, plus which sections are collapsed. It changes exactly
+    /// when the *shape* of the grouped view changes — a section appears,
+    /// disappears, grows, shrinks, or collapses — but not when only the
+    /// contents of a section are reordered or an unrelated display revision
+    /// ticks.
+    ///
+    /// The grouped grid/list key their lazy containers on this so SwiftUI
+    /// rebuilds the container (and so recomputes its scrollable extent) when the
+    /// section set changes. Without that, `LazyVGrid`/`LazyVStack` with pinned
+    /// section headers can keep a stale estimated content height after the
+    /// groups change under them — e.g. renaming files reshuffles the filename-
+    /// prefix buckets — leaving the bottom groups unreachable by scrolling.
+    var groupLayoutSignature: String {
+        guard grouping != .none else { return "flat" }
+        var sig = ""
+        for group in groupedDisplayedItems {
+            let collapsed = collapsedGroupIDs.contains(group.id) ? "c" : "e"
+            sig += "\(group.id)#\(group.items.count)\(collapsed)|"
+        }
+        return sig
+    }
+
     /// Stores a freshly built `groupedDisplayedItems` result and records the
     /// revision it was built against, dropping any stale flattened order so
     /// `visualOrderItems` rebuilds it lazily on its next read.

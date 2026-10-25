@@ -94,6 +94,15 @@ struct BrowserListView: View {
                                 ForEach(items) { item in row(for: item) }
                             }
                         }
+                        // Rebuild the stack when the grouped layout's shape
+                        // changes (a section appears/disappears/resizes — e.g. a
+                        // rename reshuffles filename-prefix buckets) so the
+                        // LazyVStack remeasures its scrollable extent instead of
+                        // keeping a stale, too-short height that leaves the
+                        // bottom groups unreachable. Keyed to the shape only
+                        // (ids + counts + collapsed), so unrelated display ticks
+                        // don't reset scroll.
+                        .id(model.groupLayoutSignature)
                     }
                     .onChange(of: model.selectedItem) { _, newValue in
                         if suppressNextScroll {

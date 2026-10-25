@@ -379,6 +379,16 @@ struct BrowserGridView: View {
                                 }
                             }
                             .padding(padding)
+                            // Rebuild the grid when the grouped layout's shape
+                            // changes (a section appears/disappears/resizes —
+                            // e.g. a rename reshuffles filename-prefix buckets)
+                            // so the LazyVGrid remeasures its scrollable extent.
+                            // Otherwise it can keep a stale, too-short content
+                            // height after the sections change beneath it,
+                            // leaving the bottom groups unreachable by scrolling.
+                            // Keyed to the shape only (ids + counts + collapsed),
+                            // so unrelated display ticks don't reset scroll.
+                            .id(model.groupLayoutSignature)
                             // While the sidebar is resizing, pin the content to
                             // its pre-drag width and keep it leading-aligned so
                             // the adaptive grid doesn't re-flow as the panel
