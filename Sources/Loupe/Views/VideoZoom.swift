@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Live zoom/pan state for the video surface, shared between the player view
 /// (which applies it) and the viewer (which drives it from the toolbar and
@@ -82,6 +83,15 @@ final class VideoZoomState: ObservableObject {
 /// while zoomed, so a plain click still reaches the surface's play/pause), and
 /// double-click to toggle fit/2×. Clipped so a zoomed picture doesn't spill
 /// over the control bar or sidebars.
+///
+/// The transform is applied at the Core Animation layer level — on the backing
+/// layer of a thin host `NSView` that the native player surface lives inside —
+/// rather than with a SwiftUI `scaleEffect`/`offset` on an ancestor view.
+/// Scaling an ancestor of a live `AVPlayerView` makes SwiftUI re-apply an
+/// animated transform and re-clip the host each gesture tick; the actively
+/// decoding video layer gets re-rasterized mid-frame and flickers. A direct
+/// layer transform on the surface's own host is composited by Core Animation
+/// without disturbing the video layer's frame production, so it stays smooth.
 struct ZoomableVideoContainer<Content: View>: View {
     @ObservedObject var zoom: VideoZoomState
     @ViewBuilder var content: () -> Content
@@ -90,20 +100,19 @@ struct ZoomableVideoContainer<Content: View>: View {
 
     var body: some View {
         GeometryReader { geo in
-            content()
-                .scaleEffect(zoom.magnification)
-                .offset(zoom.offset)
-                .frame(width: geo.size.width, height: geo.size.height)
-                .clipped()
-                .contentShape(Rectangle())
-                .gesture(panGesture)
-                .gesture(magnifyGesture)
-                .onAppear { zoom.viewportSize = geo.size }
-                .onChange(of: geo.size) { _, newSize in
-                    zoom.viewportSize = newSize
-                    // A viewport resize can leave a stale pan out of bounds.
-                    zoom.setMagnification(zoom.magnification)
-                }
+            LayerZoomHost(magnification: zoom.magnification, offset: zoom.offset) {
+                content()
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .contentShape(Rectangle())
+            .gesture(panGesture)
+            .gesture(magnifyGesture)
+            .onAppear { zoom.viewportSize = geo.size }
+            .onChange(of: geo.size) { _, newSize in
+                zoom.viewportSize = newSize
+                // A viewport resize can leave a stale pan out of bounds.
+                zoom.setMagnification(zoom.magnification)
+            }
         }
     }
 
@@ -146,6 +155,99 @@ struct ZoomableVideoContainer<Content: View>: View {
         return CGSize(
             width: min(max(proposed.width, -extraX), extraX),
             height: min(max(proposed.height, -extraY), extraY))
+    }
+}
+
+/// Hosts a SwiftUI view (the native player surface) inside a layer-backed
+/// `NSView` and applies zoom/pan as a Core Animation transform on that host's
+/// backing layer. Clipping is done with the layer's `masksToBounds`.
+///
+/// Doing the transform here — on the surface's own host layer — instead of via
+/// a SwiftUI `scaleEffect` on an ancestor avoids the flicker you get when an
+/// animated ancestor transform forces a live `AVPlayerView`'s video layer to
+/// re-rasterize mid-frame. Core Animation composites the host layer's
+/// transform without interrupting the video layer beneath it.
+private struct LayerZoomHost<Content: View>: NSViewRepresentable {
+    let magnification: CGFloat
+    let offset: CGSize
+    @ViewBuilder var content: () -> Content
+
+    func makeNSView(context: Context) -> ZoomHostView {
+        let host = ZoomHostView()
+        let hosting = NSHostingView(rootView: content())
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        host.embed(hosting)
+        context.coordinator.hosting = hosting
+        host.apply(magnification: magnification, offset: offset)
+        return host
+    }
+
+    func updateNSView(_ nsView: ZoomHostView, context: Context) {
+        context.coordinator.hosting?.rootView = content()
+        nsView.apply(magnification: magnification, offset: offset)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var hosting: NSHostingView<Content>?
+    }
+}
+
+/// Layer-backed container whose backing-layer transform is driven by the zoom
+/// state. The hosted player surface fills it edge to edge; the transform scales
+/// and pans about the view's center, and `masksToBounds` clips the overflow so
+/// a zoomed picture never spills onto the control bar or sidebars.
+final class ZoomHostView: NSView {
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layer?.masksToBounds = true
+    }
+
+    /// Keep the hosted surface filling the host; the transform (below) is what
+    /// scales/pans it, so the hosted view itself always stays at full size.
+    func embed(_ subview: NSView) {
+        addSubview(subview)
+        NSLayoutConstraint.activate([
+            subview.leadingAnchor.constraint(equalTo: leadingAnchor),
+            subview.trailingAnchor.constraint(equalTo: trailingAnchor),
+            subview.topAnchor.constraint(equalTo: topAnchor),
+            subview.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    /// Transform the backing layer: scale about the center, then translate by
+    /// the pan offset. Wrapped in a non-animated transaction so each gesture
+    /// tick snaps to the new value instead of CA implicitly animating toward it
+    /// (which would lag the picture behind the fingers and look like a stutter).
+    func apply(magnification: CGFloat, offset: CGSize) {
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // Anchor at the center so scaling grows symmetrically about the middle.
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        var t = CATransform3DIdentity
+        t = CATransform3DTranslate(t, offset.width, offset.height, 0)
+        t = CATransform3DScale(t, magnification, magnification, 1)
+        layer.transform = t
+        CATransaction.commit()
+    }
+
+    /// Re-center the transform when the view is resized so the anchor stays at
+    /// the middle (the position is in the superlayer's coordinate space).
+    override func layout() {
+        super.layout()
+        layer?.position = CGPoint(x: bounds.midX, y: bounds.midY)
     }
 }
 
