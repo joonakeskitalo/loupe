@@ -224,13 +224,31 @@ struct LoupeCommands: Commands {
 
         // MARK: Select All — standard text-editing group.
         //
-        // Gated on search focus too: a disabled Button releases its ⌘A
-        // shortcut, so while the search field is focused ⌘A falls through to the
-        // field and selects its text (instead of selecting all grid items).
+        // A single always-live ⌘A owner that routes by focus. Gating the menu
+        // Button on `searchFocused` (so a disabled Button releases ⌘A) is NOT
+        // enough: replacing the `.pasteboard` group above dropped the system's
+        // standard Select All relay, so once we release ⌘A there's no owner to
+        // forward it to the focused search/text field — the key just dies.
+        //
+        // Instead, mirror the Paste relay pattern: keep one enabled command and
+        // branch on focus. While a text field is focused, forward `selectAll:`
+        // through the responder chain so the field selects its own text; other-
+        // wise select every grid item. Disabled only when neither action makes
+        // sense (no items and not searching, or the viewer owns ⌘A).
         CommandGroup(after: .textEditing) {
-            Button("Select All Items") { model?.selectAll() }
-                .keyboardShortcut("a", modifiers: .command)
-                .disabled(!hasItems || viewerOpen || searchFocused)
+            Button("Select All") {
+                if searchFocused {
+                    NSApp.sendAction(
+                        #selector(NSText.selectAll(_:)),
+                        to: nil,
+                        from: nil
+                    )
+                } else {
+                    model?.selectAll()
+                }
+            }
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled((!hasItems && !searchFocused) || viewerOpen)
         }
 
         // MARK: View menu — merged into SwiftUI's built-in "View" menu (via
