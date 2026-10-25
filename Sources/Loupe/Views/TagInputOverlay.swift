@@ -101,17 +101,16 @@ struct TagInputOverlay: View {
                 onSubmit: { commitDraft() },
                 onCancel: { dismiss() },
                 onDigit: { digit in
-                    // While the tagging overlay is open, a bare number key tags
-                    // the selection with that literal number ("1", "2", …) —
-                    // tag-by-number — rather than color-coding the grid (the
-                    // color-tag digit shortcuts are suspended whenever the
-                    // overlay is up). Only fires on an empty draft so typing a
-                    // tag name that contains digits still works.
-                    guard draft.isEmpty, (1...9).contains(digit) else { return false }
-                    model.toggleTextTag(String(digit))
-                    // Keep the quick-assign chip list current so the just-added
-                    // numeric tag shows up as a chip.
-                    quickTags = Array(model.allTextTags.prefix(9))
+                    // While the tagging overlay is open, a bare number key
+                    // quick-toggles the *existing* tag shown at that position in
+                    // the chip list (1 → first chip, 2 → second, …), matching
+                    // the number printed on each chip. It must NOT create a tag
+                    // literally named "1"/"2"/… — if no chip occupies that slot
+                    // the key is a no-op. Only fires on an empty draft so typing
+                    // a tag name that contains digits still works.
+                    guard draft.isEmpty, (1...9).contains(digit),
+                          digit <= quickTags.count else { return false }
+                    model.toggleTextTag(quickTags[digit - 1])
                     return true
                 },
                 onNavigate: { direction, shift in
