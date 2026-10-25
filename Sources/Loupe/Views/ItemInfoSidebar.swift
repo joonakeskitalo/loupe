@@ -809,7 +809,11 @@ private struct RenameSection: View {
     @Bindable var model: BrowserModel
     var item: MediaItem?
 
-    @State private var config = BulkRenameConfig()
+    // The rename settings live on the model (per window/tab lifetime) so they
+    // survive the section being torn down and rebuilt as the selection changes
+    // — deselecting everything no longer resets them. `config` reads the model;
+    // the controls bind through `$model.renameConfig`.
+    private var config: BulkRenameConfig { model.renameConfig }
     @State private var isRenaming = false
     // Re-evaluated on each render so the date preview stays current; captured
     // once at apply time inside the model.
@@ -835,8 +839,8 @@ private struct RenameSection: View {
 
     @ViewBuilder
     private var prependAppend: some View {
-        labeledField("Prepend", text: $config.prepend, placeholder: "text before")
-        labeledField("Append", text: $config.append, placeholder: "text after")
+        labeledField("Prepend", text: $model.renameConfig.prepend, placeholder: "text before")
+        labeledField("Append", text: $model.renameConfig.append, placeholder: "text after")
     }
 
     private func labeledField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
@@ -855,21 +859,21 @@ private struct RenameSection: View {
 
     @ViewBuilder
     private var numberingControls: some View {
-        Toggle("Number Sequence", isOn: $config.numbering)
+        Toggle("Number Sequence", isOn: $model.renameConfig.numbering)
             .controlSize(.small)
 
         if config.numbering {
             VStack(alignment: .leading, spacing: 6) {
-                affixPicker(selection: $config.numberAffix)
+                affixPicker(selection: $model.renameConfig.numberAffix)
 
                 HStack(spacing: 6) {
-                    stepperRow("Start", value: $config.numberStart, range: 0...1_000_000)
+                    stepperRow("Start", value: $model.renameConfig.numberStart, range: 0...1_000_000)
                 }
                 HStack(spacing: 6) {
-                    stepperRow("Step", value: $config.numberStep, range: 1...1000)
+                    stepperRow("Step", value: $model.renameConfig.numberStep, range: 1...1000)
                 }
                 HStack(spacing: 6) {
-                    stepperRow("Digits", value: $config.numberPadding, range: 1...8)
+                    stepperRow("Digits", value: $model.renameConfig.numberPadding, range: 1...8)
                 }
             }
             .padding(.leading, 4)
@@ -902,10 +906,10 @@ private struct RenameSection: View {
 
     @ViewBuilder
     private var parentFolderControls: some View {
-        Toggle("Parent Folder Name", isOn: $config.parentFolder)
+        Toggle("Parent Folder Name", isOn: $model.renameConfig.parentFolder)
             .controlSize(.small)
         if config.parentFolder {
-            affixPicker(selection: $config.parentFolderAffix)
+            affixPicker(selection: $model.renameConfig.parentFolderAffix)
                 .padding(.leading, 4)
         }
     }
@@ -914,12 +918,12 @@ private struct RenameSection: View {
 
     @ViewBuilder
     private var dateControls: some View {
-        Toggle("Current Date", isOn: $config.date)
+        Toggle("Current Date", isOn: $model.renameConfig.date)
             .controlSize(.small)
         if config.date {
             VStack(alignment: .leading, spacing: 6) {
-                affixPicker(selection: $config.dateAffix)
-                Picker("Format", selection: $config.dateFormat) {
+                affixPicker(selection: $model.renameConfig.dateAffix)
+                Picker("Format", selection: $model.renameConfig.dateFormat) {
                     ForEach(RenameDateFormat.allCases, id: \.self) { fmt in
                         Text(fmt.displayName).tag(fmt)
                     }

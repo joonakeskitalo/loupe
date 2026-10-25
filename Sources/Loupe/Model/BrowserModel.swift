@@ -182,6 +182,15 @@ final class BrowserModel {
     /// it, and so each surface can suspend its single-key hotkeys while it's up.
     var showTagInput = false
 
+    /// The bulk-rename panel's settings (prefix/suffix, numbering, date, etc.).
+    /// Held on the model — which lives for the window/tab's lifetime — rather
+    /// than as view `@State`, so the configuration persists while the sidebar's
+    /// rename section comes and goes with the selection. Previously this was
+    /// per-view state, so deselecting everything (which swaps the sidebar to
+    /// its empty state and tears the section down) reset it to defaults; now it
+    /// survives any selection change until the window/tab closes.
+    var renameConfig = BulkRenameConfig()
+
     /// Opens the tag-input overlay if there's something selected to tag.
     func beginTagging() {
         guard !selectedItems.isEmpty || primarySelectedItem != nil else { return }
