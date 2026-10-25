@@ -187,8 +187,14 @@ actor VideoMetadataProvider {
         }
 
         var pixelSize: PixelSize?
-        let w = Int(codecpar.pointee.width)
-        let h = Int(codecpar.pointee.height)
+        var w = Int(codecpar.pointee.width)
+        var h = Int(codecpar.pointee.height)
+        // Phone videos are almost always stored in landscape and carry a
+        // display-matrix rotation tag that a player applies at presentation.
+        // The coded width/height alone therefore report a portrait clip as
+        // landscape, which put it in the wrong orientation bucket. Honor the
+        // rotation: a 90°/270° turn swaps the displayed dimensions.
+        if Self.rotationSwapsDimensions(codecpar) { swap(&w, &h) }
         if w > 0, h > 0 { pixelSize = PixelSize(width: w, height: h) }
 
         // Container duration, in AV_TIME_BASE units (microseconds). Can be
@@ -200,5 +206,36 @@ actor VideoMetadataProvider {
         }
 
         return MediaMetadata(codec: codec, pixelSize: pixelSize, duration: duration)
+    }
+
+    /// Returns true when the stream's display-matrix side data rotates the
+    /// picture by a quarter turn (±90°), which swaps displayed width/height.
+    ///
+    /// The rotation lives in the codec parameters' `coded_side_data` as an
+    /// `AV_PKT_DATA_DISPLAYMATRIX` entry — a 3×3 affine matrix. FFmpeg's
+    /// `av_display_rotation_get` decodes it to counter-clockwise degrees (or
+    /// NaN when absent/degenerate). We only care whether the magnitude is near
+    /// 90° (90 or 270 both swap the axes); 0° and 180° keep them.
+    private static func rotationSwapsDimensions(
+        _ codecpar: UnsafeMutablePointer<AVCodecParameters>
+    ) -> Bool {
+        guard let sideData = codecpar.pointee.coded_side_data else { return false }
+        let count = codecpar.pointee.nb_coded_side_data
+        guard let entry = av_packet_side_data_get(
+            sideData, count, AV_PKT_DATA_DISPLAYMATRIX
+        ) else { return false }
+        guard let data = entry.pointee.data, entry.pointee.size >= 9 * MemoryLayout<Int32>.size
+        else { return false }
+
+        let degrees = data.withMemoryRebound(to: Int32.self, capacity: 9) {
+            av_display_rotation_get($0)
+        }
+        guard degrees.isFinite else { return false }
+
+        // Normalize to [0, 360) and test proximity to a quarter turn. Allow a
+        // small tolerance for matrices that aren't perfectly axis-aligned.
+        let normalized = degrees.truncatingRemainder(dividingBy: 360)
+        let positive = normalized < 0 ? normalized + 360 : normalized
+        return abs(positive - 90) < 1 || abs(positive - 270) < 1
     }
 }
