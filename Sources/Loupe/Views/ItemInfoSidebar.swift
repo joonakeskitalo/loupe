@@ -85,8 +85,12 @@ struct ItemInfoSidebar: View {
                     }
                 }
 
+                SectionSeparator()
                 RenameSection(model: model, item: nil)
 
+                if items.contains(where: { $0.kind == .image || $0.kind == .video }) {
+                    SectionSeparator()
+                }
                 if items.contains(where: { $0.kind == .image }) {
                     ExportSection(model: model, item: nil)
                 }
@@ -207,8 +211,12 @@ private struct SingleItemInfo: View {
                         .padding(.top, 2)
                 }
 
+                SectionSeparator()
                 RenameSection(model: model, item: item)
 
+                if item.kind == .image || item.kind == .video {
+                    SectionSeparator()
+                }
                 if item.kind == .image {
                     ExportSection(model: model, item: item)
                 }
@@ -763,6 +771,18 @@ private struct SteppableIntField: View {
     }
 }
 
+/// A full-width divider used to visually separate the major blocks of the
+/// sidebar — the read-only file info, the bulk-rename tools, and the export
+/// options — so the groups of controls don't blur into one long list. The
+/// extra vertical padding carves out a little more breathing room than the
+/// 16pt gap between sibling `InfoSection`s.
+private struct SectionSeparator: View {
+    var body: some View {
+        Divider()
+            .padding(.vertical, 10)
+    }
+}
+
 /// A titled group of info rows with consistent spacing.
 private struct InfoSection<Content: View>: View {
     let title: String
@@ -823,16 +843,26 @@ private struct RenameSection: View {
         InfoSection(title: "Bulk Rename") {
             VStack(alignment: .leading, spacing: 12) {
                 prependAppend
-                Divider()
+                subDivider
                 numberingControls
-                Divider()
+                subDivider
                 parentFolderControls
                 dateControls
-                Divider()
+                subDivider
                 preview
                 renameButton
             }
         }
+    }
+
+    /// A lighter, inset divider for separating the sub-groups *within* the
+    /// Bulk Rename block. Kept visually distinct from the full-width
+    /// `SectionSeparator` that divides the sidebar's major blocks, so the
+    /// grouping reads as a hierarchy rather than one flat run of dividers.
+    private var subDivider: some View {
+        Divider()
+            .opacity(0.4)
+            .padding(.horizontal, 8)
     }
 
     // MARK: Prepend / append
