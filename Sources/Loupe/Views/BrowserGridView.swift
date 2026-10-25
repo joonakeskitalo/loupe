@@ -639,7 +639,9 @@ struct BrowserGridView: View {
                 // time search results return after being empty, so grabbing
                 // focus unconditionally here would steal it from the search
                 // field mid-type.
-                .onAppear { if canAutoFocus { gridFocused = true } }
+                .onAppear {
+                    if canAutoFocus && !model.isSearchFieldFocused { gridFocused = true }
+                }
                 // Reclaim keyboard focus when the displayed set changes while
                 // the grid stays mounted. Annotating the selected item under a
                 // Library filter that hides it (e.g. flagging under "Unmarked")
@@ -654,7 +656,16 @@ struct BrowserGridView: View {
                 .onChange(of: model.displayRevision) { _, _ in
                     guard canAutoFocus, !searchFocused,
                           !model.isViewerPresented, !model.showTagInput else { return }
-                    DispatchQueue.main.async { gridFocused = true }
+                    // Re-check the *live* search-focus flag at execution time:
+                    // typing in the search field bumps `displayRevision`, and
+                    // the `searchFocused` parameter captured above can still be
+                    // stale on the first keystroke/click. Reading the model here
+                    // stops this deferred reclaim from stealing the field's
+                    // focus the moment it's granted.
+                    DispatchQueue.main.async {
+                        guard !model.isSearchFieldFocused else { return }
+                        gridFocused = true
+                    }
                 }
                 // Reclaim keyboard focus when the viewer closes. The grid stays
                 // mounted beneath the viewer overlay, so its `.onAppear` never

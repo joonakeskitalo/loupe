@@ -138,7 +138,9 @@ struct BrowserListView: View {
                 .focusable()
                 .focused($listFocused)
                 .focusEffectDisabled()
-                .onAppear { if canAutoFocus { listFocused = true } }
+                .onAppear {
+                    if canAutoFocus && !model.isSearchFieldFocused { listFocused = true }
+                }
                 // Reclaim keyboard focus when the displayed set changes while
                 // the list stays mounted. Annotating the selected row under a
                 // Library filter that hides it (e.g. flagging under "Unmarked")
@@ -153,7 +155,16 @@ struct BrowserListView: View {
                 .onChange(of: model.displayRevision) { _, _ in
                     guard canAutoFocus, !searchFocused,
                           !model.isViewerPresented, !model.showTagInput else { return }
-                    DispatchQueue.main.async { listFocused = true }
+                    // Re-check the *live* search-focus flag at execution time:
+                    // typing in the search field bumps `displayRevision`, and
+                    // the captured `searchFocused` parameter can still be stale
+                    // on the first keystroke/click. Reading the model here stops
+                    // this deferred reclaim from stealing the field's focus the
+                    // moment it's granted.
+                    DispatchQueue.main.async {
+                        guard !model.isSearchFieldFocused else { return }
+                        listFocused = true
+                    }
                 }
                 // Reclaim keyboard focus when the viewer closes. The list stays
                 // mounted beneath the viewer overlay, so its `.onAppear` never

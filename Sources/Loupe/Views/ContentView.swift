@@ -210,6 +210,13 @@ struct ContentView: View {
             prompt: "Search in \(model.searchScopeName)"
         )
         .searchFocused($searchFocused)
+        // Mirror the field's focus onto the model so the grid/list's deferred
+        // focus reclaims can read the *current* state (not the render-lagged
+        // `searchFocused` parameter). Without this the first click into the
+        // field was instantly stolen back by a deferred `gridFocused = true`.
+        .onChange(of: searchFocused) { _, focused in
+            model.isSearchFieldFocused = focused
+        }
         .navigationTitle(model.isViewerPresented ? "" : model.rootName)
         .navigationSubtitle(model.isViewerPresented ? "" : model.statusText)
         .background(hotkeys)

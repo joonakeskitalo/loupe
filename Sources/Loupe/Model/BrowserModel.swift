@@ -402,6 +402,18 @@ final class BrowserModel {
         didSet { clampSelection() }
     }
 
+    /// Live mirror of whether the toolbar search field currently holds keyboard
+    /// focus. The grid/list drive several *deferred* focus reclaims
+    /// (`DispatchQueue.main.async { … = true }`) that fire on display changes,
+    /// viewer/overlay dismissal, etc. Those blocks previously gated only on the
+    /// `searchFocused` view *parameter*, which lags a render cycle behind the
+    /// parent's `@FocusState`. On the very first click into the search field
+    /// that stale value let a deferred reclaim run and yank first responder
+    /// straight back to the grid — so the field appeared to defocus instantly
+    /// and couldn't be typed into. Reading this always-current flag inside the
+    /// deferred blocks closes that race.
+    var isSearchFieldFocused = false
+
     /// Whether the free-text search matches case exactly. Off by default, so
     /// search is case-insensitive unless the user turns this on from the menu.
     /// Toggling it reclamps the selection since the displayed set may change.
