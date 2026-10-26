@@ -636,6 +636,13 @@ struct MediaViewer: View {
             hotkey("f", []) { model.toggleFlag() }
             hotkey("i", []) { model.toggleFlag() }
             hotkey("s", []) { model.toggleFlag() }
+            // X marks the shown item(s) as hidden (always hides, never toggles)
+            // and advances to the next survivor; C steps forward. These mirror
+            // the grid's triage keys (ContentView), which are gated off while
+            // the viewer is open, so the viewer carries its own copies here.
+            // Bare `c` is free in the viewer (⌘C is the separate copy hotkey).
+            hotkey("x", []) { model.hideSelection() }
+            hotkey("c", []) { model.moveSelectionBlock(by: 1) }
             // ⌃1–⌃5 apply color tags, matching the grid. Carried here so the
             // keys work from inside the viewer too.
             ForEach(Array(ColorTag.allInHotkeyOrder.enumerated()), id: \.element) { index, tag in

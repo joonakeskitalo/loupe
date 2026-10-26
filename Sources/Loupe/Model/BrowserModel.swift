@@ -2484,6 +2484,22 @@ final class BrowserModel {
         }
     }
 
+    /// Mark the current selection as hidden (never un-hides), landing the
+    /// cursor on the item that follows the hidden block so keyboard triage
+    /// keeps flowing. Unlike `toggleHidden`, repeating this is idempotent: an
+    /// already-hidden item stays hidden. Used by the `x` triage hotkey; `⌫`
+    /// stays a toggle via `toggleHidden`.
+    func hideSelection() {
+        guard !selectedItems.isEmpty else { return }
+        let targets = Array(selectedItems)
+        // Nothing to do if every target is already hidden.
+        guard targets.contains(where: { !hiddenItems.contains($0) }) else { return }
+        let successor = successorAfterHiding(targets)
+        hiddenItems.formUnion(targets)
+        clampSelection()
+        selectAfterHiding(successor)
+    }
+
     /// The item that should receive the selection after `targets` are hidden:
     /// the first still-visible item that comes after the hidden block in
     /// visual order, or the last surviving item when the block sat at the end.

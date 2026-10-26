@@ -299,6 +299,22 @@ struct ContentView: View {
                 .keyboardShortcut(.deleteBackspace, modifiers: [])
                 .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
 
+            // X marks the selection as hidden (triage), always hiding rather
+            // than toggling — so repeating it never un-hides — then advances
+            // the cursor to the next survivor (via the model's successor
+            // logic). Pairs with C below for quick keyboard triage. Gated like
+            // the other modifier-less marks so the key types normally while
+            // searching and the viewer owns its own keys.
+            Button("Hide Item (X)") { model.hideSelection() }
+                .keyboardShortcut("x", modifiers: [])
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+
+            // C advances the selection to the next item (same as L), so the
+            // user can mark with X and step forward with C from the home row.
+            Button("Next Item (C)") { model.moveSelection(by: 1) }
+                .keyboardShortcut("c", modifiers: [])
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+
             // Quick sort presets. Moved off ⌃1–⌃3 (now color-tag keys) to the
             // function row: F2 Name, F3 Size, F4 File Type. (F1 is Reveal in
             // Finder.) NSFxFunctionKey code points: F2 U+F705, F3 U+F706,
