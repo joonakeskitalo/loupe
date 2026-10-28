@@ -667,14 +667,20 @@ private struct KeyWindowSceneValues: ViewModifier {
     let searchFieldFocused: Bool
 
     func body(content: Content) -> some View {
-        if isKeyWindow {
-            content
-                .focusedSceneValue(\.activeBrowserModel, model)
-                .focusedSceneValue(\.trashShortcutEligible, trashEligible)
-                .focusedSceneValue(\.searchFieldFocused, searchFieldFocused)
-        } else {
-            content
-        }
+        // Always apply the same modifier chain, flipping the *values* (not the
+        // view structure) on key/non-key. Branching the modifier set with an
+        // if/else gives the two branches different structural identities, so
+        // every key-window change would tear down and rebuild `content` (the
+        // whole detail subtree). That rebuild is what reset image/video zoom,
+        // re-centered the scroll on the selection, and restarted the sidebar
+        // preview video from the beginning whenever the window was defocused.
+        // Feeding nil when not key keeps the subtree's identity stable across
+        // focus changes; the menu commands already treat a nil focused value as
+        // "not the key window" (?? fallbacks in LoupeCommands).
+        content
+            .focusedSceneValue(\.activeBrowserModel, isKeyWindow ? model : nil)
+            .focusedSceneValue(\.trashShortcutEligible, isKeyWindow ? trashEligible : nil)
+            .focusedSceneValue(\.searchFieldFocused, isKeyWindow ? searchFieldFocused : nil)
     }
 }
 
