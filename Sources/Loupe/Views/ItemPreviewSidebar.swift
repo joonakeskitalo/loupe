@@ -76,10 +76,14 @@ struct ItemPreviewSidebar: View {
         if selected.count > 1 {
             multiSelection(count: selected.count)
         } else if let item = model.primarySelectedItem {
-            if isResizing {
+            if isResizing && !keepsRendererWhileResizing(item.kind) {
                 // Cheap stand-in during the drag: no media renderer, so the
                 // panel resizes at a steady frame rate. The real preview comes
-                // back (once) when the drag ends.
+                // back (once) when the drag ends. Only used for the heavy
+                // representables (image zoom refit, PDF, QuickLook) — a
+                // playing video/audio preview is exempt (see below), because
+                // swapping it out tears the player down and would restart it
+                // from the beginning when the drag ends.
                 placeholder(symbol: item.kind.fallbackSymbol, text: item.name)
             } else {
                 // Keyed by item id so each new selection rebuilds its renderer
@@ -94,6 +98,18 @@ struct ItemPreviewSidebar: View {
         } else {
             emptyState
         }
+    }
+
+    /// Kinds whose renderer stays mounted through a resize drag rather than
+    /// being swapped for the static placeholder. Video and audio run a live
+    /// player whose view owns the playback position; tearing it out mid-resize
+    /// and rebuilding it when the drag ends reloads the asset and restarts from
+    /// the beginning — exactly the reset we want to avoid. An AVPlayerView / mpv
+    /// surface resizes cheaply on its own, so keeping it mounted costs nothing
+    /// the way refitting an image/PDF does. Every other kind keeps using the
+    /// placeholder to stay smooth under a drag.
+    private func keepsRendererWhileResizing(_ kind: MediaKind) -> Bool {
+        kind == .video || kind == .audio
     }
 
     private var emptyState: some View {
