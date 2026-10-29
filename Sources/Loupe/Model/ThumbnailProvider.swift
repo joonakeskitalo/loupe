@@ -903,6 +903,20 @@ actor ThumbnailProvider {
                 return .cancelled
             }
 
+            // Audio: pull embedded cover art. An audio file's natural thumbnail
+            // is its album art, which lives in the container's metadata rather
+            // than in any decodable image or video track — so neither the
+            // ImageIO path above nor the video path below reaches it, and
+            // QuickLook returns only a generic music-note icon (or nil) for a
+            // bare `.m4a`/`.mp3`. `embeddedArtwork` reads the common/iTunes/ID3
+            // artwork and downscales it, which is exactly how `.m4a` files with
+            // a cover get a real thumbnail. Runs in both `.hybrid` and `.custom`
+            // (it's an in-process decode, no QuickLook); files with no artwork
+            // fall through to the QuickLook/type-icon handling below.
+            if image == nil, kind == .audio {
+                image = await Self.embeddedArtwork(for: url, pixelSize: pixelSize)
+            }
+
             // General path / image fallback: QuickLook. Covers PDFs, documents,
             // and anything ImageIO couldn't decode. Skipped for video, which has
             // its own decode chain below (QuickLook rarely adds value there and
@@ -1111,10 +1125,15 @@ actor ThumbnailProvider {
     }
 
     /// Extracts embedded cover art from a media file's metadata and scales it
-    /// down to a thumbnail. This is how audio-with-artwork files that happen to
-    /// use a video container (`.m4v`, `.mp4`, `.m4a`) get a thumbnail: they have
-    /// no video track for `avFoundationFrame` to seize a frame from, but they
-    /// do carry a picture in their common `artwork` metadata.
+    /// down to a thumbnail. Two callers rely on it:
+    ///   * Audio files (`.m4a`, `.mp3`, …), whose natural thumbnail is their
+    ///     album art — there's no image or video track to decode, so this is
+    ///     the only path that produces a real cover thumbnail for them.
+    ///   * Files that classify as video but carry a picture as cover art rather
+    ///     than a video track (an `.m4v`/`.mp4`/`.m4a` with artwork and no
+    ///     video track), where `avFoundationFrame` returns nil.
+    /// In both cases the picture lives in the container's common `artwork`
+    /// metadata rather than in a decodable track.
     ///
     /// Reads both the asset-level common metadata and each metadata format's
     /// entries (iTunes-style `.m4a`/`.m4v` artwork lives under a format key
