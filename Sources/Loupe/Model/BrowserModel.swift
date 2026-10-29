@@ -158,31 +158,25 @@ final class BrowserModel {
     /// in-session only, matching `showInfoSidebar`.
     var showPreviewSidebar = false
 
-    /// The preview sidebar's width in points. A preference persisted across
-    /// windows and launches (like `thumbnailMethod`), so resizing it in one
-    /// window carries over. Clamped to `minPreviewSidebarWidth ...
-    /// maxPreviewSidebarWidth` on write.
-    var previewSidebarWidth: Double = {
-        let stored = UserDefaults.standard.double(forKey: BrowserModel.previewSidebarWidthKey)
-        guard stored > 0 else { return BrowserModel.defaultPreviewSidebarWidth }
-        return min(max(stored, BrowserModel.minPreviewSidebarWidth),
-                   BrowserModel.maxPreviewSidebarWidth)
-    }() {
+    /// The preview sidebar's width in points. Session- and window-scoped only:
+    /// it always starts at the standard `defaultPreviewSidebarWidth` and is
+    /// *not* persisted, so resizing it in one window doesn't carry over to
+    /// other windows or future launches. The in-session resize drag still
+    /// works — it writes here directly and is clamped to
+    /// `minPreviewSidebarWidth ... maxPreviewSidebarWidth` on write.
+    var previewSidebarWidth: Double = BrowserModel.defaultPreviewSidebarWidth {
         didSet {
             let clamped = min(max(previewSidebarWidth, Self.minPreviewSidebarWidth),
                               Self.maxPreviewSidebarWidth)
             if clamped != previewSidebarWidth {
                 previewSidebarWidth = clamped
-                return
             }
-            UserDefaults.standard.set(previewSidebarWidth, forKey: Self.previewSidebarWidthKey)
         }
     }
 
     static let minPreviewSidebarWidth: Double = 220
     static let maxPreviewSidebarWidth: Double = 1600
     static let defaultPreviewSidebarWidth: Double = 420
-    private static let previewSidebarWidthKey = "previewSidebarWidth"
 
     /// The info sidebar's width in points. A preference persisted across
     /// windows and launches (like `previewSidebarWidth`), so resizing it in one

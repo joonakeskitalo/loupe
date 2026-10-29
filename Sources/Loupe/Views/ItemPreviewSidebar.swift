@@ -10,8 +10,9 @@ import SwiftUI
 /// selection is empty or holds more than one item.
 ///
 /// Unlike the fixed-width info sidebar, this panel is resizable: a thin drag
-/// handle on its leading edge adjusts `model.previewSidebarWidth` (persisted
-/// and clamped by the model).
+/// handle on its leading edge adjusts `model.previewSidebarWidth` (clamped by
+/// the model). The width is session- and window-scoped only — it isn't
+/// persisted across windows or launches.
 struct ItemPreviewSidebar: View {
     @Bindable var model: BrowserModel
 
@@ -181,9 +182,10 @@ struct ItemPreviewSidebar: View {
                                         BrowserModel.maxPreviewSidebarWidth)
                     }
                     .onEnded { _ in
-                        // Commit the final width to the model once (which
-                        // persists it), then drop the live override and let the
-                        // grid reflow to the final width in a single pass.
+                        // Commit the final width to the model once (session-
+                        // scoped, not persisted), then drop the live override
+                        // and let the grid reflow to the final width in a
+                        // single pass.
                         if let dragWidth { model.previewSidebarWidth = dragWidth }
                         dragWidth = nil
                         dragStartWidth = nil
