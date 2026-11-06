@@ -13,16 +13,21 @@ struct ScanResult: Sendable {
 /// and a folder tree for sidebar navigation. Runs off the main actor.
 enum FolderScanner {
 
-    static func scan(root: URL) async -> ScanResult {
+    static func scan(root: URL, showHiddenFiles: Bool = false) async -> ScanResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let result = performScan(root: root)
+                let result = performScan(root: root, showHiddenFiles: showHiddenFiles)
                 continuation.resume(returning: result)
             }
         }
     }
 
-    private static func performScan(root: URL) -> ScanResult {
+    /// The macOS metadata file Finder drops in every browsed directory. Always
+    /// filtered out — even when showing hidden files — since it's never content
+    /// a user wants to see.
+    private static let desktopServicesStore = ".DS_Store"
+
+    private static func performScan(root: URL, showHiddenFiles: Bool) -> ScanResult {
         let fm = FileManager.default
         var allItems: [MediaItem] = []
         var itemsByDirectory: [URL: [MediaItem]] = [:]
@@ -30,10 +35,17 @@ enum FolderScanner {
         var directories: Set<URL> = [root.standardizedFileURL]
 
         let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .fileSizeKey, .contentModificationDateKey]
+        // When hidden files are shown we drop `.skipsHiddenFiles` so dotfiles and
+        // files carrying the macOS hidden flag come through; otherwise it stays
+        // on and the enumerator never surfaces them. `.DS_Store` is excluded by
+        // name below regardless, since `.skipsHiddenFiles` would normally hide it
+        // and we don't want it reappearing when hidden files are revealed.
+        var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+        if !showHiddenFiles { options.insert(.skipsHiddenFiles) }
         let enumerator = fm.enumerator(
             at: root,
             includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            options: options
         )
 
         while let obj = enumerator?.nextObject() {
@@ -45,6 +57,10 @@ enum FolderScanner {
                 directories.insert(standardized)
                 continue
             }
+
+            // Never show Finder's per-directory metadata store, even in the
+            // "show hidden files" mode.
+            if standardized.lastPathComponent == desktopServicesStore { continue }
 
             let item = MediaItem(url: standardized)
             guard item.isPreviewable else { continue }

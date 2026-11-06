@@ -333,6 +333,13 @@ struct LoupeCommands: Commands {
             Toggle("Case-Sensitive Search", isOn: caseSensitiveSearchBinding)
                 .disabled(model == nil)
 
+            // Reveal filesystem-hidden files (dotfiles / macOS hidden flag) in
+            // the scan. `.DS_Store` stays excluded. Toggling re-scans the open
+            // roots, so it's distinct from "Show Hidden Only" below, which
+            // filters the in-session triage annotation.
+            Toggle("Show Hidden Files", isOn: showHiddenFilesBinding)
+                .disabled(model == nil)
+
             Divider()
 
             // Grid display options.
@@ -612,6 +619,7 @@ struct LoupeCommands: Commands {
     private var modeBinding: Binding<BrowseMode> { binding(\.mode, default: .flattened) }
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
     private var caseSensitiveSearchBinding: Binding<Bool> { binding(\.caseSensitiveSearch, default: false) }
+    private var showHiddenFilesBinding: Binding<Bool> { binding(\.showHiddenFiles, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var fillGridCellsBinding: Binding<Bool> { binding(\.fillGridCells, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }

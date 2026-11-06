@@ -319,6 +319,24 @@ final class BrowserModel {
 
     private static let videoThumbnailPositionKey = "videoThumbnailPosition"
 
+    /// Whether to include filesystem-hidden files (dotfiles and anything with
+    /// the macOS hidden flag) when scanning folders. `.DS_Store` is always
+    /// excluded regardless. Persisted across windows and launches like the
+    /// other scan-affecting preferences; changing it re-scans every root so the
+    /// newly included/excluded files appear or disappear (the filtering happens
+    /// at enumeration time, so a re-scan is required — toggling it can't just
+    /// filter the already-loaded set). Distinct from the in-session "hidden
+    /// items" triage annotation and its `showHiddenOnly` view.
+    var showHiddenFiles: Bool = UserDefaults.standard.bool(forKey: showHiddenFilesKey) {
+        didSet {
+            guard showHiddenFiles != oldValue else { return }
+            UserDefaults.standard.set(showHiddenFiles, forKey: Self.showHiddenFilesKey)
+            refresh()
+        }
+    }
+
+    private static let showHiddenFilesKey = "showHiddenFiles"
+
     /// Whether the "Copy Image" actions strip EXIF/metadata from the copied
     /// pixels. Window-scoped and in-session only — NOT persisted, so each new
     /// window and each launch starts from the default. Defaults to `true`
@@ -844,9 +862,10 @@ final class BrowserModel {
         }
         guard !newRoots.isEmpty else { return }
 
+        let showHidden = showHiddenFiles
         startScan { [newRoots] in
             for root in newRoots {
-                let result = await FolderScanner.scan(root: root)
+                let result = await FolderScanner.scan(root: root, showHiddenFiles: showHidden)
                 guard !Task.isCancelled else { return }
                 self.resultsByRoot[root] = result
             }
@@ -1043,9 +1062,10 @@ final class BrowserModel {
         let foldersToKeep = selectedFolders
         let anchorToKeep = folderAnchor
         let currentRoots = roots
+        let showHidden = showHiddenFiles
         startScan {
             for root in currentRoots where !self.singleFileRoots.contains(root) {
-                let result = await FolderScanner.scan(root: root)
+                let result = await FolderScanner.scan(root: root, showHiddenFiles: showHidden)
                 guard !Task.isCancelled else { return }
                 self.resultsByRoot[root] = result
             }
