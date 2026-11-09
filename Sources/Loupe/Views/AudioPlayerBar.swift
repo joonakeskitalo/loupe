@@ -99,6 +99,8 @@ struct AudioPlayerBar: View {
     @StateObject private var controller = AudioBarController()
     @State private var scrubValue: Double = 0
     @State private var isDragging = false
+    /// Off by default: when on, the next audio file plays after a track ends.
+    @AppStorage("audioAutoAdvance") private var autoAdvance = false
 
     private var audioItems: [MediaItem] {
         model.displayedItems.filter { $0.kind == .audio }
@@ -178,6 +180,15 @@ struct AudioPlayerBar: View {
             }
 
             Button {
+                autoAdvance.toggle()
+            } label: {
+                Image(systemName: "arrow.forward.to.line")
+                    .foregroundStyle(autoAdvance ? Color.accentColor : Color.secondary.opacity(0.6))
+            }
+            .buttonStyle(.borderless)
+            .help(autoAdvance ? "Continue to next track: on (click to turn off)" : "Continue to next track: off (click to turn on)")
+
+            Button {
                 controller.stop()
                 model.showAudioPlayer = false
             } label: {
@@ -233,9 +244,9 @@ struct AudioPlayerBar: View {
         controller.load(url: item.url)
     }
 
-    /// Auto-advance to the next audio file when a track ends.
+    /// Moves on to the next audio file when a track ends, if enabled.
     private func advanceAfterFinish() {
-        guard let i = currentIndex, audioItems.indices.contains(i + 1) else { return }
+        guard UserDefaults.standard.bool(forKey: "audioAutoAdvance"), let i = currentIndex, audioItems.indices.contains(i + 1) else { return }
         controller.play()
         select(audioItems[i + 1])
         controller.play()
