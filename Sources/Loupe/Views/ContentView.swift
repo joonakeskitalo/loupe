@@ -176,6 +176,10 @@ struct ContentView: View {
                             .transition(.move(edge: .trailing))
                     }
                 }
+                if model.showAudioPlayer {
+                    AudioPlayerBar(model: model)
+                        .transition(.move(edge: .bottom))
+                }
                 PathBar(model: model)
             }
         }
@@ -507,6 +511,13 @@ struct ContentView: View {
         }
 
         ToolbarItemGroup {
+            Button {
+                withAnimation { model.toggleAudioPlayer() }
+            } label: {
+                Label("Audio Player", systemImage: model.showAudioPlayer ? "play.square.fill" : "play.square")
+            }
+            .help("Show the audio player (⌥⌘A)")
+
             Button {
                 withAnimation { model.togglePreviewSidebar() }
             } label: {

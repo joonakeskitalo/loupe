@@ -225,6 +225,12 @@ final class BrowserModel {
         showTagInput = true
     }
 
+    /// Whether the bottom audio player bar is shown (grid and list views).
+    var showAudioPlayer = false
+
+    /// Toggles the bottom audio player (⌥⌘A / toolbar button).
+    func toggleAudioPlayer() { showAudioPlayer.toggle() }
+
     /// Toggles the info sidebar on/off (⌥⌘I / toolbar button).
     func toggleInfoSidebar() { showInfoSidebar.toggle() }
 

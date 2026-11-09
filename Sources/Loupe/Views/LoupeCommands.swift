@@ -300,6 +300,13 @@ struct LoupeCommands: Commands {
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .disabled(model == nil)
 
+            // Bottom audio player bar.
+            Button((model?.showAudioPlayer ?? false) ? "Hide Audio Player" : "Show Audio Player") {
+                model?.toggleAudioPlayer()
+            }
+            .keyboardShortcut("a", modifiers: [.command, .option])
+            .disabled(model == nil)
+
             Divider()
 
             // Layout: Grid / List.
