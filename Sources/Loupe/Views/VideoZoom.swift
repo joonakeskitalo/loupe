@@ -206,27 +206,45 @@ final class ZoomHostView: NSView {
     private var magnification: CGFloat = 1
     private var panOffset: CGSize = .zero
 
+    /// The view that actually gets the zoom transform. The host itself stays
+    /// untransformed and only clips: a layer's own `masksToBounds` is scaled
+    /// along with its transform, so clipping on the transformed layer let a
+    /// zoomed picture spill past the host's edges (e.g. out of the sidebar).
+    private let content = FlippedView()
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.masksToBounds = true
+        setUp()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        setUp()
+    }
+
+    private func setUp() {
         wantsLayer = true
         layer?.masksToBounds = true
+        content.wantsLayer = true
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
     }
 
     /// Keep the hosted surface filling the host; the transform (below) is what
     /// scales/pans it, so the hosted view itself always stays at full size.
     func embed(_ subview: NSView) {
-        addSubview(subview)
+        content.addSubview(subview)
         NSLayoutConstraint.activate([
-            subview.leadingAnchor.constraint(equalTo: leadingAnchor),
-            subview.trailingAnchor.constraint(equalTo: trailingAnchor),
-            subview.topAnchor.constraint(equalTo: topAnchor),
-            subview.bottomAnchor.constraint(equalTo: bottomAnchor),
+            subview.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            subview.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            subview.topAnchor.constraint(equalTo: content.topAnchor),
+            subview.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
     }
 
@@ -255,11 +273,11 @@ final class ZoomHostView: NSView {
     /// so a resize always re-centers correctly. Wrapped in a non-animated
     /// transaction so gesture ticks snap instead of CA interpolating.
     private func applyTransform() {
-        guard let layer else { return }
+        guard let layer = content.layer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let cx = bounds.midX
-        let cy = bounds.midY
+        let cx = content.bounds.midX
+        let cy = content.bounds.midY
         var t = CATransform3DIdentity
         t = CATransform3DTranslate(t, panOffset.width, panOffset.height, 0)
         t = CATransform3DTranslate(t, cx, cy, 0)
@@ -276,6 +294,10 @@ final class ZoomHostView: NSView {
         super.layout()
         applyTransform()
     }
+}
+
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 /// The video-zoom toolbar shown in the viewer's top chrome for a single video:
