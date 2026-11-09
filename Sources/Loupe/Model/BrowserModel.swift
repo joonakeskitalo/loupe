@@ -156,7 +156,11 @@ final class BrowserModel {
     /// Whether the right-hand preview sidebar (a live preview of the single
     /// selected image / video / document) is shown. Window-scoped and
     /// in-session only, matching `showInfoSidebar`.
-    var showPreviewSidebar = false
+    var showPreviewSidebar = false {
+        // Mutually exclusive with the bottom audio player so two sources never
+        // play at once.
+        didSet { if showPreviewSidebar && showAudioPlayer { showAudioPlayer = false } }
+    }
 
     /// The preview sidebar's width in points. Session- and window-scoped only:
     /// it always starts at the standard `defaultPreviewSidebarWidth` and is
@@ -226,7 +230,9 @@ final class BrowserModel {
     }
 
     /// Whether the bottom audio player bar is shown (grid and list views).
-    var showAudioPlayer = false
+    var showAudioPlayer = false {
+        didSet { if showAudioPlayer && showPreviewSidebar { showPreviewSidebar = false } }
+    }
 
     /// Toggles the bottom audio player (⌥⌘A / toolbar button).
     func toggleAudioPlayer() {
