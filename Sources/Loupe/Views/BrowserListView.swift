@@ -393,7 +393,7 @@ struct BrowserListView: View {
                 if !model.selectedItems.contains(item.id) {
                     model.selectOnly(item.id)
                 }
-                model.isViewerPresented = true
+                model.openSelection()
             },
             dragURLs: { dragURLs(for: item) },
             isSelected: { model.selectedItems.contains(item.id) }

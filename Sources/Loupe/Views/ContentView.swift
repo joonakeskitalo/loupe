@@ -244,10 +244,12 @@ struct ContentView: View {
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
             // Space and Return both open the full viewer on the selection.
-            Button("Open Viewer") { model.openViewer() }
+            Button("Open Viewer") {
+                if model.isAudioPlayerActive { model.toggleAudioPlayback() } else { model.openSelection() }
+            }
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
-            Button("Open") { model.openViewer() }
+            Button("Open") { model.openSelection() }
                 .keyboardShortcut(.return, modifiers: [])
                 .disabled(model.displayedItems.isEmpty || searchFocused || model.showTagInput)
             // The ⌘-modified actions (Refresh ⌘R, Select All ⌘A, Open with
@@ -501,8 +503,7 @@ struct ContentView: View {
 
         ToolbarItem(id: "open") {
             Button {
-                model.selectFirstIfNeeded()
-                model.isViewerPresented = true
+                model.openSelection()
             } label: {
                 Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
             }

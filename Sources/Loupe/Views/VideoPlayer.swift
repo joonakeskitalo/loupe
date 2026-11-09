@@ -448,7 +448,7 @@ struct PlaybackControlBar<C: PlaybackController>: View {
                 controller.togglePlay()
             } label: {
                 Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title3)
+                    .font(.body)
                     .foregroundStyle(.white)
                     .frame(width: 28)
             }
@@ -485,8 +485,11 @@ struct PlaybackControlBar<C: PlaybackController>: View {
                 controller.volume = controller.volume == 0 ? 1 : 0
             } label: {
                 Image(systemName: volumeSymbol)
+                    .font(.callout)
                     .foregroundStyle(.white)
-                    .frame(width: 20)
+                    // Fixed box: the speaker glyphs differ in height, which
+                    // would otherwise resize the whole bar as the level changes.
+                    .frame(width: 20, height: 18)
             }
             .buttonStyle(.plain)
             .help(controller.volume == 0 ? "Unmute" : "Mute")
@@ -497,7 +500,8 @@ struct PlaybackControlBar<C: PlaybackController>: View {
                 .help("Volume")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 5)
+        .frame(height: 34)
         .background(Color(white: 0.1))
     }
 

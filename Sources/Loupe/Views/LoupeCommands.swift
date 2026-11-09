@@ -170,7 +170,7 @@ struct LoupeCommands: Commands {
             // No key equivalent here: Return/Space already open the viewer as
             // modifier-less in-window hotkeys (gated by search focus), which
             // would clash with an always-on menu equivalent.
-            Button("Open in Viewer") { model?.openViewer() }
+            Button("Open in Viewer") { model?.openSelection() }
                 .disabled(!canOpen)
 
             Button("Open with Default App") { model?.openInDefaultApp() }

@@ -231,6 +231,47 @@ final class BrowserModel {
     /// Toggles the bottom audio player (⌥⌘A / toolbar button).
     func toggleAudioPlayer() { showAudioPlayer.toggle() }
 
+    /// The live audio bar's controller, registered while the bar is mounted.
+    /// A transient command channel, not display state.
+    @ObservationIgnored weak var audioController: AudioBarController?
+    /// Set when the bar is about to appear and should start playing at once.
+    @ObservationIgnored var autoplayAudioOnAppear = false
+
+    /// True when the selection is a single audio file.
+    var isAudioSelection: Bool {
+        selectedItems.count <= 1 && primarySelectedItem?.kind == .audio
+    }
+
+    /// True while the audio player is shown and the selection is audio, so
+    /// Space should drive it instead of opening the viewer.
+    var isAudioPlayerActive: Bool { showAudioPlayer && isAudioSelection }
+
+    /// Plays the selected audio file in the bottom player, showing it first.
+    func playSelectedAudio() {
+        guard let item = primarySelectedItem else { return }
+        if showAudioPlayer, let controller = audioController {
+            controller.load(url: item.url)
+            controller.play()
+        } else {
+            autoplayAudioOnAppear = true
+            showAudioPlayer = true
+        }
+    }
+
+    /// Space while the audio player is active.
+    func toggleAudioPlayback() { audioController?.togglePlay() }
+
+    /// Opens the selection: audio goes to the bottom player, everything else
+    /// to the full viewer.
+    func openSelection() {
+        selectFirstIfNeeded()
+        if isAudioSelection {
+            playSelectedAudio()
+        } else if !selectedItems.isEmpty {
+            isViewerPresented = true
+        }
+    }
+
     /// Toggles the info sidebar on/off (⌥⌘I / toolbar button).
     func toggleInfoSidebar() { showInfoSidebar.toggle() }
 

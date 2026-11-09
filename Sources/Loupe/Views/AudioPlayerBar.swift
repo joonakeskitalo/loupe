@@ -193,9 +193,17 @@ struct AudioPlayerBar: View {
         .overlay(alignment: .top) { Divider() }
         .onAppear {
             controller.onFinished = { advanceAfterFinish() }
+            model.audioController = controller
             loadSelectionIfAudio()
+            if model.autoplayAudioOnAppear {
+                model.autoplayAudioOnAppear = false
+                controller.play()
+            }
         }
-        .onDisappear { controller.stop() }
+        .onDisappear {
+            controller.stop()
+            if model.audioController === controller { model.audioController = nil }
+        }
         .onChange(of: model.selectedItem) { _, _ in loadSelectionIfAudio() }
     }
 
