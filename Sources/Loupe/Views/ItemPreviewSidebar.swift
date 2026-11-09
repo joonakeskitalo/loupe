@@ -26,6 +26,7 @@ struct ItemPreviewSidebar: View {
     /// Width captured when a resize drag begins, so the delta is applied
     /// against a stable base rather than accumulating rounding error.
     @State private var dragStartWidth: Double?
+    @State private var handleHovered = false
 
     /// The width the panel should render at right now.
     private var effectiveWidth: Double { dragWidth ?? model.previewSidebarWidth }
@@ -142,8 +143,7 @@ struct ItemPreviewSidebar: View {
     /// min/max. A divider is drawn over it so it reads as the panel's edge.
     private var resizeHandle: some View {
         Divider()
-            .frame(width: 6)
-            .contentShape(Rectangle())
+            .frame(width: 8)
             .overlay(alignment: .center) {
                 // Subtle grip affordance.
                 Capsule()
@@ -151,47 +151,120 @@ struct ItemPreviewSidebar: View {
                     .frame(width: 2, height: 26)
             }
             .background(.bar)
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            // The real hit target is wider than the visible strip. One AppKit
+            // view owns the cursor (via a cursor rect), the hover state and the
+            // drag, so the cursor and highlight always cover the same area.
+            .overlay {
+                ZStack {
+                    Rectangle()
+                        .fill(handleHovered || isResizing ? Color.accentColor.opacity(0.25) : Color.clear)
+                    ResizeHitArea(
+                        onHover: { handleHovered = $0 },
+                        onBegan: beginResize,
+                        onChanged: updateResize,
+                        onEnded: endResize
+                    )
+                }
+                .frame(width: Self.handleHitWidth)
             }
-            .gesture(
-                // Measure the drag in the global (window) space, not the
-                // handle's local space. The handle sits on the panel's leading
-                // edge and moves as the panel resizes, so a local
-                // `translation` drifts out from under the pointer. The global
-                // pointer x stays fixed to the cursor, so anchoring the width
-                // to it keeps the edge pinned to the cursor the whole drag.
-                DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                    .onChanged { value in
-                        let base = dragStartWidth ?? model.previewSidebarWidth
-                        if dragStartWidth == nil {
-                            dragStartWidth = base
-                            // Tell the grid a resize started so it freezes its
-                            // column layout (see `isResizingPreviewSidebar`).
-                            model.isResizingPreviewSidebar = true
-                        }
-                        // Handle is on the leading edge and the panel is pinned
-                        // to the window's trailing edge, so moving the cursor
-                        // left (a smaller x) widens the panel. Use the pointer's
-                        // displacement from where the drag began — in global
-                        // space this tracks the cursor exactly, regardless of
-                        // how the handle itself has shifted.
-                        let delta = value.startLocation.x - value.location.x
-                        let proposed = base + Double(delta)
-                        dragWidth = min(max(proposed, BrowserModel.minPreviewSidebarWidth),
-                                        BrowserModel.maxPreviewSidebarWidth)
-                    }
-                    .onEnded { _ in
-                        // Commit the final width to the model once (session-
-                        // scoped, not persisted), then drop the live override
-                        // and let the grid reflow to the final width in a
-                        // single pass.
-                        if let dragWidth { model.previewSidebarWidth = dragWidth }
-                        dragWidth = nil
-                        dragStartWidth = nil
-                        model.isResizingPreviewSidebar = false
-                    }
-            )
+            // Sit above the neighbouring panel/grid so the wide hit area wins.
+            .zIndex(1)
+    }
+
+    private static let handleHitWidth: CGFloat = 4
+    
+    private func beginResize() {
+        dragStartWidth = model.previewSidebarWidth
+        // Tell the grid a resize started so it freezes its column layout
+        // (see `isResizingPreviewSidebar`).
+        model.isResizingPreviewSidebar = true
+    }
+
+    /// `delta` is the pointer's leftward displacement since the drag began, in
+    /// window space, which tracks the cursor exactly even as the handle moves.
+    /// Moving left widens the panel (it is pinned to the trailing edge).
+    private func updateResize(_ delta: CGFloat) {
+        let base = dragStartWidth ?? model.previewSidebarWidth
+        dragWidth = min(max(base + Double(delta), BrowserModel.minPreviewSidebarWidth),
+                        BrowserModel.maxPreviewSidebarWidth)
+    }
+
+    private func endResize() {
+        // Commit the final width once (session-scoped), then drop the live
+        // override so the grid reflows in a single pass.
+        if let dragWidth { model.previewSidebarWidth = dragWidth }
+        dragWidth = nil
+        dragStartWidth = nil
+        model.isResizingPreviewSidebar = false
+    }
+}
+
+/// Transparent AppKit view covering the resize grab zone. Cursor rects keep the
+/// resize cursor exactly in sync with the view's bounds, and it reports hover
+/// and drag itself so no SwiftUI gesture has to compete with the media views.
+private struct ResizeHitArea: NSViewRepresentable {
+    var onHover: (Bool) -> Void
+    var onBegan: () -> Void
+    var onChanged: (CGFloat) -> Void
+    var onEnded: () -> Void
+
+    func makeNSView(context: Context) -> HitView { HitView() }
+
+    func updateNSView(_ view: HitView, context: Context) {
+        view.onHover = onHover
+        view.onBegan = onBegan
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+    }
+
+    final class HitView: NSView {
+        var onHover: (Bool) -> Void = { _ in }
+        var onBegan: () -> Void = {}
+        var onChanged: (CGFloat) -> Void = { _ in }
+        var onEnded: () -> Void = {}
+        private var startX: CGFloat = 0
+        private var dragging = false
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeLeftRight)
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            for area in trackingAreas { removeTrackingArea(area) }
+            addTrackingArea(NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self))
+        }
+
+        override func mouseEntered(with event: NSEvent) { onHover(true) }
+        override func mouseExited(with event: NSEvent) { onHover(false) }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        override func mouseDown(with event: NSEvent) {
+            startX = event.locationInWindow.x
+            dragging = true
+            onBegan()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard dragging else { return }
+            // Keep the resize cursor even if the pointer outruns the strip.
+            NSCursor.resizeLeftRight.set()
+            onChanged(startX - event.locationInWindow.x)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard dragging else { return }
+            dragging = false
+            onEnded()
+            // Re-evaluate hover now that the drag is over.
+            let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+            onHover(inside)
+        }
     }
 }
 
