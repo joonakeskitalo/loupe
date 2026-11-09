@@ -37,12 +37,25 @@ struct ItemPreviewSidebar: View {
     /// run once per drag tick — that layout work was the source of the stutter.
     private var isResizing: Bool { dragWidth != nil }
 
+    private var isBottom: Bool { model.previewPlacement == .bottom }
+
+    /// The height the panel should render at right now (bottom placement).
+    private var effectiveHeight: Double { dragWidth ?? model.previewSidebarHeight }
+
     var body: some View {
-        HStack(spacing: 0) {
-            resizeHandle
-            panel
+        if isBottom {
+            VStack(spacing: 0) {
+                resizeHandle
+                panel
+            }
+            .frame(height: CGFloat(effectiveHeight))
+        } else {
+            HStack(spacing: 0) {
+                resizeHandle
+                panel
+            }
+            .frame(width: CGFloat(effectiveWidth))
         }
-        .frame(width: CGFloat(effectiveWidth))
     }
 
     // MARK: Panel
@@ -67,6 +80,15 @@ struct ItemPreviewSidebar: View {
             Text("Preview")
                 .font(.headline)
             Spacer()
+            Button {
+                model.togglePreviewPlacement()
+            } label: {
+                Image(systemName: isBottom ? "rectangle.righthalf.inset.filled"
+                                           : "rectangle.bottomhalf.inset.filled")
+            }
+            .buttonStyle(.borderless)
+            .help(isBottom ? "Move preview to the side" : "Move preview below the grid")
+            .accessibilityLabel(isBottom ? "Move preview to the side" : "Move preview below the grid")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -143,12 +165,12 @@ struct ItemPreviewSidebar: View {
     /// min/max. A divider is drawn over it so it reads as the panel's edge.
     private var resizeHandle: some View {
         Divider()
-            .frame(width: 8)
+            .frame(width: isBottom ? nil : 8, height: isBottom ? 8 : nil)
             .overlay(alignment: .center) {
                 // Subtle grip affordance.
                 Capsule()
                     .fill(Color.secondary.opacity(0.35))
-                    .frame(width: 2, height: 26)
+                    .frame(width: isBottom ? 26 : 2, height: isBottom ? 2 : 26)
             }
             .background(.bar)
             // The real hit target is wider than the visible strip. One AppKit
@@ -159,13 +181,15 @@ struct ItemPreviewSidebar: View {
                     Rectangle()
                         .fill(handleHovered || isResizing ? Color.accentColor.opacity(0.25) : Color.clear)
                     ResizeHitArea(
+                        vertical: isBottom,
                         onHover: { handleHovered = $0 },
                         onBegan: beginResize,
                         onChanged: updateResize,
                         onEnded: endResize
                     )
                 }
-                .frame(width: Self.handleHitWidth)
+                .frame(width: isBottom ? nil : Self.handleHitWidth,
+                       height: isBottom ? Self.handleHitWidth : nil)
             }
             // Sit above the neighbouring panel/grid so the wide hit area wins.
             .zIndex(1)
@@ -174,7 +198,7 @@ struct ItemPreviewSidebar: View {
     private static let handleHitWidth: CGFloat = 4
     
     private func beginResize() {
-        dragStartWidth = model.previewSidebarWidth
+        dragStartWidth = isBottom ? model.previewSidebarHeight : model.previewSidebarWidth
         // Tell the grid a resize started so it freezes its column layout
         // (see `isResizingPreviewSidebar`).
         model.isResizingPreviewSidebar = true
@@ -184,15 +208,24 @@ struct ItemPreviewSidebar: View {
     /// window space, which tracks the cursor exactly even as the handle moves.
     /// Moving left widens the panel (it is pinned to the trailing edge).
     private func updateResize(_ delta: CGFloat) {
-        let base = dragStartWidth ?? model.previewSidebarWidth
-        dragWidth = min(max(base + Double(delta), BrowserModel.minPreviewSidebarWidth),
-                        BrowserModel.maxPreviewSidebarWidth)
+        if isBottom {
+            let base = dragStartWidth ?? model.previewSidebarHeight
+            dragWidth = min(max(base + Double(delta), BrowserModel.minPreviewSidebarHeight),
+                            BrowserModel.maxPreviewSidebarHeight)
+        } else {
+            let base = dragStartWidth ?? model.previewSidebarWidth
+            dragWidth = min(max(base + Double(delta), BrowserModel.minPreviewSidebarWidth),
+                            BrowserModel.maxPreviewSidebarWidth)
+        }
     }
 
     private func endResize() {
         // Commit the final width once (session-scoped), then drop the live
         // override so the grid reflows in a single pass.
-        if let dragWidth { model.previewSidebarWidth = dragWidth }
+        if let dragWidth {
+            if isBottom { model.previewSidebarHeight = dragWidth }
+            else { model.previewSidebarWidth = dragWidth }
+        }
         dragWidth = nil
         dragStartWidth = nil
         model.isResizingPreviewSidebar = false
@@ -203,6 +236,8 @@ struct ItemPreviewSidebar: View {
 /// resize cursor exactly in sync with the view's bounds, and it reports hover
 /// and drag itself so no SwiftUI gesture has to compete with the media views.
 struct ResizeHitArea: NSViewRepresentable {
+    /// True for a horizontal strip dragged up/down (bottom placement).
+    var vertical = false
     var onHover: (Bool) -> Void
     var onBegan: () -> Void
     var onChanged: (CGFloat) -> Void
@@ -211,6 +246,10 @@ struct ResizeHitArea: NSViewRepresentable {
     func makeNSView(context: Context) -> HitView { HitView() }
 
     func updateNSView(_ view: HitView, context: Context) {
+        if view.vertical != vertical {
+            view.vertical = vertical
+            view.window?.invalidateCursorRects(for: view)
+        }
         view.onHover = onHover
         view.onBegan = onBegan
         view.onChanged = onChanged
@@ -222,11 +261,14 @@ struct ResizeHitArea: NSViewRepresentable {
         var onBegan: () -> Void = {}
         var onChanged: (CGFloat) -> Void = { _ in }
         var onEnded: () -> Void = {}
+        var vertical = false
         private var startX: CGFloat = 0
         private var dragging = false
 
+        private var cursor: NSCursor { vertical ? .resizeUpDown : .resizeLeftRight }
+
         override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .resizeLeftRight)
+            addCursorRect(bounds, cursor: cursor)
         }
 
         override func updateTrackingAreas() {
@@ -245,7 +287,9 @@ struct ResizeHitArea: NSViewRepresentable {
         override var mouseDownCanMoveWindow: Bool { false }
 
         override func mouseDown(with event: NSEvent) {
-            startX = event.locationInWindow.x
+            // Horizontal: window x. Vertical: window y (origin bottom-left, so
+            // moving the pointer up increases y and should grow the panel).
+            startX = vertical ? -event.locationInWindow.y : event.locationInWindow.x
             dragging = true
             onBegan()
         }
@@ -253,8 +297,9 @@ struct ResizeHitArea: NSViewRepresentable {
         override func mouseDragged(with event: NSEvent) {
             guard dragging else { return }
             // Keep the resize cursor even if the pointer outruns the strip.
-            NSCursor.resizeLeftRight.set()
-            onChanged(startX - event.locationInWindow.x)
+            cursor.set()
+            let current = vertical ? -event.locationInWindow.y : event.locationInWindow.x
+            onChanged(startX - current)
         }
 
         override func mouseUp(with event: NSEvent) {

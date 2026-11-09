@@ -182,6 +182,42 @@ final class BrowserModel {
     static let maxPreviewSidebarWidth: Double = 1600
     static let defaultPreviewSidebarWidth: Double = 420
 
+    /// Where the preview panel sits relative to the grid/list: beside it
+    /// (vertical panel on the right) or below it (horizontal panel). A
+    /// preference persisted across windows and launches.
+    enum PreviewPlacement: String {
+        case side, bottom
+    }
+
+    static let previewPlacementKey = "previewSidebarPlacement"
+
+    var previewPlacement: PreviewPlacement = {
+        UserDefaults.standard.string(forKey: BrowserModel.previewPlacementKey)
+            .flatMap(PreviewPlacement.init(rawValue:)) ?? .side
+    }() {
+        didSet {
+            UserDefaults.standard.set(previewPlacement.rawValue, forKey: Self.previewPlacementKey)
+        }
+    }
+
+    /// The preview panel's height in points when placed at the bottom.
+    /// Session-scoped like `previewSidebarWidth`, clamped on write.
+    var previewSidebarHeight: Double = BrowserModel.defaultPreviewSidebarHeight {
+        didSet {
+            let clamped = min(max(previewSidebarHeight, Self.minPreviewSidebarHeight),
+                              Self.maxPreviewSidebarHeight)
+            if clamped != previewSidebarHeight { previewSidebarHeight = clamped }
+        }
+    }
+
+    static let minPreviewSidebarHeight: Double = 140
+    static let maxPreviewSidebarHeight: Double = 1200
+    static let defaultPreviewSidebarHeight: Double = 320
+
+    func togglePreviewPlacement() {
+        previewPlacement = (previewPlacement == .side) ? .bottom : .side
+    }
+
     /// The info sidebar's width in points. A preference persisted across
     /// windows and launches (like `previewSidebarWidth`), so resizing it in one
     /// window carries over. Clamped to `minInfoSidebarWidth ...

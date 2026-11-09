@@ -166,8 +166,12 @@ struct ContentView: View {
                                             canAutoFocus: !searchFocused,
                                             searchFocused: searchFocused)
                         }
+                        if model.showPreviewSidebar && model.previewPlacement == .bottom {
+                            ItemPreviewSidebar(model: model)
+                                .transition(.move(edge: .bottom))
+                        }
                     }
-                    if model.showPreviewSidebar {
+                    if model.showPreviewSidebar && model.previewPlacement == .side {
                         ItemPreviewSidebar(model: model)
                             .transition(.move(edge: .trailing))
                     }
