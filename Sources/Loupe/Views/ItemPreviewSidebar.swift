@@ -202,7 +202,7 @@ struct ItemPreviewSidebar: View {
 /// Transparent AppKit view covering the resize grab zone. Cursor rects keep the
 /// resize cursor exactly in sync with the view's bounds, and it reports hover
 /// and drag itself so no SwiftUI gesture has to compete with the media views.
-private struct ResizeHitArea: NSViewRepresentable {
+struct ResizeHitArea: NSViewRepresentable {
     var onHover: (Bool) -> Void
     var onBegan: () -> Void
     var onChanged: (CGFloat) -> Void

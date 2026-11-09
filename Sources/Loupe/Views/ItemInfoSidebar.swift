@@ -21,6 +21,7 @@ struct ItemInfoSidebar: View {
     /// Width captured when a resize drag begins, so the delta is applied
     /// against a stable base rather than accumulating rounding error.
     @State private var dragStartWidth: Double?
+    @State private var handleHovered = false
 
     /// The width the panel should render at right now.
     private var effectiveWidth: Double { dragWidth ?? model.infoSidebarWidth }
@@ -56,38 +57,39 @@ struct ItemInfoSidebar: View {
     /// min/max. Mirrors the preview sidebar's handle.
     private var resizeHandle: some View {
         Divider()
-            .frame(width: 6)
-            .contentShape(Rectangle())
+            .frame(width: 8)
             .overlay(alignment: .center) {
                 Capsule()
                     .fill(Color.secondary.opacity(0.35))
                     .frame(width: 2, height: 26)
             }
             .background(.bar)
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            // One AppKit view owns the cursor, hover and drag so the cursor and
+            // highlight always cover the same area (shared with the preview
+            // sidebar).
+            .overlay {
+                ZStack {
+                    Rectangle()
+                        .fill(handleHovered || dragWidth != nil ? Color.accentColor.opacity(0.25) : Color.clear)
+                    ResizeHitArea(
+                        onHover: { handleHovered = $0 },
+                        onBegan: { dragStartWidth = model.infoSidebarWidth },
+                        onChanged: { delta in
+                            // Moving left widens the trailing-pinned panel.
+                            let base = dragStartWidth ?? model.infoSidebarWidth
+                            dragWidth = min(max(base + Double(delta), BrowserModel.minInfoSidebarWidth),
+                                            BrowserModel.maxInfoSidebarWidth)
+                        },
+                        onEnded: {
+                            if let dragWidth { model.infoSidebarWidth = dragWidth }
+                            dragWidth = nil
+                            dragStartWidth = nil
+                        }
+                    )
+                }
+                .frame(width: 4)
             }
-            .gesture(
-                // Measure in the global (window) space so the width stays
-                // anchored to the cursor even as the handle shifts with the
-                // resizing panel (see the preview sidebar for the rationale).
-                DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                    .onChanged { value in
-                        let base = dragStartWidth ?? model.infoSidebarWidth
-                        if dragStartWidth == nil { dragStartWidth = base }
-                        // Handle is on the leading edge of a trailing-pinned
-                        // panel, so moving the cursor left (smaller x) widens it.
-                        let delta = value.startLocation.x - value.location.x
-                        let proposed = base + Double(delta)
-                        dragWidth = min(max(proposed, BrowserModel.minInfoSidebarWidth),
-                                        BrowserModel.maxInfoSidebarWidth)
-                    }
-                    .onEnded { _ in
-                        if let dragWidth { model.infoSidebarWidth = dragWidth }
-                        dragWidth = nil
-                        dragStartWidth = nil
-                    }
-            )
+            .zIndex(1)
     }
 
     @ViewBuilder
