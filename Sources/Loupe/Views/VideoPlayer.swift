@@ -11,6 +11,12 @@ final class VideoController: ObservableObject, PlaybackController {
     @Published var isPlaying = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
+    @Published var volume: Double = PlaybackVolume.stored {
+        didSet {
+            player.volume = Float(volume)
+            PlaybackVolume.stored = volume
+        }
+    }
 
     private var timeObserver: Any?
     private var statusObserver: AnyCancellable?
@@ -31,6 +37,7 @@ final class VideoController: ObservableObject, PlaybackController {
 
     init(url: URL) {
         player = AVPlayer(url: url)
+        player.volume = Float(PlaybackVolume.stored)
         observe()
         play()
     }
@@ -473,10 +480,34 @@ struct PlaybackControlBar<C: PlaybackController>: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white)
                 .frame(width: 46, alignment: .leading)
+
+            Button {
+                controller.volume = controller.volume == 0 ? 1 : 0
+            } label: {
+                Image(systemName: volumeSymbol)
+                    .foregroundStyle(.white)
+                    .frame(width: 20)
+            }
+            .buttonStyle(.plain)
+            .help(controller.volume == 0 ? "Unmute" : "Mute")
+
+            Slider(value: $controller.volume, in: 0...1)
+                .controlSize(.small)
+                .frame(width: 80)
+                .help("Volume")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(white: 0.1))
+    }
+
+    private var volumeSymbol: String {
+        switch controller.volume {
+        case 0: return "speaker.slash.fill"
+        case ..<0.34: return "speaker.wave.1.fill"
+        case ..<0.67: return "speaker.wave.2.fill"
+        default: return "speaker.wave.3.fill"
+        }
     }
 
     private func timeString(_ seconds: Double) -> String {

@@ -20,6 +20,8 @@ protocol PlaybackController: ObservableObject {
     var currentTime: Double { get }
     /// Total duration in seconds (0 until known; reported asynchronously).
     var duration: Double { get }
+    /// Output volume, 0...1. Persisted across videos and launches.
+    var volume: Double { get set }
 
     /// Toggle play/pause.
     func togglePlay()
@@ -48,4 +50,18 @@ protocol PlaybackController: ObservableObject {
     func scrub(to seconds: Double)
     /// Called when the user releases the scrubber.
     func endScrubbing()
+}
+
+/// Shared persistence for the video player volume so every player starts at the
+/// level the user last chose.
+enum PlaybackVolume {
+    private static let key = "videoVolume"
+
+    static var stored: Double {
+        get {
+            guard UserDefaults.standard.object(forKey: key) != nil else { return 1 }
+            return min(max(UserDefaults.standard.double(forKey: key), 0), 1)
+        }
+        set { UserDefaults.standard.set(min(max(newValue, 0), 1), forKey: key) }
+    }
 }

@@ -62,6 +62,12 @@ final class MPVController: ObservableObject, PlaybackController {
     @Published var isPlaying = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
+    @Published var volume: Double = PlaybackVolume.stored {
+        didSet {
+            PlaybackVolume.stored = volume
+            applyVolume()
+        }
+    }
 
     /// The mpv client handle. `nil` only after teardown.
     fileprivate private(set) var mpv: OpaquePointer?
@@ -146,6 +152,8 @@ final class MPVController: ObservableObject, PlaybackController {
             mpv = nil
             return
         }
+
+        applyVolume()
 
         // Observe the properties that back our published transport state.
         mpv_observe_property(handle, 0, "time-pos", MPV_FORMAT_DOUBLE)
@@ -379,6 +387,13 @@ final class MPVController: ObservableObject, PlaybackController {
 
     func togglePlay() {
         if isPlaying { pause() } else { play() }
+    }
+
+    /// Pushes the 0...1 volume to mpv, which uses a 0...100 scale.
+    private func applyVolume() {
+        guard let mpv else { return }
+        var value = volume * 100
+        mpv_set_property(mpv, "volume", MPV_FORMAT_DOUBLE, &value)
     }
 
     private func setPause(_ paused: Bool) {
