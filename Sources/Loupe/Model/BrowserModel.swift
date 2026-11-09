@@ -229,7 +229,10 @@ final class BrowserModel {
     var showAudioPlayer = false
 
     /// Toggles the bottom audio player (⌥⌘A / toolbar button).
-    func toggleAudioPlayer() { showAudioPlayer.toggle() }
+    func toggleAudioPlayer() {
+        guard !isViewerPresented else { return }
+        showAudioPlayer.toggle()
+    }
 
     /// The live audio bar's controller, registered while the bar is mounted.
     /// A transient command channel, not display state.
@@ -248,7 +251,7 @@ final class BrowserModel {
 
     /// Plays the selected audio file in the bottom player, showing it first.
     func playSelectedAudio() {
-        guard let item = primarySelectedItem else { return }
+        guard !isViewerPresented, let item = primarySelectedItem else { return }
         if showAudioPlayer, let controller = audioController {
             controller.load(url: item.url)
             controller.play()
@@ -828,7 +831,13 @@ final class BrowserModel {
     }
 
     /// Whether the full-screen/detail viewer is presented.
-    var isViewerPresented = false
+    /// Mutually exclusive with the bottom audio player: opening the viewer
+    /// closes the player (which stops its audio).
+    var isViewerPresented = false {
+        didSet {
+            if isViewerPresented && showAudioPlayer { showAudioPlayer = false }
+        }
+    }
 
     /// Whether the film strip of thumbnails is shown in the single-item viewer.
     var isFilmStripVisible = true

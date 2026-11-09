@@ -305,7 +305,7 @@ struct LoupeCommands: Commands {
                 model?.toggleAudioPlayer()
             }
             .keyboardShortcut("a", modifiers: [.command, .option])
-            .disabled(model == nil)
+            .disabled(model == nil || (model?.isViewerPresented ?? false))
 
             Divider()
 
