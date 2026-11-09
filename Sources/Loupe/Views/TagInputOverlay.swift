@@ -116,9 +116,11 @@ struct TagInputOverlay: View {
                 onNavigate: { direction, shift in
                     guard draft.isEmpty else { return false }
                     model.selectFirstIfNeeded()
-                    // Up/Down jump a full grid row; Shift extends the
+                    // Up/Down jump a full grid row (one item in list); Shift extends the
                     // multi-selection so several items can be tagged at once.
-                    model.moveSelection(direction, columns: max(1, model.gridColumnCount), extend: shift)
+                    // In list layout a row is a single item, so Up/Down step by 1.
+                    let columns = model.viewLayout == .list ? 1 : max(1, model.gridColumnCount)
+                    model.moveSelection(direction, columns: columns, extend: shift)
                     return true
                 }
             )
