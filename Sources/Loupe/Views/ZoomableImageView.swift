@@ -74,6 +74,10 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.onResize = { [weak coordinator = context.coordinator] in
             coordinator?.viewportResized()
         }
+        // Pinch / ⌘-scroll zoom leaves Fit mode so a resize doesn't snap back.
+        scrollView.onUserZoom = { [weak coordinator = context.coordinator] in
+            coordinator?.userDidZoom()
+        }
         scrollView.onSwipePrevious = onSwipePrevious
         scrollView.onSwipeNext = onSwipeNext
 
@@ -94,13 +98,23 @@ struct ZoomableImageView: NSViewRepresentable {
         }
 
         if let cmd = command {
-            switch cmd {
-            case .fit: context.coordinator.fit()
-            case .actualSize: context.coordinator.actualSize()
-            case .zoomIn: context.coordinator.zoom(by: 1.25)
-            case .zoomOut: context.coordinator.zoom(by: 0.8)
+            // Run the zoom on the next turn of the run loop rather than inside
+            // this SwiftUI update pass. Changing magnification re-lays-out the
+            // Live Text overlay, and doing that re-entrantly from within a
+            // view update can trap inside AppKit.
+            let coordinator = context.coordinator
+            guard !coordinator.commandPending else { return }
+            coordinator.commandPending = true
+            DispatchQueue.main.async {
+                coordinator.commandPending = false
+                switch cmd {
+                case .fit: coordinator.fit()
+                case .actualSize: coordinator.actualSize()
+                case .zoomIn: coordinator.zoom(by: 1.25)
+                case .zoomOut: coordinator.zoom(by: 0.8)
+                }
+                command = nil
             }
-            DispatchQueue.main.async { command = nil }
         }
     }
 
@@ -114,6 +128,9 @@ struct ZoomableImageView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var url: URL?
+        /// True while a zoom command is queued, so repeated view updates don't
+        /// run it twice.
+        var commandPending = false
         weak var scrollView: ZoomScrollView?
         private var zoomFactorBinding: Binding<CGFloat>
         private var boundsObserver: NSObjectProtocol?
@@ -218,6 +235,12 @@ struct ZoomableImageView: NSViewRepresentable {
 
         func viewportResized() {
             if isFitMode { fit() }
+        }
+
+        /// Called after a pinch or ⌘-scroll zoom.
+        func userDidZoom() {
+            isFitMode = false
+            scrollView?.recenter()
         }
 
         private func reportZoom(_ magnification: CGFloat) {
@@ -434,6 +457,93 @@ final class ZoomScrollView: NSScrollView {
         }
     }
 
+    /// Called after a user-driven zoom (pinch or ⌘-scroll).
+    var onUserZoom: (() -> Void)?
+
+    /// Scroll and swipe events belong to the scroll view. The Live Text overlay
+    /// sits over the whole image and would otherwise be the hit view for them.
+    /// Clicks and drags still reach the overlay for text selection.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        guard hit != nil, let type = NSApp.currentEvent?.type else { return hit }
+        switch type {
+        case .scrollWheel, .swipe:
+            return self
+        default:
+            return hit
+        }
+    }
+
+    // MARK: Pinch zoom
+    //
+    // AppKit locks a pinch gesture's target view when the gesture begins, at a
+    // point where `NSApp.currentEvent` isn't yet a `.magnify` event, so the
+    // `hitTest` routing above can't reliably steer it and the Live Text overlay
+    // ends up swallowing the pinch. A local event monitor sees every magnify
+    // event before dispatch, so pinches over this view always zoom it.
+
+    private var magnifyMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            removeMagnifyMonitor()
+        } else if magnifyMonitor == nil {
+            magnifyMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.magnify, .smartMagnify]
+            ) { [weak self] event in
+                // Local monitors run on the main thread. Only a Bool crosses
+                // the isolation boundary (NSEvent isn't Sendable).
+                nonisolated(unsafe) let event = event
+                let handled = MainActor.assumeIsolated { () -> Bool in
+                    guard let self, self.owns(event) else { return false }
+                    if event.type == .magnify {
+                        self.magnify(with: event)
+                    } else {
+                        self.smartMagnify(with: event)
+                    }
+                    self.onUserZoom?()
+                    return true
+                }
+                return handled ? nil : event
+            }
+        }
+    }
+
+    private func removeMagnifyMonitor() {
+        if let magnifyMonitor { NSEvent.removeMonitor(magnifyMonitor) }
+        magnifyMonitor = nil
+    }
+
+    /// True when `event` is in this view's window and over this view.
+    private func owns(_ event: NSEvent) -> Bool {
+        guard let window, event.window === window, !isHiddenOrHasHiddenAncestor else {
+            return false
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return false }
+        // Make sure this view is the topmost one under the pointer, so a
+        // preview-sidebar image covered by the fullscreen viewer doesn't also
+        // zoom. `hitTest` on the window's root takes a point in its
+        // superview's coordinates, which for the content view is the window.
+        guard let root = window.contentView,
+              let hit = root.hitTest(root.superview?.convert(event.locationInWindow, from: nil)
+                                     ?? event.locationInWindow) else { return false }
+        return hit === self || hit.isDescendant(of: self)
+    }
+
+    /// ⌘-scroll zooms around the pointer, like pinch.
+    private func commandScrollZoom(_ event: NSEvent) {
+        let delta = event.hasPreciseScrollingDeltas
+            ? event.scrollingDeltaY * 0.01
+            : event.scrollingDeltaY * 0.1
+        guard delta != 0 else { return }
+        let next = min(max(magnification * exp(delta), minMagnification), maxMagnification)
+        let anchor = contentView.convert(event.locationInWindow, from: nil)
+        setMagnification(next, centeredAt: anchor)
+        onUserZoom?()
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         onResize?()
@@ -468,6 +578,10 @@ final class ZoomScrollView: NSScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            commandScrollZoom(event)
+            return
+        }
         guard hasNavHandlers else {
             super.scrollWheel(with: event)
             return
