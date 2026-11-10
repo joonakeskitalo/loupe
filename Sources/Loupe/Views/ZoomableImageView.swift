@@ -670,12 +670,19 @@ final class ZoomScrollView: NSScrollView {
             return
         }
 
-        // Trackpad precise scroll: navigate only when horizontally fitted,
-        // otherwise pan.
+        // Trackpad precise scroll. When the image overflows horizontally, the
+        // gesture is purely a pan.
         guard canNavigateHorizontally else {
             super.scrollWheel(with: event)
             return
         }
+
+        // Horizontally fitted. If the image still overflows vertically (e.g.
+        // a tall screenshot zoomed to fill the width), the gesture must keep
+        // panning vertically, and a clearly horizontal swipe still navigates.
+        // Horizontal deltas can't move a horizontally-fitted image, so
+        // forwarding everything to the scroll view is safe.
+        let pansVertically = !canNavigateVertically
 
         if event.phase.contains(.began) {
             navAccumX = 0
@@ -683,13 +690,22 @@ final class ZoomScrollView: NSScrollView {
             navTriggered = false
         }
 
-        if !event.momentumPhase.isEmpty { return }
+        // Momentum continues a vertical pan; it never triggers navigation.
+        if !event.momentumPhase.isEmpty {
+            if pansVertically { super.scrollWheel(with: event) }
+            return
+        }
+
+        if pansVertically { super.scrollWheel(with: event) }
 
         navAccumX += event.scrollingDeltaX
         navAccumY += event.scrollingDeltaY
 
+        // While panning vertically, require a strongly horizontal gesture so a
+        // slightly diagonal scroll doesn't flip to the next image.
+        let dominance: CGFloat = pansVertically ? 2 : 1
         if !navTriggered, abs(navAccumX) > navThreshold,
-           abs(navAccumX) > abs(navAccumY) {
+           abs(navAccumX) > abs(navAccumY) * dominance {
             navTriggered = true
             if navAccumX > 0 { onSwipeNext?() } else { onSwipePrevious?() }
         }
