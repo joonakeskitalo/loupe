@@ -34,6 +34,20 @@ struct DropZoneView: View {
                 )
                 .padding(24)
         )
+        // On macOS 26 a window's corner radius depends on whether it has a
+        // toolbar. The browser view always has one, so the empty state carries
+        // one too; otherwise the window's corners visibly change shape when
+        // the first folder or file is added.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    chooseFolder()
+                } label: {
+                    Label("Choose Folder…", systemImage: "folder.badge.plus")
+                }
+                .help("Choose a folder to browse")
+            }
+        }
     }
 
     private func chooseFolder() {
