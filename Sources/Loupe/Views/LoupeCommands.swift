@@ -33,7 +33,7 @@ struct LoupeCommands: Commands {
             // as ⌘A / ⌘⌫).
             Button(copyTitle) { model?.copyToClipboard() }
                 .keyboardShortcut("c", modifiers: .command)
-                .disabled(!hasSelection || viewerOpen || searchFocused)
+                .disabled(!hasSelection || viewerOpen || searchFocused || textEditingActive)
 
             // Cut — forwarded to the first responder. Like Paste below, this
             // relays the standard `cut:` action so ⌘X cuts text in a focused
@@ -289,7 +289,7 @@ struct LoupeCommands: Commands {
         // sense (no items and not searching, or the viewer owns ⌘A).
         CommandGroup(after: .textEditing) {
             Button("Select All") {
-                if searchFocused {
+                if textEditingActive {
                     NSApp.sendAction(
                         #selector(NSText.selectAll(_:)),
                         to: nil,
@@ -300,7 +300,7 @@ struct LoupeCommands: Commands {
                 }
             }
             .keyboardShortcut("a", modifiers: .command)
-            .disabled((!hasItems && !searchFocused) || viewerOpen)
+            .disabled((!hasItems && !textEditingActive) || (viewerOpen && !textEditingActive))
         }
 
         // MARK: View menu — merged into SwiftUI's built-in "View" menu (via
@@ -520,6 +520,13 @@ struct LoupeCommands: Commands {
 
     private var viewerOpen: Bool { model?.isViewerPresented ?? false }
     private var searchFocused: Bool { searchFieldFocused ?? false }
+    /// True when keystrokes should edit text rather than act on the grid: the
+    /// search field is focused, the recognized-text sheet is up (its filter
+    /// field lives in a separate key window, so the model may not even be
+    /// published), or no window model is published at all.
+    private var textEditingActive: Bool {
+        searchFocused || model == nil || (model?.showOCRPanel ?? false)
+    }
     private var hasItems: Bool { !(model?.displayedItems.isEmpty ?? true) }
     private var hasSelection: Bool { !(model?.selectedItems.isEmpty ?? true) }
     private var canTrash: Bool { model?.canTrashSelection ?? false }

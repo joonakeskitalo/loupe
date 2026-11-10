@@ -209,7 +209,7 @@ struct ContentView: View {
             isKeyWindow: isKeyWindow,
             model: model,
             trashEligible: !(searchFocused || model.showTagInput || model.isViewerPresented),
-            searchFieldFocused: searchFocused || model.showTagInput
+            searchFieldFocused: searchFocused || model.showTagInput || model.showOCRPanel
         ))
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.
