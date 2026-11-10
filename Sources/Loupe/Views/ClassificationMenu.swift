@@ -120,6 +120,22 @@ struct AIMenu: View {
                 }
             }
 
+            // MARK: Text recognition (OCR)
+            Section("Text") {
+                Button(ocrTitle, systemImage: "text.viewfinder") {
+                    if hasSelectedImages { model.recognizeTextInSelection() }
+                    else { model.recognizeTextInAllImages() }
+                }
+                if model.ocrTextCount > 0 {
+                    Button("View Recognized Text…", systemImage: "text.alignleft") {
+                        model.showOCRPanel = true
+                    }
+                    Button("Clear Recognized Text", role: .destructive) {
+                        model.clearOCRText()
+                    }
+                }
+            }
+
             // MARK: Face recognition — settings first, then the action.
             Section("People") {
                 // Engine picker only when more than one engine is selectable.
@@ -186,6 +202,10 @@ struct AIMenu: View {
 
     private var faceTitle: String {
         hasSelectedImages ? "Find Faces in Selected" : "Find Faces in All Images"
+    }
+
+    private var ocrTitle: String {
+        hasSelectedImages ? "Extract Text from Selected" : "Extract Text from All Images"
     }
 
     /// Disable the run button when the chosen engine can't produce embeddings

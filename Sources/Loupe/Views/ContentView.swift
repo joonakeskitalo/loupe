@@ -86,6 +86,9 @@ struct ContentView: View {
             hostWindow = window
             claimTabIfNeeded(window)
         })
+        .sheet(isPresented: $model.showOCRPanel) {
+            OCRTextView(model: model)
+        }
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
         }

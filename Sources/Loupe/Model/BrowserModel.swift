@@ -862,6 +862,90 @@ final class BrowserModel {
     /// at a time.
     private var isRunningClassification = false
 
+    /// OCR'd text keyed by item ID. An entry (possibly empty, meaning "scanned,
+    /// no text found") exists once an image has been through OCR. In-session
+    /// only, like the other annotation maps.
+    private(set) var ocrText: [MediaItem.ID: String] = [:]
+
+    /// Whether the recognized-text browser sheet is showing.
+    var showOCRPanel = false
+
+    /// Number of images that were scanned and yielded some text.
+    var ocrTextCount: Int { ocrText.values.reduce(0) { $0 + ($1.isEmpty ? 0 : 1) } }
+
+    /// Items with recognized text, in the library's name order.
+    var ocrItems: [MediaItem] {
+        allItems.filter { !(ocrText[$0.id] ?? "").isEmpty }
+    }
+
+    /// OCR the selected images (or a right-clicked item). Non-images skipped.
+    func recognizeTextInSelection(_ item: MediaItem? = nil) {
+        let urls = Set(actionURLs(preferring: item))
+        let targets = (item.map { [$0] } ?? selectedMediaItems)
+            .filter { $0.kind == .image && urls.contains($0.url) }
+        runOCR(items: targets.isEmpty ? imageTargets(from: urls) : targets)
+    }
+
+    /// OCR every not-yet-scanned image in the current scope.
+    func recognizeTextInAllImages() {
+        runOCR(items: scopedItems.filter { $0.kind == .image })
+    }
+
+    /// Discards all recognized text.
+    func clearOCRText() {
+        ocrText = [:]
+    }
+
+    /// Bounded, concurrent OCR pass; results land progressively on the main
+    /// actor. Shares the single-pass guard and progress channel with
+    /// classification and face recognition. Opens the text browser on finish
+    /// when anything was found.
+    private func runOCR(items: [MediaItem]) {
+        guard !isRunningClassification else { return }
+        let pending = items.filter { $0.kind == .image && ocrText[$0.id] == nil }
+        guard !pending.isEmpty else {
+            // Everything requested was already scanned: just show the results.
+            if ocrTextCount > 0 { showOCRPanel = true }
+            return
+        }
+
+        isRunningClassification = true
+        isClassifying = true
+        classifyActivity = "Reading Text"
+        classifyProgress = 0
+        classifyTotal = pending.count
+
+        Task { @MainActor in
+            let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+            var iterator = pending.makeIterator()
+
+            await withTaskGroup(of: (MediaItem.ID, String).self) { group in
+                var inFlight = 0
+
+                func addNext() {
+                    guard let item = iterator.next() else { return }
+                    inFlight += 1
+                    group.addTask {
+                        (item.id, await TextRecognizer.recognizeText(in: item.url))
+                    }
+                }
+
+                for _ in 0..<maxConcurrent { addNext() }
+
+                while inFlight > 0, let (id, text) = await group.next() {
+                    inFlight -= 1
+                    self.ocrText[id] = text
+                    self.classifyProgress += 1
+                    addNext()
+                }
+            }
+
+            self.isClassifying = false
+            self.isRunningClassification = false
+            if self.ocrTextCount > 0 { self.showOCRPanel = true }
+        }
+    }
+
     /// Active media-type chip filters (empty = all types).
     var selectedKinds: Set<MediaKind> = [] {
         didSet { requestClampSelection() }
@@ -1127,6 +1211,7 @@ final class BrowserModel {
             textTags = [:]
             textTagOrder = []
             aiCategories = [:]
+            ocrText = [:]
             facePersons = [:]
 
             // Drop every filter / Library view that keyed off those annotations.
@@ -1290,6 +1375,7 @@ final class BrowserModel {
         colorTags = rekey(colorTags)
         textTags = rekey(textTags)
         aiCategories = rekey(aiCategories)
+        ocrText = rekey(ocrText)
         facePersons = rekey(facePersons)
         codecsByURL = rekey(codecsByURL)
 
@@ -1348,6 +1434,7 @@ final class BrowserModel {
         // Note: tag names in `textTagOrder` are intentionally kept even when no
         // present item carries them, so "empty" tags persist in the sidebar.
         aiCategories = aiCategories.filter { present.contains($0.key) }
+        ocrText = ocrText.filter { present.contains($0.key) }
         facePersons = facePersons.filter { present.contains($0.key) }
         // Drop category/person/text-tag filters that no longer match anything.
         // An "empty" text tag that still exists keeps its filter active (the
@@ -4854,6 +4941,7 @@ final class BrowserModel {
         for url in trashed { colorTags[url] = nil }
         for url in trashed { textTags[url] = nil }
         for url in trashed { aiCategories[url] = nil }
+        for url in trashed { ocrText[url] = nil }
         for url in trashed { facePersons[url] = nil }
 
         // Mirror the post-rebuild cleanup `rebuildMerged()` would have run, so

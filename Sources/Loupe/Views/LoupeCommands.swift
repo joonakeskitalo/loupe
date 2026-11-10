@@ -246,6 +246,25 @@ struct LoupeCommands: Commands {
             Button("Clear People") { model?.clearFaces() }
                 .disabled((model?.withFacesCount ?? 0) == 0)
 
+            // On-device OCR (Vision). Acts on the selection's images, or the
+            // whole scope when nothing is selected; results are browsable in
+            // one combined view or per image.
+            Button(ocrTitle) {
+                if hasSelection {
+                    model?.recognizeTextInSelection()
+                } else {
+                    model?.recognizeTextInAllImages()
+                }
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+            .disabled(!canClassify)
+
+            Button("View Recognized Text…") { model?.showOCRPanel = true }
+                .disabled((model?.ocrTextCount ?? 0) == 0)
+
+            Button("Clear Recognized Text") { model?.clearOCRText() }
+                .disabled((model?.ocrText.isEmpty ?? true))
+
             Button("Move to Trash") { if let model { Task { await model.moveToTrash() } } }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
                 // A disabled Button releases its shortcut, so gating on
@@ -579,6 +598,14 @@ struct LoupeCommands: Commands {
         if selectedImages > 1 { return "Classify \(selectedImages) Images with AI" }
         if hasSelection && selectedImages == 1 { return "Classify Image with AI" }
         return "Classify All Images with AI"
+    }
+
+    private var ocrTitle: String {
+        if model?.isClassifying == true { return "Working…" }
+        let selectedImages = model?.selectedMediaItems.filter { $0.kind == .image }.count ?? 0
+        if selectedImages > 1 { return "Extract Text from \(selectedImages) Images" }
+        if hasSelection && selectedImages == 1 { return "Extract Text from Image" }
+        return "Extract Text from All Images"
     }
 
     private var faceTitle: String {
