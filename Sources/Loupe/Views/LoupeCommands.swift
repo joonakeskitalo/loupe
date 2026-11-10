@@ -31,7 +31,15 @@ struct LoupeCommands: Commands {
             // the viewer is open, where the viewer owns ⌘C via its own hidden
             // button — keeping exactly one owner of the key live (same pattern
             // as ⌘A / ⌘⌫).
-            Button(copyTitle) { model?.copyToClipboard() }
+            Button(copyTitle) {
+                // A focused text view (sidebar OCR text, search field, sheet
+                // filter) owns ⌘C: copy its selected text, not the files.
+                if NSApp.focusedTextView != nil {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                } else {
+                    model?.copyToClipboard()
+                }
+            }
                 .keyboardShortcut("c", modifiers: .command)
                 .disabled(!hasSelection || viewerOpen || searchFocused || textEditingActive)
 
@@ -289,7 +297,7 @@ struct LoupeCommands: Commands {
         // sense (no items and not searching, or the viewer owns ⌘A).
         CommandGroup(after: .textEditing) {
             Button("Select All") {
-                if textEditingActive {
+                if textEditingActive || NSApp.focusedTextView != nil {
                     NSApp.sendAction(
                         #selector(NSText.selectAll(_:)),
                         to: nil,

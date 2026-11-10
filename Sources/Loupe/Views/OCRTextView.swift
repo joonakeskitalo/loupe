@@ -115,9 +115,8 @@ struct OCRTextView: View {
             .padding(10)
             Divider()
             ScrollView {
-                Text(shownText.isEmpty ? "No text found." : shownText)
-                    .textSelection(.enabled)
-                    .font(.body)
+                SelectableTextView(text: shownText.isEmpty ? "No text found." : shownText,
+                                   font: .preferredFont(forTextStyle: .body))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
             }

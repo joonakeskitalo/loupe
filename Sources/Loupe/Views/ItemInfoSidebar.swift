@@ -263,6 +263,34 @@ private struct SingleItemInfo: View {
                     }
                 }
 
+                if item.kind == .image {
+                    InfoSection(title: "Recognized Text") {
+                        if let text = model.ocrText[item.id] {
+                            if text.isEmpty {
+                                Text("No text found.")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                SelectableTextView(text: text)
+                                HStack {
+                                    Button("Copy") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(text, forType: .string)
+                                    }
+                                    Button("Browse All…") { model.showOCRPanel = true }
+                                }
+                                .controlSize(.small)
+                            }
+                        } else {
+                            Button("Extract Text", systemImage: "text.viewfinder") {
+                                model.recognizeTextInSelection(item)
+                            }
+                            .controlSize(.small)
+                            .disabled(model.isClassifying)
+                        }
+                    }
+                }
+
                 InfoSection(title: "Location") {
                     Text(item.url.path)
                         .font(.callout)
