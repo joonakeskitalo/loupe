@@ -32,6 +32,13 @@ struct ZoomableImageView: NSViewRepresentable {
     /// When true, Live Text is enabled over the image: recognized text can be
     /// selected with the mouse and copied with ⌘C (see `LiveTextSelection`).
     var enableTextSelection = false
+    /// ←/→ handler (forward, shift) used while the Live Text overlay holds
+    /// keyboard focus, since the viewer's SwiftUI key handling can't see keys
+    /// then. Mirrors the video player's `onArrow`.
+    var onArrow: ((Bool, Bool) -> Void)?
+    /// Called after an arrow press is handled here, so the host can take
+    /// SwiftUI keyboard focus back from the overlay.
+    var onReturnFocus: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(zoomFactor: $zoomFactor)
@@ -80,6 +87,8 @@ struct ZoomableImageView: NSViewRepresentable {
         }
         scrollView.onSwipePrevious = onSwipePrevious
         scrollView.onSwipeNext = onSwipeNext
+        scrollView.onArrow = onArrow
+        scrollView.onReturnFocus = onReturnFocus
 
         return scrollView
     }
@@ -87,6 +96,8 @@ struct ZoomableImageView: NSViewRepresentable {
     func updateNSView(_ nsView: ZoomScrollView, context: Context) {
         nsView.onSwipePrevious = onSwipePrevious
         nsView.onSwipeNext = onSwipeNext
+        nsView.onArrow = onArrow
+        nsView.onReturnFocus = onReturnFocus
 
         if context.coordinator.url != url {
             context.coordinator.url = url
@@ -484,8 +495,58 @@ final class ZoomScrollView: NSScrollView {
 
     private var magnifyMonitor: Any?
 
+    // MARK: Arrow keys while the Live Text overlay has focus
+
+    var onArrow: ((Bool, Bool) -> Void)?
+    var onReturnFocus: (() -> Void)?
+    private var keyMonitor: Any?
+
+    /// True when keyboard focus sits inside this view, i.e. the user clicked
+    /// into the Live Text overlay to select text.
+    private var hasKeyboardFocusInside: Bool {
+        guard let window, window.isKeyWindow,
+              let responder = window.firstResponder as? NSView else { return false }
+        return responder === self || responder.isDescendant(of: self)
+    }
+
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            nonisolated(unsafe) let event = event
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                guard let self, let onArrow = self.onArrow,
+                      self.hasKeyboardFocusInside,
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+                else { return false }
+                let shift = event.modifierFlags.contains(.shift)
+                switch event.keyCode {
+                case 123: onArrow(false, shift)   // Left arrow
+                case 124: onArrow(true, shift)    // Right arrow
+                default: return false
+                }
+                // Drop the text selection and give focus back to the viewer
+                // so its own key handling (arrows, Space, …) works again.
+                LiveTextSelection.shared.overlay?.resetSelection()
+                self.window?.makeFirstResponder(nil)
+                self.onReturnFocus?()
+                return true
+            }
+            return handled ? nil : event
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil {
+            removeKeyMonitor()
+        } else {
+            installKeyMonitor()
+        }
         if window == nil {
             removeMagnifyMonitor()
         } else if magnifyMonitor == nil {

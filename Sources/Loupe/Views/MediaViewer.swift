@@ -386,7 +386,12 @@ struct MediaViewer: View {
                 zoomFactor: $zoomFactor,
                 onSwipePrevious: { model.moveSelection(by: -1) },
                 onSwipeNext: { model.moveSelection(by: 1) },
-                enableTextSelection: true
+                enableTextSelection: true,
+                // Selecting Live Text moves keyboard focus into the image view,
+                // out of reach of `.onKeyPress`; route arrows from there and
+                // then reclaim focus for the viewer.
+                onArrow: { forward, shift in _ = handleArrow(forward: forward, shift: shift) },
+                onReturnFocus: { DispatchQueue.main.async { isFocused = true } }
             )
         case .video, .audio:
             VideoPlayerView(
