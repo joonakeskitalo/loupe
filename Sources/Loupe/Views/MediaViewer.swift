@@ -163,6 +163,7 @@ struct MediaViewer: View {
         // owner is live at a time.
         .background { trashHotkey }
         .background { copyHotkey }
+        .background { selectAllTextHotkey }
         .background { hideHotkey }
         // Space + arrow keys are handled through one modifier (see
         // `ViewerKeyHandling`) so the main view's modifier chain stays small
@@ -384,7 +385,8 @@ struct MediaViewer: View {
                 command: $zoomCommand,
                 zoomFactor: $zoomFactor,
                 onSwipePrevious: { model.moveSelection(by: -1) },
-                onSwipeNext: { model.moveSelection(by: 1) }
+                onSwipeNext: { model.moveSelection(by: 1) },
+                enableTextSelection: true
             )
         case .video, .audio:
             VideoPlayerView(
@@ -701,11 +703,23 @@ struct MediaViewer: View {
             .accessibilityHidden(true)
     }
 
+    /// Hidden ⌘A shortcut: selects all Live Text in the shown image.
+    @ViewBuilder
+    private var selectAllTextHotkey: some View {
+        hotkey("a", .command) { LiveTextSelection.shared.selectAllText() }
+            .disabled(model.showTagInput)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
     /// Hidden ⌘C shortcut to copy the shown item(s) to the clipboard while the
     /// viewer owns focus, mirroring how the viewer carries its own ⌘⌫.
     @ViewBuilder
     private var copyHotkey: some View {
-        hotkey("c", .command) { model.copyToClipboard() }
+        hotkey("c", .command) {
+            // Selected Live Text in the image wins over copying the file.
+            if !LiveTextSelection.shared.copySelectedText() { model.copyToClipboard() }
+        }
             .disabled(!model.canCopySelection || model.showTagInput)
             .opacity(0)
             .frame(width: 0, height: 0)

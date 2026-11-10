@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import VisionKit
 
 /// A one-shot zoom command sent from the toolbar to the image view.
 enum ZoomCommand: Equatable {
@@ -28,6 +29,9 @@ struct ZoomableImageView: NSViewRepresentable {
     /// horizontal scroll while the image is fitted (not zoomed in).
     var onSwipePrevious: (() -> Void)?
     var onSwipeNext: (() -> Void)?
+    /// When true, Live Text is enabled over the image: recognized text can be
+    /// selected with the mouse and copied with ⌘C (see `LiveTextSelection`).
+    var enableTextSelection = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(zoomFactor: $zoomFactor)
@@ -57,6 +61,9 @@ struct ZoomableImageView: NSViewRepresentable {
 
         context.coordinator.scrollView = scrollView
         context.coordinator.url = url
+        if enableTextSelection {
+            context.coordinator.installTextOverlay(on: imageView)
+        }
         context.coordinator.observe(scrollView)
         context.coordinator.loadImage(url, fitWhenReady: true)
 
@@ -99,6 +106,7 @@ struct ZoomableImageView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: ZoomScrollView, coordinator: Coordinator) {
         coordinator.stopObserving()
+        coordinator.removeTextOverlay()
     }
 
     // MARK: - Coordinator
@@ -141,6 +149,49 @@ struct ZoomableImageView: NSViewRepresentable {
             guard let imageView = scrollView?.imageView else { return }
             imageView.image = image
             if fit { self.fit() }
+            analyzeText(in: image, for: url)
+        }
+
+        // MARK: Live Text
+
+        private var overlay: ImageAnalysisOverlayView?
+        private var analysisTask: Task<Void, Never>?
+        private static let analyzer = ImageAnalyzer()
+
+        func installTextOverlay(on imageView: NSImageView) {
+            guard ImageAnalyzer.isSupported else { return }
+            let overlay = ImageAnalysisOverlayView()
+            overlay.preferredInteractionTypes = .textSelection
+            overlay.trackingImageView = imageView
+            overlay.frame = imageView.bounds
+            overlay.autoresizingMask = [.width, .height]
+            imageView.addSubview(overlay)
+            self.overlay = overlay
+            LiveTextSelection.shared.overlay = overlay
+        }
+
+        func removeTextOverlay() {
+            analysisTask?.cancel()
+            if LiveTextSelection.shared.overlay === overlay {
+                LiveTextSelection.shared.overlay = nil
+            }
+            overlay?.removeFromSuperview()
+            overlay = nil
+        }
+
+        private func analyzeText(in image: NSImage?, for url: URL) {
+            guard let overlay else { return }
+            analysisTask?.cancel()
+            overlay.analysis = nil
+            guard let image else { return }
+            analysisTask = Task { [weak self] in
+                var config = ImageAnalyzer.Configuration(.text)
+                config.locales = Locale.preferredLanguages
+                guard let analysis = try? await Self.analyzer.analyze(
+                    image, orientation: .up, configuration: config),
+                      !Task.isCancelled, let self, self.url == url else { return }
+                self.overlay?.analysis = analysis
+            }
         }
 
         func observe(_ scrollView: ZoomScrollView) {
@@ -489,5 +540,35 @@ final class ZoomScrollView: NSScrollView {
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+/// Tracks the fullscreen viewer's Live Text overlay so the viewer's ⌘C / ⌘A
+/// hotkeys can act on selected image text instead of the image file.
+@MainActor
+final class LiveTextSelection {
+    static let shared = LiveTextSelection()
+    weak var overlay: ImageAnalysisOverlayView?
+
+    /// Copies the selected image text to the clipboard. Returns false (and does
+    /// nothing) when no text is selected, so callers can fall back to copying
+    /// the file.
+    @discardableResult
+    func copySelectedText() -> Bool {
+        guard let overlay, overlay.hasActiveTextSelection else { return false }
+        let text = overlay.selectedText
+        guard !text.isEmpty else { return false }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        return true
+    }
+
+    /// Asks the overlay to select all recognized text. Returns whether it
+    /// handled the action.
+    @discardableResult
+    func selectAllText() -> Bool {
+        guard let overlay else { return false }
+        overlay.window?.makeFirstResponder(overlay)
+        return overlay.tryToPerform(#selector(NSResponder.selectAll(_:)), with: nil)
     }
 }
