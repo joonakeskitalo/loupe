@@ -29,6 +29,24 @@ release:
 app:
 	./build-app.sh $(CONFIG)
 
+## dmg: Build a release Loupe.app and package it as dist/Loupe-<version>.dmg for distribution.
+.PHONY: dmg
+dmg:
+	./build-app.sh release
+	@set -e; \
+	VERSION=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$(BUNDLE)/Contents/Info.plist" 2>/dev/null || echo "1.0"); \
+	DMG="dist/$(APP_NAME)-$$VERSION.dmg"; \
+	STAGE=$$(mktemp -d); \
+	trap 'rm -rf "$$STAGE"' EXIT; \
+	echo "==> Staging $(BUNDLE)..."; \
+	cp -R "$(BUNDLE)" "$$STAGE/"; \
+	ln -s /Applications "$$STAGE/Applications"; \
+	mkdir -p dist; \
+	rm -f "$$DMG"; \
+	echo "==> Creating $$DMG..."; \
+	hdiutil create -volname "$(APP_NAME)" -srcfolder "$$STAGE" -ov -format UDZO "$$DMG"; \
+	echo "==> Done: $$DMG"
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -74,7 +92,7 @@ clean:
 ## distclean: Remove build artifacts and the packaged .app bundle.
 .PHONY: distclean
 distclean: clean
-	rm -rf $(BUNDLE)
+	rm -rf $(BUNDLE) dist
 
 # ---------------------------------------------------------------------------
 # Help
