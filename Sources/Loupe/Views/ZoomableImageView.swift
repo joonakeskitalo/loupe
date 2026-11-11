@@ -72,7 +72,13 @@ struct ZoomableImageView: NSViewRepresentable {
             context.coordinator.installTextOverlay(on: imageView)
         }
         context.coordinator.observe(scrollView)
-        context.coordinator.loadImage(url, fitWhenReady: true)
+        // Deferred: fitting changes magnification, which re-lays-out the Live
+        // Text overlay and can trap inside AppKit if done during this pass.
+        let coordinator = context.coordinator
+        DispatchQueue.main.async { [weak coordinator] in
+            guard let coordinator, coordinator.url == url else { return }
+            coordinator.loadImage(url, fitWhenReady: true)
+        }
 
         scrollView.onDoubleClick = { [weak coordinator = context.coordinator] in
             coordinator?.toggleFitActual()
@@ -105,7 +111,13 @@ struct ZoomableImageView: NSViewRepresentable {
             // swaps instantly and refits in the same pass (no flash of the
             // previous image's magnification). Falls back to an async decode
             // when the neighbor wasn't warmed yet.
-            context.coordinator.loadImage(url, fitWhenReady: true)
+            // Deferred out of the update pass (see makeNSView).
+            let coordinator = context.coordinator
+            let newURL = url
+            DispatchQueue.main.async { [weak coordinator] in
+                guard let coordinator, coordinator.url == newURL else { return }
+                coordinator.loadImage(newURL, fitWhenReady: true)
+            }
         }
 
         if let cmd = command {
@@ -245,7 +257,12 @@ struct ZoomableImageView: NSViewRepresentable {
         }
 
         func viewportResized() {
-            if isFitMode { fit() }
+            // Called from setFrameSize (mid-layout); refit on the next turn.
+            guard isFitMode else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isFitMode else { return }
+                self.fit()
+            }
         }
 
         /// Called after a pinch or ⌘-scroll zoom.
