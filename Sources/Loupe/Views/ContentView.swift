@@ -432,6 +432,9 @@ struct ContentView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                // Toolbar items sit in a capsule on macOS 26; without padding
+                // the content touches its edges.
+                .padding(.horizontal, 8)
                 .help("Working on-device…")
             } else if model.hasClassifiableImages {
                 AIMenu(model: model)
@@ -553,6 +556,7 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 8)
         .help(help)
     }
 
