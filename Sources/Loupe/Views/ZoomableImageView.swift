@@ -225,6 +225,10 @@ struct ZoomableImageView: NSViewRepresentable {
             overlay.analysis = nil
             guard let image else { return }
             analysisTask = Task { [weak self] in
+                // Debounce: when stepping quickly through images, only the one
+                // the user settles on gets analyzed.
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
                 var config = ImageAnalyzer.Configuration(.text)
                 config.locales = Locale.preferredLanguages
                 guard let analysis = try? await Self.analyzer.analyze(

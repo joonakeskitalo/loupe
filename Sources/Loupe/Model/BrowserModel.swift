@@ -916,7 +916,10 @@ final class BrowserModel {
         classifyTotal = pending.count
 
         Task { @MainActor in
-            let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+            // Vision's accurate recognizer saturates the Neural Engine/GPU on
+            // its own; more than a few in flight just adds memory pressure and
+            // contention with the UI.
+            let maxConcurrent = min(3, max(2, ProcessInfo.processInfo.activeProcessorCount / 4))
             var iterator = pending.makeIterator()
 
             await withTaskGroup(of: (MediaItem.ID, String).self) { group in

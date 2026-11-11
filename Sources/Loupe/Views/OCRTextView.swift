@@ -100,22 +100,25 @@ struct OCRTextView: View {
     }
 
     private var detail: some View {
-        VStack(spacing: 0) {
+        // Computed once per render: building the combined text walks every
+        // recognized image, so it must not be re-evaluated per use.
+        let text = shownText
+        return VStack(spacing: 0) {
             HStack {
                 Text(shownTitle).font(.headline).lineLimit(1)
                 Spacer()
                 Button("Copy", systemImage: "doc.on.doc") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(shownText, forType: .string)
+                    NSPasteboard.general.setString(text, forType: .string)
                 }
-                .disabled(shownText.isEmpty)
+                .disabled(text.isEmpty)
                 Button("Save…", systemImage: "square.and.arrow.down") { save() }
-                    .disabled(shownText.isEmpty)
+                    .disabled(text.isEmpty)
             }
             .padding(10)
             Divider()
             ScrollView {
-                SelectableTextView(text: shownText.isEmpty ? "No text found." : shownText,
+                SelectableTextView(text: text.isEmpty ? "No text found." : text,
                                    font: .preferredFont(forTextStyle: .body))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
