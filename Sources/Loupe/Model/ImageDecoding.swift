@@ -1,6 +1,7 @@
 import AppKit
 import CoreImage
 import ImageIO
+import UniformTypeIdentifiers
 
 /// Shared image-decoding helpers used by both the grid thumbnailer
 /// (`ThumbnailProvider`) and the fullscreen preloader (`ImagePreloader`).
@@ -82,6 +83,25 @@ enum ImageDecoding {
         }
 
         if alwaysDecodeFromFullImage {
+            // Camera RAW (e.g. Fujifilm RAF): demosaicing the sensor data takes
+            // ~a second and hundreds of MB of intermediates per image, which is
+            // what made fullscreen browsing slow and memory-hungry. These files
+            // embed a camera-rendered JPEG (full-size on recent bodies), so use
+            // it when it's big enough for the screen and only fall back to a
+            // real RAW decode when it isn't.
+            if isRAW(url) {
+                if let preview = embeddedRAWPreview(from: source, maxPixelSize: maxPixelSize) {
+                    return preview
+                }
+                // Preview too small: do a real RAW decode, but through
+                // CIRAWFilter. ImageIO's full-image RAW path retains ~130 MB
+                // per decode that is never released (measured on an X-T5
+                // RAF), which is what pushed the app to 10+ GB while browsing.
+                // CIRAWFilter plateaus at a stable footprint.
+                if let raw = rawFilterDecode(url: url, maxPixelSize: maxPixelSize) {
+                    return raw
+                }
+            }
             let fullLongest = fullImagePixelLongestEdge(source)
             return createThumbnail(
                 from: source, maxPixelSize: maxPixelSize, fromFullImage: true,
@@ -117,6 +137,60 @@ enum ImageDecoding {
             }
         }
         return preview
+    }
+
+    private static func isRAW(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .rawImage)
+    }
+
+    /// The embedded preview of a RAW file, if it is at least half the requested
+    /// size (so it still looks sharp on screen), downscaled to `maxPixelSize`
+    /// when larger. ImageIO returns an embedded preview at its own size and
+    /// ignores the max-pixel cap, so the downscale is done here. Returns nil
+    /// when there is no preview or it is too small.
+    private static func embeddedRAWPreview(from source: CGImageSource, maxPixelSize: Int) -> CGImage? {
+        guard let preview = createThumbnail(from: source, maxPixelSize: maxPixelSize, fromFullImage: false) else {
+            return nil
+        }
+        let longest = max(preview.width, preview.height)
+        guard longest * 2 >= maxPixelSize else { return nil }
+        guard longest > maxPixelSize else { return preview }
+        let scale = Double(maxPixelSize) / Double(longest)
+        let w = max(1, Int((Double(preview.width) * scale).rounded()))
+        let h = max(1, Int((Double(preview.height) * scale).rounded()))
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return preview }
+        ctx.interpolationQuality = .high
+        ctx.draw(preview, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage() ?? preview
+    }
+
+    /// Decodes a camera RAW through `CIRAWFilter`, scaled inside the RAW
+    /// pipeline so the longest edge is at most `maxPixelSize`, with the file's
+    /// orientation applied. Rendered to 8-bit sRGB via the shared context, whose
+    /// caches are cleared afterwards so per-file RAW intermediates don't pile up.
+    private static func rawFilterDecode(url: URL, maxPixelSize: Int) -> CGImage? {
+        autoreleasepool {
+            guard let filter = CIRAWFilter(imageURL: url) else { return nil }
+            let native = filter.nativeSize
+            let longest = max(native.width, native.height)
+            if longest > CGFloat(maxPixelSize), longest > 0 {
+                filter.scaleFactor = Float(CGFloat(maxPixelSize) / longest)
+            }
+            guard let image = filter.outputImage else { return nil }
+            let cg = sharedCIContext.createCGImage(
+                image,
+                from: image.extent.integral,
+                format: .RGBA8,
+                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!
+            )
+            sharedCIContext.clearCaches()
+            return cg
+        }
     }
 
     /// Runs ImageIO's thumbnail decode on an already-opened source. `fromFullImage`

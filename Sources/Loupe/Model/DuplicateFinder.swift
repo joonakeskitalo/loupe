@@ -512,13 +512,11 @@ enum DuplicateFinder {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
               let size = pixelSize(of: source)
         else { return nil }
-        let thumbOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: 128,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary),
+        // Shared decoder: for camera RAW it hashes the embedded preview rather
+        // than running ImageIO's full RAW decode, which leaks ~130 MB per file.
+        guard let image = autoreleasepool(invoking: {
+                  ImageDecoding.decodeCGImage(url: url, maxPixelSize: 128, alwaysDecodeFromFullImage: true)
+              }),
               let hash = differenceHash(of: image)
         else { return nil }
         return Fingerprint(

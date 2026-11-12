@@ -130,16 +130,11 @@ enum TextRecognizer {
     /// orientation applied. ImageIO decodes straight to the reduced size, so a
     /// huge source never has to be fully materialized in memory.
     private static func downsampledImage(at url: URL) -> CGImage? {
-        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
-            return nil
+        // Shared decoder: for camera RAW it uses the embedded preview (or
+        // CIRAWFilter) instead of ImageIO's full RAW decode, which leaks
+        // ~130 MB per file.
+        autoreleasepool {
+            ImageDecoding.decodeCGImage(url: url, maxPixelSize: maxPixelSize, alwaysDecodeFromFullImage: true)
         }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 }
