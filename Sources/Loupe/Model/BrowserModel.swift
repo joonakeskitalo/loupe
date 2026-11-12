@@ -46,6 +46,10 @@ enum GroupingDimension: String, CaseIterable {
     case none = "None"
     case category = "Category"
     case person = "Person"
+    /// Buckets images by the common words in their OCR'd text (the sidebar's
+    /// Text Tags). An image appears under each of its words; images with none
+    /// fall into a residual group.
+    case ocrText = "Text"
     case folder = "Folder"
     /// Buckets items by image/video shape: vertical (portrait), horizontal
     /// (landscape), or square, using each file's pixel dimensions.
@@ -918,6 +922,7 @@ final class BrowserModel {
     /// Removes a word from the OCR tags list.
     func dismissOCRTag(_ tag: String) {
         dismissedOCRTags.insert(tag)
+        if grouping == .ocrText { invalidateDisplayCache() }
         if ocrTagFilter == tag { ocrTagFilter = nil }
     }
 
@@ -939,6 +944,7 @@ final class BrowserModel {
         ocrWordCache = next
         ocrTagItems = index
         if let f = ocrTagFilter, index[f] == nil { ocrTagFilter = nil }
+        if grouping == .ocrText { invalidateDisplayCache() }
     }
 
     /// Whether the recognized-text browser sheet is showing.
@@ -970,6 +976,7 @@ final class BrowserModel {
         ocrText = [:]
         dismissedOCRTags = []
         ocrTagFilter = nil
+        if grouping == .ocrText { grouping = .none }
     }
 
     /// Bounded, concurrent OCR pass; results land progressively on the main
@@ -1305,7 +1312,7 @@ final class BrowserModel {
             hideFlaggedItems = false
             hideTaggedItems = false
             hideColorCodedItems = false
-            if grouping == .person || grouping == .category { grouping = .none }
+            if grouping == .person || grouping == .category || grouping == .ocrText { grouping = .none }
 
             requestClampSelection()
         }
@@ -3157,6 +3164,7 @@ final class BrowserModel {
         let result: [CategoryGroup]
         switch grouping {
         case .person:      result = groupedByPerson
+        case .ocrText:     result = groupedByOCRText
         case .folder:      result = groupedByFolder
         case .orientation: result = groupedByOrientation
         case .type:        result = groupedByType
@@ -3258,6 +3266,35 @@ final class BrowserModel {
             groups.append(CategoryGroup(
                 id: "\u{0}unclassified", title: "Unclassified",
                 symbol: "questionmark.circle", items: unclassified, isResidual: true))
+        }
+        return groups
+    }
+
+    private var groupedByOCRText: [CategoryGroup] {
+        let items = displayedItems
+        let tags = ocrTagList
+        let tagSet = Set(tags)
+        var buckets: [String: [MediaItem]] = [:]
+        var noText: [MediaItem] = []
+        for item in items {
+            let words = (ocrWordCache[item.id]?.words ?? []).intersection(tagSet)
+            if words.isEmpty {
+                noText.append(item)
+            } else {
+                // An image appears under each of its words.
+                for word in words { buckets[word, default: []].append(item) }
+            }
+        }
+        var groups: [CategoryGroup] = []
+        for tag in tags where buckets[tag] != nil {
+            groups.append(CategoryGroup(
+                id: "ocr-\(tag)", title: tag,
+                symbol: "text.viewfinder", items: buckets[tag]!))
+        }
+        if !noText.isEmpty {
+            groups.append(CategoryGroup(
+                id: "\u{0}notext", title: "No Text Tags",
+                symbol: "text.badge.xmark", items: noText, isResidual: true))
         }
         return groups
     }

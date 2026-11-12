@@ -447,6 +447,7 @@ struct LoupeCommands: Commands {
                     Text("Filename Prefix").tag(GroupingDimension.filenamePrefix)
                     Text("Category").tag(GroupingDimension.category)
                     Text("Person").tag(GroupingDimension.person)
+                    Text("Text").tag(GroupingDimension.ocrText)
                 }
                 .pickerStyle(.inline)
             }
