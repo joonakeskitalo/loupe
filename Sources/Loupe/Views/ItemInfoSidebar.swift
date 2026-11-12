@@ -271,7 +271,6 @@ private struct SingleItemInfo: View {
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else {
-                                SelectableTextView(text: text)
                                 HStack {
                                     Button("Copy") {
                                         NSPasteboard.general.clearContents()
@@ -280,6 +279,7 @@ private struct SingleItemInfo: View {
                                     Button("Browse All…") { model.showOCRPanel = true }
                                 }
                                 .controlSize(.small)
+                                SelectableTextView(text: text)
                             }
                         } else {
                             Button("Extract Text", systemImage: "text.viewfinder") {

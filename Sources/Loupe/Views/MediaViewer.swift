@@ -711,7 +711,15 @@ struct MediaViewer: View {
     /// Hidden ⌘A shortcut: selects all Live Text in the shown image.
     @ViewBuilder
     private var selectAllTextHotkey: some View {
-        hotkey("a", .command) { LiveTextSelection.shared.selectAllText() }
+        hotkey("a", .command) {
+            // A focused sidebar text view (e.g. the OCR text) selects its own
+            // text; otherwise select the Live Text in the image.
+            if NSApp.focusedTextView != nil {
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+            } else {
+                LiveTextSelection.shared.selectAllText()
+            }
+        }
             .disabled(model.showTagInput)
             .opacity(0)
             .frame(width: 0, height: 0)
