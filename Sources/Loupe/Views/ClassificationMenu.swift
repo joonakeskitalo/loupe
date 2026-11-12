@@ -142,6 +142,7 @@ struct AIMenu: View {
                     model.openDuplicateFinder()
                 }
                 .disabled(model.allItems.count < 2)
+                DuplicateMatchMenu(model: model)
             }
             // MARK: Face recognition — settings first, then the action.
             Section("People") {

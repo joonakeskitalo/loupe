@@ -112,7 +112,7 @@ struct DuplicatesView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !model.hasSearchedDuplicates {
-            setup
+            placeholder("Select at least two files to compare.")
         } else if model.duplicateGroups.isEmpty {
             placeholder("No duplicates found.")
         } else {
@@ -130,27 +130,6 @@ struct DuplicatesView: View {
                 }
             }
         }
-    }
-
-    /// Pre-search step: pick how strictly files must match, then start.
-    private var setup: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Match type").font(.headline)
-            Picker("Match type", selection: $model.duplicateSensitivity) {
-                ForEach(DuplicateSensitivity.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-            Text(model.duplicateSensitivity.summary)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 420, alignment: .leading)
-            Button("Start Search") { model.findDuplicates() }
-                .keyboardShortcut(.defaultAction)
-                .disabled(model.duplicateSearchItems.count < 2)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func placeholder(_ text: String) -> some View {
@@ -646,5 +625,24 @@ private final class KeyCommandMonitorView: NSView {
               !(window.firstResponder is NSText)
         else { return false }
         return handler?(keyCode) ?? false
+    }
+}
+
+/// "Match Type" submenu for the duplicate finder. Choosing a type only sets the
+/// strictness; the search itself starts from "Find Duplicates…".
+struct DuplicateMatchMenu: View {
+    @Bindable var model: BrowserModel
+
+    var body: some View {
+        Menu("Match Type", systemImage: "slider.horizontal.3") {
+            Picker("Match Type", selection: $model.duplicateSensitivity) {
+                ForEach(DuplicateSensitivity.allCases) { sensitivity in
+                    Text(sensitivity.rawValue).tag(sensitivity)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+        .help(model.duplicateSensitivity.summary)
     }
 }

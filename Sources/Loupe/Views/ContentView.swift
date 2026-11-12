@@ -392,6 +392,7 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        Group {
         ToolbarItem(id: "mode", placement: .navigation) {
             Picker("View", selection: $model.mode) {
                 ForEach(BrowseMode.allCases, id: \.self) { mode in
@@ -425,6 +426,7 @@ struct ContentView: View {
         // recognition), kept away from the zoom slider. While a pass runs it
         // shows progress; otherwise it's a menu where the user picks the face
         // engine and sensitivity *before* running, then triggers either pass.
+        }
         ToolbarItem(id: "ai") {
             if model.isClassifying {
                 HStack(spacing: 6) {

@@ -280,6 +280,7 @@ struct LoupeCommands: Commands {
             // otherwise the whole scope.
             Button("Find Duplicates…") { model?.openDuplicateFinder() }
                 .disabled((model?.allItems.count ?? 0) < 2)
+            if let model { DuplicateMatchMenu(model: model) }
 
             Button("Move to Trash") { if let model { Task { await model.moveToTrash() } } }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
