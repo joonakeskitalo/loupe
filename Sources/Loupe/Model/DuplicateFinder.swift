@@ -208,8 +208,6 @@ enum DuplicateFinder {
             let reps = fuzzyCandidates.filter { root($0) == $0 }
             total += reps.count
 
-            struct Cluster { var rep: Fingerprint; var index: Int }
-            var clusters: [Cluster] = []
             // Videos decode frames and are heavy, so fewer run at once.
             let families: [(Fingerprint.Family, Int)] = [
                 (.image, limit), (.video, 2), (.audio, max(2, limit / 2)), (.document, limit),
@@ -223,16 +221,16 @@ enum DuplicateFinder {
                 }, work: { await fingerprint(of: items[$0], family: fam) })
                 if Task.isCancelled { return [] }
 
+                // Clusters never span families, so each family gets its own set.
+                var clusters = ClusterSet(maxDistance: maxDistance)
                 for (n, idx) in indices.enumerated() {
                     guard let fp = prints[n] else { continue }
                     if let size = fp.size { sizes[idx] = size }
-                    var matched = false
-                    for c in clusters where similar(fp, c.rep, maxDistance) {
-                        union(c.index, idx)
-                        matched = true
-                        break
+                    if let match = clusters.firstMatch(for: fp) {
+                        union(match, idx)
+                    } else {
+                        clusters.add(fp, index: idx)
                     }
-                    if !matched { clusters.append(Cluster(rep: fp, index: idx)) }
                     if n % 256 == 0, Task.isCancelled { return [] }
                 }
             }
@@ -368,6 +366,57 @@ enum DuplicateFinder {
         return Data(hasher.finalize())
     }
 
+    /// Cluster representatives for one family, with a multi-index over
+    /// single-word hashes. A match within `d` bits must agree exactly on at
+    /// least one of `d + 1` chunks (pigeonhole), so a lookup only scans
+    /// clusters sharing a chunk instead of every cluster. Results are identical
+    /// to a linear scan: the earliest-created matching cluster wins.
+    private struct ClusterSet {
+        let maxDistance: Int
+        private var reps: [(fp: Fingerprint, index: Int)] = []
+        private var buckets: [UInt64: [Int]] = [:]
+        private let chunkCount: Int
+
+        init(maxDistance: Int) {
+            self.maxDistance = maxDistance
+            self.chunkCount = maxDistance + 1
+        }
+
+        /// Bucket keys for a one-word hash: chunk number plus chunk value.
+        private func keys(for word: UInt64) -> [UInt64] {
+            (0..<chunkCount).map { c in
+                let lo = c * 64 / chunkCount, hi = (c + 1) * 64 / chunkCount
+                let width = hi - lo
+                let mask: UInt64 = width >= 64 ? ~0 : (1 << UInt64(width)) - 1
+                return (UInt64(c) << 48) | ((word >> UInt64(lo)) & mask)
+            }
+        }
+
+        mutating func add(_ fp: Fingerprint, index: Int) {
+            let position = reps.count
+            reps.append((fp, index))
+            if fp.words.count == 1 {
+                for key in keys(for: fp.words[0]) { buckets[key, default: []].append(position) }
+            }
+        }
+
+        func firstMatch(for fp: Fingerprint) -> Int? {
+            guard fp.words.count == 1 else {
+                // Multi-word (video) fingerprints are few; scan linearly.
+                return reps.first { DuplicateFinder.similar(fp, $0.fp, maxDistance) }?.index
+            }
+            var best = Int.max
+            for key in keys(for: fp.words[0]) {
+                guard let positions = buckets[key] else { continue }
+                for p in positions {
+                    if p >= best { break }  // ascending: nothing earlier here
+                    if DuplicateFinder.similar(fp, reps[p].fp, maxDistance) { best = p; break }
+                }
+            }
+            return best == Int.max ? nil : reps[best].index
+        }
+    }
+
     private static func similar(_ a: Fingerprint, _ b: Fingerprint, _ maxDistance: Int) -> Bool {
         guard a.family == b.family, a.words.count == b.words.count else { return false }
         let bits = zip(a.words, b.words).reduce(0) { $0 + ($1.0 ^ $1.1).nonzeroBitCount }
@@ -404,8 +453,12 @@ enum DuplicateFinder {
     /// Pixel size with EXIF orientation applied, read from metadata only.
     private static func pixelSize(of url: URL) -> CGSize? {
         let opts = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, opts),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, opts) else { return nil }
+        return pixelSize(of: source)
+    }
+
+    private static func pixelSize(of source: CGImageSource) -> CGSize? {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let w = props[kCGImagePropertyPixelWidth] as? Double,
               let h = props[kCGImagePropertyPixelHeight] as? Double
         else { return nil }
@@ -416,7 +469,7 @@ enum DuplicateFinder {
     private static func imageFingerprint(of url: URL) -> Fingerprint? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
-              let size = pixelSize(of: url)
+              let size = pixelSize(of: source)
         else { return nil }
         let thumbOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
