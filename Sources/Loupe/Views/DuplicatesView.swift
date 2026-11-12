@@ -11,6 +11,13 @@ struct DuplicatesView: View {
     @State private var marked: Set<URL> = []
     @State private var confirmTrash = false
     @State private var isTrashing = false
+    /// The file shown in the large preview, if any.
+    @State private var previewing: PreviewTarget?
+
+    private struct PreviewTarget: Equatable {
+        let groupID: Int
+        let url: URL
+    }
 
     private static let tileSize: CGFloat = 150
 
@@ -29,6 +36,7 @@ struct DuplicatesView: View {
             footer
         }
         .frame(minWidth: 760, minHeight: 520)
+        .overlay { previewOverlay }
         .onAppear { resetMarks() }
         .onChange(of: model.duplicateRunID) { resetMarks() }
         .onDisappear { model.cancelDuplicateSearch() }
@@ -155,6 +163,19 @@ struct DuplicatesView: View {
                     .background(isMarked ? Color.red : Color.green, in: Capsule())
                     .foregroundStyle(.white)
                     .padding(6)
+                Button {
+                    previewing = PreviewTarget(groupID: group.id, url: item.url)
+                } label: {
+                    Image(systemName: "eye.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .help("Preview")
+                .accessibilityLabel("Preview \(item.name)")
+                .padding(6)
+                .frame(width: Self.tileSize, height: Self.tileSize, alignment: .bottomTrailing)
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -174,6 +195,7 @@ struct DuplicatesView: View {
         .contentShape(Rectangle())
         .onTapGesture { toggle(item, in: group) }
         .contextMenu {
+            Button("Preview") { previewing = PreviewTarget(groupID: group.id, url: item.url) }
             Button("Keep Only This One") { keepOnly(item, in: group) }
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([item.url])
@@ -195,6 +217,85 @@ struct DuplicatesView: View {
         return parts.joined(separator: " · ")
     }
 
+    // MARK: Preview
+
+    @ViewBuilder
+    private var previewOverlay: some View {
+        if let target = previewing,
+           let group = model.duplicateGroups.first(where: { $0.id == target.groupID }),
+           let index = group.items.firstIndex(where: { $0.url == target.url }) {
+            let item = group.items[index]
+            let isMarked = marked.contains(item.url)
+            ZStack {
+                Color.black.opacity(0.45)
+                    .onTapGesture { previewing = nil }
+                    .accessibilityHidden(true)
+                VStack(spacing: 0) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name).font(.headline).lineLimit(1)
+                            Text("\(detail(for: item, in: group)) · \(item.url.deletingLastPathComponent().path)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Text("\(index + 1) of \(group.items.count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    Divider()
+                    Group {
+                        switch item.kind {
+                        case .video, .audio:
+                            // Quick Look's embedded player doesn't play inside
+                            // a sheet, so use the app's own player (AVFoundation
+                            // or mpv for mkv/webm), same as the main preview.
+                            VideoPlayerView(url: item.url)
+                        default:
+                            QuickLookView(url: item.url)
+                        }
+                    }
+                    .id(item.url)
+                    Divider()
+                    HStack {
+                        Button("Previous", systemImage: "chevron.left") {
+                            step(-1, in: group, from: index)
+                        }
+                        .keyboardShortcut(.leftArrow, modifiers: [])
+                        .disabled(group.items.count < 2)
+                        Button("Next", systemImage: "chevron.right") {
+                            step(1, in: group, from: index)
+                        }
+                        .keyboardShortcut(.rightArrow, modifiers: [])
+                        .disabled(group.items.count < 2)
+                        Spacer()
+                        Button(isMarked ? "Keep This File" : "Mark for Removal") {
+                            toggle(item, in: group)
+                        }
+                        Button("Close") { previewing = nil }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding(10)
+                }
+                .background(.background, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3)))
+                .padding(28)
+            }
+            .accessibilityAddTraits(.isModal)
+        }
+    }
+
+    /// Moves the preview to the neighboring file in the group, wrapping around.
+    private func step(_ delta: Int, in group: DuplicateGroup, from index: Int) {
+        let count = group.items.count
+        guard count > 1 else { return }
+        let next = (index + delta + count) % count
+        previewing = PreviewTarget(groupID: group.id, url: group.items[next].url)
+    }
+
     // MARK: Footer
 
     private var footer: some View {
@@ -208,7 +309,8 @@ struct DuplicatesView: View {
             Button("Reset Suggestions") { resetMarks() }
                 .disabled(model.duplicateGroups.isEmpty)
             Button("Done") { model.showDuplicatesPanel = false }
-                .keyboardShortcut(.cancelAction)
+                // Esc closes the preview first, so Done only owns it otherwise.
+                .keyboardShortcut(previewing == nil ? .cancelAction : nil)
             Button("Move \(marked.count) to Trash…", role: .destructive) { confirmTrash = true }
                 .disabled(marked.isEmpty || isTrashing || model.isFindingDuplicates)
         }
@@ -249,6 +351,7 @@ struct DuplicatesView: View {
             // file is gone so the count stays honest.
             let present = Set(model.duplicateGroups.flatMap { $0.items.map(\.url) })
             marked.formIntersection(present)
+            if let target = previewing, !present.contains(target.url) { previewing = nil }
             isTrashing = false
         }
     }
