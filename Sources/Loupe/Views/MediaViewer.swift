@@ -99,6 +99,20 @@ struct MediaViewer: View {
                     .accessibilityHidden(true)
                 }
             }
+            // Bare "G" toggles between the columns and grid layouts of the
+            // multi-item view.
+            .background {
+                if isMulti {
+                    hotkey("g", []) {
+                        model.viewerMultiLayout =
+                            model.viewerMultiLayout == .grid ? .columns : .grid
+                    }
+                    .disabled(model.showTagInput)
+                    .opacity(0)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+                }
+            }
             // Number keys jump to a percentage of the video: 1→10%, 2→20%, …,
             // 9→90%, and 0→start. Only active for a single video/audio item.
             .background {
@@ -478,10 +492,14 @@ struct MediaViewer: View {
             } else if showingSingleVideo, let videoZoom {
                 VideoZoomControls(zoom: videoZoom)
             } else if isMulti {
-                HStack(spacing: 8) {
-                    layoutButton(.columns, symbol: "rectangle.split.3x1", help: "Columns layout")
-                    layoutButton(.grid, symbol: "square.grid.2x2", help: "Grid layout")
+                // One pill containing both options; the active one gets a
+                // highlighted segment.
+                HStack(spacing: 2) {
+                    layoutButton(.columns, symbol: "rectangle.split.3x1", help: "Columns layout (G to toggle)")
+                    layoutButton(.grid, symbol: "square.grid.2x2", help: "Grid layout (G to toggle)")
                 }
+                .padding(2)
+                .background(.white.opacity(0.12), in: Capsule())
             }
 
             if canShowFilmStrip {
@@ -499,19 +517,21 @@ struct MediaViewer: View {
         .background(Color(white: 0.08))
     }
 
-    /// A circular layout-choice button; the active layout is tinted with the
-    /// accent color, like the other toolbar toggles.
+    /// One segment of the layout toggle; the active segment is filled with the
+    /// accent color.
     private func layoutButton(
         _ layout: BrowserModel.ViewerMultiLayout, symbol: String, help: String
     ) -> some View {
-        Button {
+        let isActive = model.viewerMultiLayout == layout
+        return Button {
             model.viewerMultiLayout = layout
         } label: {
             Image(systemName: symbol)
                 .font(.body)
-                .foregroundStyle(model.viewerMultiLayout == layout ? Color.accentColor : .white)
-                .padding(6)
-                .background(.white.opacity(0.12), in: Circle())
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 24)
+                .background(isActive ? Color.accentColor : .clear, in: Capsule())
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .focusable(false)
