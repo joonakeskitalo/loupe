@@ -82,6 +82,9 @@ struct MediaViewer: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Right-click or Ctrl-click flags the shown item (single view only;
+            // the multi grid flags the clicked tile, see `MultiGrid.cell`).
+            .onSecondaryClick(isEnabled: !isMulti && !items.isEmpty) { model.toggleFlag() }
             .background { if showingSingleImage { zoomHotkeys } }
             .background { if showingSingleVideo, let videoZoom { videoZoomHotkeys(videoZoom) } }
             // Bare "T" toggles the film strip whenever it's applicable.
@@ -921,6 +924,7 @@ private struct MultiGrid: View {
                 .background(Color(white: 0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(alignment: .topLeading) { cellBadges(for: item) }
+                .onSecondaryClick { model.toggleFlag(id: item.id) }
             Text(item.name)
                 .font(.caption)
                 .foregroundStyle(.white)
