@@ -38,6 +38,7 @@ struct FolderSidebar: View {
                         model.showHiddenOnly = false
                         model.colorTagFilter = nil
                         model.textTagFilter = nil
+                        model.ocrTagFilter = nil
                         model.aiCategoryFilter = nil
                         model.personFilter = nil
                         model.mode = .flattened
@@ -52,6 +53,7 @@ struct FolderSidebar: View {
                         isSelected: !model.showFlaggedOnly && !model.showUnmarkedOnly
                             && !model.showHiddenOnly
                             && model.colorTagFilter == nil && model.textTagFilter == nil
+                            && model.ocrTagFilter == nil
                             && model.aiCategoryFilter == nil && model.personFilter == nil
                             && model.mode == .flattened
                     )
@@ -146,6 +148,13 @@ struct FolderSidebar: View {
                 }
             }
 
+            // Common words from OCR'd text, as an expandable list. Shown once
+            // text has been recognized and some word is common enough.
+            if !model.ocrTagList.isEmpty {
+                Section {
+                    OCRTagSection(model: model, focused: $focused, rowInsets: Self.rowInsets)
+                }
+            }
             // AI scene categories, as an expandable list. Shown only once the
             // classifier has produced some; the header's trailing button clears
             // all categories. Each row filters the grid to that category.
@@ -273,6 +282,7 @@ private struct FolderRow: View {
         !model.showFlaggedOnly && !model.showUnmarkedOnly && !model.showHiddenOnly
             && model.colorTagFilter == nil
             && model.textTagFilter == nil
+            && model.ocrTagFilter == nil
             && model.aiCategoryFilter == nil && model.personFilter == nil
             && model.mode == .folders && model.selectedFolders.contains(node.url)
     }
@@ -285,6 +295,7 @@ private struct FolderRow: View {
                 model.showHiddenOnly = false
                 model.colorTagFilter = nil
                 model.textTagFilter = nil
+                model.ocrTagFilter = nil
                 model.aiCategoryFilter = nil
                 model.personFilter = nil
                 model.mode = .folders
@@ -517,6 +528,79 @@ private struct TextTagRow: View {
         .contextMenu {
             Button("Delete Tag", role: .destructive) {
                 model.deleteTextTag(tag)
+            }
+        }
+    }
+}
+
+/// Expandable "Text Tags" list: the common words found in OCR'd text, each
+/// acting like a tag. Rows filter the grid to items whose text contains it.
+private struct OCRTagSection: View {
+    @Bindable var model: BrowserModel
+    var focused: FocusState<Bool>.Binding
+    let rowInsets: EdgeInsets
+    @State private var isExpanded = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(model.ocrTagList, id: \.self) { tag in
+                OCRTagRow(model: model, tag: tag, focused: focused)
+                    .listRowInsets(rowInsets)
+            }
+        } label: {
+            SidebarSectionHeader(
+                title: "Text Tags",
+                clearHelp: "Clear all recognized text"
+            ) {
+                model.clearOCRText()
+            }
+            .padding(.leading, -3)
+        }
+        .listRowInsets(rowInsets)
+    }
+}
+
+/// A single OCR tag row: click to filter; hover button or right-click removes
+/// the word from the list.
+private struct OCRTagRow: View {
+    @Bindable var model: BrowserModel
+    let tag: String
+    var focused: FocusState<Bool>.Binding
+    @State private var hovering = false
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button {
+                model.ocrTagFilter = tag
+                focused.wrappedValue = true
+            } label: {
+                SidebarLabel(
+                    title: tag,
+                    systemImage: "text.viewfinder",
+                    count: hovering ? nil : model.ocrTagCount(tag),
+                    isSelected: model.ocrTagFilter == tag
+                )
+            }
+            .buttonStyle(.plain)
+            if hovering {
+                Button {
+                    model.dismissOCRTag(tag)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                        .padding(.trailing, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Remove “\(tag)” from text tags")
+                .accessibilityLabel("Remove \(tag) from text tags")
+            }
+        }
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Remove Text Tag", role: .destructive) {
+                model.dismissOCRTag(tag)
             }
         }
     }

@@ -552,6 +552,7 @@ final class BrowserModel {
                     if aiCategoryFilter != nil { aiCategoryFilter = nil }
                     if personFilter != nil { personFilter = nil }
                     if textTagFilter != nil { textTagFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -571,6 +572,7 @@ final class BrowserModel {
                     if aiCategoryFilter != nil { aiCategoryFilter = nil }
                     if personFilter != nil { personFilter = nil }
                     if textTagFilter != nil { textTagFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -602,6 +604,7 @@ final class BrowserModel {
                     if aiCategoryFilter != nil { aiCategoryFilter = nil }
                     if personFilter != nil { personFilter = nil }
                     if textTagFilter != nil { textTagFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -655,6 +658,7 @@ final class BrowserModel {
                     if aiCategoryFilter != nil { aiCategoryFilter = nil }
                     if personFilter != nil { personFilter = nil }
                     if textTagFilter != nil { textTagFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -674,6 +678,27 @@ final class BrowserModel {
                     if colorTagFilter != nil { colorTagFilter = nil }
                     if aiCategoryFilter != nil { aiCategoryFilter = nil }
                     if personFilter != nil { personFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
+                }
+                requestClampSelection()
+            }
+        }
+    }
+
+    /// When set, the grid shows only items whose recognized (OCR) text contains
+    /// this word. `nil` means no OCR-tag filter is active. Mutually exclusive
+    /// with the other Library filters.
+    var ocrTagFilter: String? {
+        didSet {
+            withFilterMutation {
+                if ocrTagFilter != nil {
+                    if showFlaggedOnly { showFlaggedOnly = false }
+                    if showHiddenOnly { showHiddenOnly = false }
+                    if showUnmarkedOnly { showUnmarkedOnly = false }
+                    if colorTagFilter != nil { colorTagFilter = nil }
+                    if aiCategoryFilter != nil { aiCategoryFilter = nil }
+                    if personFilter != nil { personFilter = nil }
+                    if textTagFilter != nil { textTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -702,6 +727,7 @@ final class BrowserModel {
                     if colorTagFilter != nil { colorTagFilter = nil }
                     if personFilter != nil { personFilter = nil }
                     if textTagFilter != nil { textTagFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -837,6 +863,7 @@ final class BrowserModel {
                     if colorTagFilter != nil { colorTagFilter = nil }
                     if aiCategoryFilter != nil { aiCategoryFilter = nil }
                     if textTagFilter != nil { textTagFilter = nil }
+                    if ocrTagFilter != nil { ocrTagFilter = nil }
                 }
                 requestClampSelection()
             }
@@ -865,7 +892,54 @@ final class BrowserModel {
     /// OCR'd text keyed by item ID. An entry (possibly empty, meaning "scanned,
     /// no text found") exists once an image has been through OCR. In-session
     /// only, like the other annotation maps.
-    private(set) var ocrText: [MediaItem.ID: String] = [:]
+    private(set) var ocrText: [MediaItem.ID: String] = [:] {
+        didSet { rebuildOCRTags() }
+    }
+
+    /// Per-item distinct tag-worthy words, cached so a change to `ocrText`
+    /// (one result landing during a pass) only tokenizes the new text.
+    @ObservationIgnored private var ocrWordCache: [MediaItem.ID: (text: String, words: Set<String>)] = [:]
+
+    /// Item IDs per OCR tag word, for filtering and counts.
+    private(set) var ocrTagItems: [String: Set<MediaItem.ID>] = [:]
+
+    /// Words the user removed from the OCR tags list this session.
+    private(set) var dismissedOCRTags: Set<String> = []
+
+    /// OCR tags: the common words across all recognized text, most widespread
+    /// first (ties alphabetical).
+    var ocrTagList: [String] {
+        OCRTags.rank(ocrTagItems.mapValues(\.count), dismissed: dismissedOCRTags)
+    }
+
+    /// Number of items whose recognized text contains the OCR tag `tag`.
+    func ocrTagCount(_ tag: String) -> Int { ocrTagItems[tag]?.count ?? 0 }
+
+    /// Removes a word from the OCR tags list.
+    func dismissOCRTag(_ tag: String) {
+        dismissedOCRTags.insert(tag)
+        if ocrTagFilter == tag { ocrTagFilter = nil }
+    }
+
+    /// Recomputes `ocrTagItems` from `ocrText`, reusing cached tokenization.
+    private func rebuildOCRTags() {
+        var next: [MediaItem.ID: (text: String, words: Set<String>)] = [:]
+        next.reserveCapacity(ocrText.count)
+        var index: [String: Set<MediaItem.ID>] = [:]
+        for (id, text) in ocrText where !text.isEmpty {
+            let entry: (text: String, words: Set<String>)
+            if let cached = ocrWordCache[id], cached.text == text {
+                entry = cached
+            } else {
+                entry = (text, OCRTags.words(in: text))
+            }
+            next[id] = entry
+            for w in entry.words { index[w, default: []].insert(id) }
+        }
+        ocrWordCache = next
+        ocrTagItems = index
+        if let f = ocrTagFilter, index[f] == nil { ocrTagFilter = nil }
+    }
 
     /// Whether the recognized-text browser sheet is showing.
     var showOCRPanel = false
@@ -894,6 +968,8 @@ final class BrowserModel {
     /// Discards all recognized text.
     func clearOCRText() {
         ocrText = [:]
+        dismissedOCRTags = []
+        ocrTagFilter = nil
     }
 
     /// Bounded, concurrent OCR pass; results land progressively on the main
@@ -1223,6 +1299,8 @@ final class BrowserModel {
             showUnmarkedOnly = false
             colorTagFilter = nil
             textTagFilter = nil
+            ocrTagFilter = nil
+            dismissedOCRTags = []
             aiCategoryFilter = nil
             personFilter = nil
             hideFlaggedItems = false
@@ -1555,6 +1633,10 @@ final class BrowserModel {
             base = base.filter { textTags[$0.id]?.contains(textTagFilter) ?? false }
         }
 
+        if let ocrTagFilter {
+            let ids = ocrTagItems[ocrTagFilter] ?? []
+            base = base.filter { ids.contains($0.id) }
+        }
         if let aiCategoryFilter {
             base = base.filter { aiCategories[$0.id] == aiCategoryFilter }
         }
@@ -1867,6 +1949,9 @@ final class BrowserModel {
         }
         if let textTagFilter {
             return textTagFilter
+        }
+        if let ocrTagFilter {
+            return ocrTagFilter
         }
         if let aiCategoryFilter {
             return aiCategoryFilter
@@ -5017,6 +5102,8 @@ final class BrowserModel {
             base = "\(count) \(colorTagFilter.displayName.lowercased())-tagged \(noun)"
         } else if let textTagFilter {
             base = "\(count) \(noun) tagged “\(textTagFilter)”"
+        } else if let ocrTagFilter {
+            base = "\(count) \(noun) with text “\(ocrTagFilter)”"
         } else if mode == .folders, !selectedFolders.isEmpty {
             if selectedFolders.count == 1, let folder = selectedFolders.first {
                 base = "\(count) \(noun) in \(folder.lastPathComponent)"
