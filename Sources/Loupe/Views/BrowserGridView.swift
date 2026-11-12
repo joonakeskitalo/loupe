@@ -49,50 +49,15 @@ struct BrowserGridView: View {
     @State private var marqueeEndPending = false
 
     private let gridSpace = "grid"
-    /// The visible gap between adjacent images when filenames are shown. The
-    /// cell adds 4pt of padding on every side, so with the 2pt grid spacing the
-    /// image-to-image gap is 2 + 4 + 4 = 10pt. The tight image wall matches
-    /// this so hiding filenames doesn't make the images suddenly crowd together.
-    private static let shownImageGap: CGFloat = 10
-
-    /// Gap between cells. Collapsed to zero when filenames are hidden so the
-    /// image-only grid packs edge to edge (the cell's own padding also drops to
-    /// zero there) — but only for fitted thumbnails, which letterbox and so
-    /// don't visually touch. In fill mode the image is cropped to the full cell
-    /// and the cell has no padding, so the grid spacing alone is the whole gap;
-    /// use the same ~10pt gap as the filenames-shown layout so the spacing is
-    /// consistent rather than collapsing to a near-touch 2pt.
-    private var spacing: CGFloat {
-        guard model.hideFilenames else { return 2 }
-        return model.fillGridCells ? Self.shownImageGap : 0
-    }
+    /// Gap between cells. Identical whether or not filenames are shown, so
+    /// hiding them only removes the caption and leaves the grid layout intact.
+    private let spacing: CGFloat = 2
     private let padding: CGFloat = 8
 
     private var cellWidth: CGFloat { model.thumbnailSize + 12 }
 
-    /// True for the edge-to-edge, cropped image wall: filenames hidden and
-    /// thumbnails filled. In that mode we want a uniform gap in BOTH axes.
-    private var isTightImageWall: Bool { model.hideFilenames && model.fillGridCells }
-
     private var columns: [GridItem] {
-        // In the tight image-wall mode, use fixed-width columns sized to the
-        // cell so the horizontal gap between images is exactly `spacing` — the
-        // same as the vertical row gap. The adaptive layout (used everywhere
-        // else) stretches columns to fill the width, which spreads the leftover
-        // slack between images and makes the horizontal gaps wider than the
-        // vertical ones. Fixed columns remove that slack so both axes match.
-        if isTightImageWall {
-            // Columns are exactly the cell's image width (`thumbnailSize`),
-            // with no extra inset, so the only horizontal gap is `spacing` —
-            // matching the vertical row gap. (The normal `cellWidth` adds 12pt
-            // of breathing room, which would make the horizontal gap larger.)
-            let count = max(1, liveColumnCount)
-            return Array(
-                repeating: GridItem(.fixed(model.thumbnailSize), spacing: spacing, alignment: .top),
-                count: count
-            )
-        }
-        return [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
+        [GridItem(.adaptive(minimum: cellWidth), spacing: spacing)]
     }
 
     /// The grid content's width, frozen at its pre-drag value while the preview
@@ -296,12 +261,7 @@ struct BrowserGridView: View {
     private func columnCount(for width: CGFloat) -> Int {
         let usable = width - padding * 2
         guard usable > 0 else { return 1 }
-        // Match whichever column width the active layout uses, so the estimated
-        // count agrees with how many columns actually get laid out: the tight
-        // image wall uses fixed `thumbnailSize`-wide columns, every other mode
-        // the adaptive `cellWidth` minimum.
-        let perColumn = isTightImageWall ? model.thumbnailSize : cellWidth
-        let count = Int((usable + spacing) / (perColumn + spacing))
+        let count = Int((usable + spacing) / (cellWidth + spacing))
         return max(1, count)
     }
 
