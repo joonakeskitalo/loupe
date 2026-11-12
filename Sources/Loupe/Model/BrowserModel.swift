@@ -204,6 +204,24 @@ final class BrowserModel {
         }
     }
 
+    /// How the full-screen viewer arranges a multi-selection: `columns` picks
+    /// the row/column split that maximizes each cell's area (the original
+    /// behavior), `grid` uses a near-square rows × columns arrangement.
+    enum ViewerMultiLayout: String {
+        case columns, grid
+    }
+
+    static let viewerMultiLayoutKey = "viewerMultiLayout"
+
+    var viewerMultiLayout: ViewerMultiLayout = {
+        UserDefaults.standard.string(forKey: BrowserModel.viewerMultiLayoutKey)
+            .flatMap(ViewerMultiLayout.init(rawValue:)) ?? .columns
+    }() {
+        didSet {
+            UserDefaults.standard.set(viewerMultiLayout.rawValue, forKey: Self.viewerMultiLayoutKey)
+        }
+    }
+
     /// The preview panel's height in points when placed at the bottom.
     /// Session-scoped like `previewSidebarWidth`, clamped on write.
     var previewSidebarHeight: Double = BrowserModel.defaultPreviewSidebarHeight {

@@ -478,9 +478,10 @@ struct MediaViewer: View {
             } else if showingSingleVideo, let videoZoom {
                 VideoZoomControls(zoom: videoZoom)
             } else if isMulti {
-                Text("Grid")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    layoutButton(.columns, symbol: "rectangle.split.3x1", help: "Columns layout")
+                    layoutButton(.grid, symbol: "square.grid.2x2", help: "Grid layout")
+                }
             }
 
             if canShowFilmStrip {
@@ -496,6 +497,25 @@ struct MediaViewer: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(white: 0.08))
+    }
+
+    /// A circular layout-choice button; the active layout is tinted with the
+    /// accent color, like the other toolbar toggles.
+    private func layoutButton(
+        _ layout: BrowserModel.ViewerMultiLayout, symbol: String, help: String
+    ) -> some View {
+        Button {
+            model.viewerMultiLayout = layout
+        } label: {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(model.viewerMultiLayout == layout ? Color.accentColor : .white)
+                .padding(6)
+                .background(.white.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(help)
     }
 
     /// Toggle button for the info sidebar's visibility (shared with the grid).
@@ -864,13 +884,15 @@ private struct MultiGrid: View {
 
     var body: some View {
         GeometryReader { geo in
-            let layout = bestLayout(
-                count: items.count,
-                in: CGSize(
-                    width: max(1, geo.size.width - outerPadding * 2),
-                    height: max(1, geo.size.height - outerPadding * 2)
+            let layout = model.viewerMultiLayout == .grid
+                ? squareLayout(count: items.count)
+                : bestLayout(
+                    count: items.count,
+                    in: CGSize(
+                        width: max(1, geo.size.width - outerPadding * 2),
+                        height: max(1, geo.size.height - outerPadding * 2)
+                    )
                 )
-            )
             VStack(spacing: gap) {
                 ForEach(0..<layout.rows, id: \.self) { row in
                     HStack(spacing: gap) {
@@ -957,6 +979,13 @@ private struct MultiGrid: View {
             }
         }
         .padding(6)
+    }
+
+    /// A near-square arrangement (e.g. 4 → 2×2, 5 → 2 rows of 3).
+    private func squareLayout(count: Int) -> (rows: Int, cols: Int) {
+        guard count > 1 else { return (1, max(1, count)) }
+        let cols = Int(ceil(Double(count).squareRoot()))
+        return (Int(ceil(Double(count) / Double(cols))), cols)
     }
 
     /// Chooses the (rows, cols) split that maximizes the area of each cell,
