@@ -1703,11 +1703,17 @@ final class BrowserModel {
     /// derived from this set so selecting a chip never makes other chips vanish.
     var scopedItems: [MediaItem] {
         var base: [MediaItem]
+        // Library views (Flagged, Unmarked, Hidden, tags, AI category, person)
+        // are library-wide scopes: they ignore any folder selection left over
+        // from before, so every matching item shows.
+        let libraryScoped = showFlaggedOnly || showUnmarkedOnly || showHiddenOnly
+            || colorTagFilter != nil || textTagFilter != nil || ocrTagFilter != nil
+            || aiCategoryFilter != nil || personFilter != nil
         switch mode {
         case .flattened:
             base = allItems
         case .folders:
-            if selectedFolders.isEmpty {
+            if libraryScoped || selectedFolders.isEmpty {
                 base = allItems
             } else {
                 base = itemsInSelectedFolders()
