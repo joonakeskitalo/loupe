@@ -1150,6 +1150,21 @@ private struct RenameSection: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
+                        // XMP sidecars renamed along with the RAW.
+                        ForEach(plan.sidecars, id: \.source) { sidecar in
+                            HStack(spacing: 3) {
+                                Image(systemName: "doc.badge.gearshape")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                Text(sidecar.destination.lastPathComponent)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .padding(.leading, 14)
+                            .help("Sidecar \(sidecar.source.lastPathComponent) is renamed with the image")
+                        }
                     }
                 }
                 if changing.count > 3 {

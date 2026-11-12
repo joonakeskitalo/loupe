@@ -124,12 +124,22 @@ enum BulkRenamer {
     struct Plan: Identifiable, Sendable, Equatable {
         var source: URL
         var destination: URL
+        /// XMP sidecars that move with a RAW file (`name.xmp` and/or
+        /// darktable's `name.RAF.xmp`), keeping Lightroom / Capture One /
+        /// Loupe tags attached to the renamed image.
+        var sidecars: [Sidecar] = []
         var id: URL { source }
 
         var originalName: String { source.lastPathComponent }
         var newName: String { destination.lastPathComponent }
         /// True when the name actually changes.
         var isChange: Bool { originalName != newName }
+    }
+
+    /// A sidecar file renamed alongside its image.
+    struct Sidecar: Sendable, Equatable {
+        var source: URL
+        var destination: URL
     }
 
     /// Builds the ordered list of rename plans for `urls` under `config`,
@@ -146,29 +156,60 @@ enum BulkRenamer {
         config: BulkRenameConfig,
         now date: Date = Date()
     ) -> [Plan] {
-        // Names already taken in each destination directory, seeded with the
-        // files that currently live there minus the ones we're renaming (those
-        // are freed up as they move). Guards against two renames colliding and
-        // against stomping an unrelated existing file.
-        var takenByDirectory: [URL: Set<String>] = [:]
-        let renamedSet = Set(urls.map { $0.standardizedFileURL })
-
-        // Seeds the per-directory "taken" set from disk the first time that
-        // directory is touched, excluding the files being renamed (their slots
-        // are freed as they move). Later lookups read the live cache, which the
-        // `reserve` callback keeps growing as names are handed out.
-        func seedExistingNames(in directory: URL) {
-            guard takenByDirectory[directory] == nil else { return }
-            let fm = FileManager.default
-            let contents = (try? fm.contentsOfDirectory(
+        // Actual file names in each directory, keyed lowercased (APFS is
+        // case-insensitive by default), listed once per directory.
+        var listingByDirectory: [URL: [String: String]] = [:]
+        func listing(_ directory: URL) -> [String: String] {
+            if let cached = listingByDirectory[directory] { return cached }
+            let contents = (try? FileManager.default.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             )) ?? []
+            var map: [String: String] = [:]
+            for url in contents { map[url.lastPathComponent.lowercased()] = url.lastPathComponent }
+            listingByDirectory[directory] = map
+            return map
+        }
+
+        // Pre-pass: find each RAW's existing sidecars. A sidecar is claimed by
+        // at most one image (two RAWs with the same base name can't both own
+        // `name.xmp`), and the claimed suffix (".xmp", ".RAF.xmp", ".XMP"…) is
+        // kept verbatim so only the base name changes.
+        var sidecarSuffixes: [URL: [String]] = [:]
+        var claimedSidecars: Set<URL> = []
+        for url in urls where ImageDecoding.isRAW(url) {
+            let directory = url.deletingLastPathComponent()
+            let names = listing(directory)
+            let base = url.deletingPathExtension().lastPathComponent
+            var suffixes: [String] = []
+            for candidate in ["\(base).xmp", "\(url.lastPathComponent).xmp"] {
+                guard let actual = names[candidate.lowercased()] else { continue }
+                let sidecarURL = directory.appendingPathComponent(actual).standardizedFileURL
+                guard claimedSidecars.insert(sidecarURL).inserted else { continue }
+                suffixes.append(String(actual.dropFirst(base.count)))
+            }
+            if !suffixes.isEmpty { sidecarSuffixes[url] = suffixes }
+        }
+
+        // A selected `.xmp` that belongs to a selected RAW moves with it rather
+        // than being renamed (and numbered) on its own, which would detach it.
+        let urls = urls.filter { !claimedSidecars.contains($0.standardizedFileURL) }
+
+        // Names already taken in each destination directory, seeded with the
+        // files that currently live there minus the ones we're renaming and
+        // their sidecars (those slots are freed as they move). Guards against
+        // two renames colliding and against stomping an unrelated file.
+        var takenByDirectory: [URL: Set<String>] = [:]
+        let renamedSet = Set(urls.map { $0.standardizedFileURL }).union(claimedSidecars)
+
+        func seedExistingNames(in directory: URL) {
+            guard takenByDirectory[directory] == nil else { return }
             takenByDirectory[directory] = Set(
-                contents
-                    .filter { !renamedSet.contains($0.standardizedFileURL) }
-                    .map { $0.lastPathComponent.lowercased() }
+                listing(directory).compactMap { lower, actual in
+                    renamedSet.contains(directory.appendingPathComponent(actual).standardizedFileURL)
+                        ? nil : lower
+                }
             )
         }
 
@@ -178,6 +219,7 @@ enum BulkRenamer {
             let directory = url.deletingLastPathComponent()
             let ext = url.pathExtension
             let base = url.deletingPathExtension().lastPathComponent
+            let suffixes = sidecarSuffixes[url] ?? []
 
             let newBase = transform(
                 baseName: base,
@@ -187,11 +229,14 @@ enum BulkRenamer {
                 date: date
             )
 
-            // Ensure uniqueness within the destination directory.
+            // Ensure the image name — and every sidecar name it implies — is
+            // unique within the destination directory.
             seedExistingNames(in: directory)
             let unique = uniqueBaseName(
                 newBase,
-                ext: ext,
+                names: { candidate in
+                    [ext.isEmpty ? candidate : "\(candidate).\(ext)"] + suffixes.map { candidate + $0 }
+                },
                 existing: takenByDirectory[directory] ?? [],
                 reserve: { reserved in
                     takenByDirectory[directory, default: []].insert(reserved.lowercased())
@@ -200,7 +245,13 @@ enum BulkRenamer {
 
             let fileName = ext.isEmpty ? unique : "\(unique).\(ext)"
             let destination = directory.appendingPathComponent(fileName)
-            plans.append(Plan(source: url, destination: destination))
+            let sidecars = suffixes.map { suffix in
+                Sidecar(
+                    source: directory.appendingPathComponent(base + suffix),
+                    destination: directory.appendingPathComponent(unique + suffix)
+                )
+            }
+            plans.append(Plan(source: url, destination: destination, sidecars: sidecars))
         }
 
         return plans
@@ -287,25 +338,22 @@ enum BulkRenamer {
 
     /// Returns a base name unique within `directory`, appending " (2)", " (3)",
     /// … only when the first choice is already taken (case-insensitively).
-    /// Calls `reserve` with each name it hands out so the next file in the batch
-    /// sees it as taken.
+    /// `names` lists every file name a candidate base implies (the image plus
+    /// its sidecars); all must be free. Calls `reserve` with each name handed
+    /// out so the next file in the batch sees it as taken.
     private static func uniqueBaseName(
         _ base: String,
-        ext: String,
+        names: (String) -> [String],
         existing: Set<String>,
         reserve: (String) -> Void
     ) -> String {
-        func fileName(_ b: String) -> String {
-            ext.isEmpty ? b : "\(b).\(ext)"
-        }
-
         var candidate = base
         var counter = 2
-        while existing.contains(fileName(candidate).lowercased()) {
+        while names(candidate).contains(where: { existing.contains($0.lowercased()) }) {
             candidate = "\(base) (\(counter))"
             counter += 1
         }
-        reserve(fileName(candidate))
+        names(candidate).forEach(reserve)
         return candidate
     }
 }

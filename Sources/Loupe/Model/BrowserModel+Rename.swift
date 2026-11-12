@@ -81,6 +81,23 @@ extension BrowserModel {
                     done.append((src.standardizedFileURL, dst.standardizedFileURL))
                 } catch {
                     NSLog("Loupe: failed to rename \(src.path) → \(dst.lastPathComponent): \(error.localizedDescription)")
+                    continue
+                }
+                // Move the RAW's XMP sidecars with it so tags stay attached.
+                // The plan already guaranteed the new names were free; re-check
+                // and skip (never overwrite) if something appeared since.
+                for sidecar in plan.sidecars {
+                    guard fm.fileExists(atPath: sidecar.source.path),
+                          !fm.fileExists(atPath: sidecar.destination.path) else {
+                        NSLog("Loupe: left sidecar \(sidecar.source.lastPathComponent) in place — \(sidecar.destination.lastPathComponent) already exists")
+                        continue
+                    }
+                    do {
+                        try fm.moveItem(at: sidecar.source, to: sidecar.destination)
+                        done.append((sidecar.source.standardizedFileURL, sidecar.destination.standardizedFileURL))
+                    } catch {
+                        NSLog("Loupe: failed to rename sidecar \(sidecar.source.path): \(error.localizedDescription)")
+                    }
                 }
             }
             return done
@@ -88,9 +105,12 @@ extension BrowserModel {
 
         guard !renamed.isEmpty else { return 0 }
 
+        // Sidecar pairs are included so a `.xmp` shown as its own item (and
+        // the sidecar bookkeeping) is re-keyed too; only images are counted.
         var mapping: [URL: URL] = [:]
         for pair in renamed { mapping[pair.old] = pair.new }
         applyRenameMapping(mapping)
-        return renamed.count
+        let sourceImages = Set(plans.map { $0.source.standardizedFileURL })
+        return renamed.filter { sourceImages.contains($0.old) }.count
     }
 }

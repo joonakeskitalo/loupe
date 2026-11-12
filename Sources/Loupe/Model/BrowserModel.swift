@@ -1623,6 +1623,10 @@ final class BrowserModel {
         ocrText = rekey(ocrText)
         facePersons = rekey(facePersons)
         codecsByURL = rekey(codecsByURL)
+        xmpSidecarsWithLoupeData = Set(xmpSidecarsWithLoupeData.map(remap))
+        xmpImportedURLs = Set(xmpImportedURLs.map(remap))
+        rawResolutionOverrides = rekey(rawResolutionOverrides)
+        xmpSidecarRevision += 1
 
         // Rebuild the merged lists/trees from the updated per-root results
         // (this also reclamps the selection and refreshes the display cache),
