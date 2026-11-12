@@ -89,6 +89,9 @@ struct ContentView: View {
         .sheet(isPresented: $model.showOCRPanel) {
             OCRTextView(model: model)
         }
+        .sheet(isPresented: $model.showDuplicatesPanel) {
+            DuplicatesView(model: model)
+        }
         .fullScreenViewer(isPresented: $model.isViewerPresented) {
             MediaViewer(model: model)
         }
@@ -210,6 +213,7 @@ struct ContentView: View {
             model: model,
             trashEligible: !(searchFocused || model.showTagInput || model.isViewerPresented),
             searchFieldFocused: searchFocused || model.showTagInput || model.showOCRPanel
+                || model.showDuplicatesPanel
         ))
         // Hide the window chrome's controls while the full viewer is up so the
         // sort/zoom/view controls don't float over the fullscreen image.

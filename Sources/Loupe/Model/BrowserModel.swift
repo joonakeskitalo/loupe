@@ -1031,6 +1031,81 @@ final class BrowserModel {
         }
     }
 
+    // MARK: - Duplicates
+
+    /// Whether the duplicate-finder sheet is showing.
+    var showDuplicatesPanel = false
+    /// Result of the last duplicate search, largest savings first.
+    private(set) var duplicateGroups: [DuplicateGroup] = []
+    /// Bumped whenever a new search finishes, so the sheet can reset its marks.
+    private(set) var duplicateRunID = 0
+    private(set) var isFindingDuplicates = false
+    private(set) var hasSearchedDuplicates = false
+    private(set) var duplicateProgress = 0
+    private(set) var duplicateTotal = 0
+    /// Number of files the last/current search covers.
+    private(set) var duplicateScanCount = 0
+    var duplicateSensitivity: DuplicateSensitivity = .normal
+    private var duplicateTask: Task<Void, Never>?
+
+    /// Files a duplicate search would cover: the selection when more than one
+    /// file is selected, otherwise everything in the current scope.
+    var duplicateSearchItems: [MediaItem] {
+        let selected = selectedMediaItems
+        return selected.count > 1 ? selected : scopedItems
+    }
+
+    /// Whether the search is limited to a multi-file selection.
+    var duplicateSearchIsSelection: Bool { selectedMediaItems.count > 1 }
+
+    /// Opens the duplicate sheet and starts a search (unless one is running).
+    func openDuplicateFinder() {
+        showDuplicatesPanel = true
+        if !isFindingDuplicates { findDuplicates() }
+    }
+
+    /// Searches for exact and similar files among `duplicateSearchItems`.
+    func findDuplicates() {
+        duplicateTask?.cancel()
+        let items = duplicateSearchItems
+        let sensitivity = duplicateSensitivity
+        isFindingDuplicates = true
+        duplicateProgress = 0
+        duplicateTotal = 0
+        duplicateScanCount = items.count
+        duplicateTask = Task { @MainActor in
+            let groups = await DuplicateFinder.find(items: items, sensitivity: sensitivity) { done, total in
+                self.duplicateProgress = done
+                self.duplicateTotal = total
+            }
+            guard !Task.isCancelled else { return }
+            self.duplicateGroups = groups
+            self.duplicateRunID += 1
+            self.hasSearchedDuplicates = true
+            self.isFindingDuplicates = false
+        }
+    }
+
+    func cancelDuplicateSearch() {
+        duplicateTask?.cancel()
+        duplicateTask = nil
+        isFindingDuplicates = false
+    }
+
+    /// Moves `urls` (the duplicates the user chose to remove) to the Trash and
+    /// drops them from the results. Returns how many were trashed.
+    @discardableResult
+    func trashDuplicates(_ urls: [URL]) async -> Int {
+        let count = await moveURLsToTrash(urls)
+        let present = Set(allItems.map(\.id))
+        duplicateGroups = duplicateGroups.compactMap { group in
+            let kept = group.items.filter { present.contains($0.id) }
+            guard kept.count > 1 else { return nil }
+            return DuplicateGroup(id: group.id, kind: group.kind, items: kept, pixelSizes: group.pixelSizes)
+        }
+        return count
+    }
+
     /// Active media-type chip filters (empty = all types).
     var selectedKinds: Set<MediaKind> = [] {
         didSet { requestClampSelection() }
@@ -4907,7 +4982,13 @@ final class BrowserModel {
     /// actor) runs here. Callers invoke it from a `Task`.
     @discardableResult
     func moveToTrash(_ item: MediaItem? = nil) async -> Int {
-        let urls = actionURLs(preferring: item)
+        await moveURLsToTrash(actionURLs(preferring: item))
+    }
+
+    /// Moves exactly `urls` to the Trash and updates the model. See
+    /// `moveToTrash(_:)` for the details of selection handling.
+    @discardableResult
+    func moveURLsToTrash(_ urls: [URL]) async -> Int {
         guard !urls.isEmpty else { return 0 }
 
         // Remember where the cursor was so we can land on the next item.

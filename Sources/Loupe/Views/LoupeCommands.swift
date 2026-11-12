@@ -274,6 +274,10 @@ struct LoupeCommands: Commands {
 
             Button("Clear Recognized Text") { model?.clearOCRText() }
                 .disabled((model?.ocrText.isEmpty ?? true))
+            // Exact and visually similar files; acts on a multi-file selection,
+            // otherwise the whole scope.
+            Button("Find Duplicates…") { model?.openDuplicateFinder() }
+                .disabled((model?.allItems.count ?? 0) < 2)
 
             Button("Move to Trash") { if let model { Task { await model.moveToTrash() } } }
                 .keyboardShortcut(.deleteBackspace, modifiers: .command)
@@ -536,7 +540,7 @@ struct LoupeCommands: Commands {
     /// field lives in a separate key window, so the model may not even be
     /// published), or no window model is published at all.
     private var textEditingActive: Bool {
-        searchFocused || model == nil || (model?.showOCRPanel ?? false)
+        searchFocused || model == nil || (model?.showOCRPanel ?? false) || (model?.showDuplicatesPanel ?? false)
     }
     private var hasItems: Bool { !(model?.displayedItems.isEmpty ?? true) }
     private var hasSelection: Bool { !(model?.selectedItems.isEmpty ?? true) }

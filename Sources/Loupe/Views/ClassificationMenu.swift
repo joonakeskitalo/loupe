@@ -136,6 +136,13 @@ struct AIMenu: View {
                 }
             }
 
+            // MARK: Duplicates
+            Section("Duplicates") {
+                Button("Find Duplicates…", systemImage: "square.on.square") {
+                    model.openDuplicateFinder()
+                }
+                .disabled(model.allItems.count < 2)
+            }
             // MARK: Face recognition — settings first, then the action.
             Section("People") {
                 // Engine picker only when more than one engine is selectable.
