@@ -526,9 +526,17 @@ final class ZoomScrollView: NSScrollView {
     /// True when keyboard focus sits inside this view, i.e. the user clicked
     /// into the Live Text overlay to select text.
     private var hasKeyboardFocusInside: Bool {
-        guard let window, window.isKeyWindow,
-              let responder = window.firstResponder as? NSView else { return false }
-        return responder === self || responder.isDescendant(of: self)
+        guard let window, window.isKeyWindow else { return false }
+        if let responder = window.firstResponder as? NSView,
+           responder === self || responder.isDescendant(of: self) {
+            return true
+        }
+        // Selecting Live Text can leave focus on a responder outside this
+        // view's hierarchy while a selection is still active. Treat that as
+        // "inside" unless a real text view (sidebar, search field) has focus,
+        // where arrows should move its caret instead.
+        if window.firstResponder is NSTextView { return false }
+        return LiveTextSelection.shared.overlay?.hasActiveTextSelection ?? false
     }
 
     private func installKeyMonitor() {

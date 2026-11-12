@@ -391,7 +391,12 @@ struct MediaViewer: View {
                 // out of reach of `.onKeyPress`; route arrows from there and
                 // then reclaim focus for the viewer.
                 onArrow: { forward, shift in _ = handleArrow(forward: forward, shift: shift) },
-                onReturnFocus: { DispatchQueue.main.async { isFocused = true } }
+                onReturnFocus: {
+                    // Toggle so SwiftUI re-applies focus even if it still
+                    // believes the viewer is focused after AppKit moved it.
+                    isFocused = false
+                    DispatchQueue.main.async { isFocused = true }
+                }
             )
         case .video, .audio:
             VideoPlayerView(
