@@ -13,6 +13,8 @@ struct DuplicatesView: View {
     @State private var isTrashing = false
     /// The file shown in the large preview, if any.
     @State private var previewing: PreviewTarget?
+    /// Transport of the video/audio currently in the preview, for its hotkeys.
+    @State private var playback: (any PlaybackController)?
 
     private struct PreviewTarget: Equatable {
         let groupID: Int
@@ -255,12 +257,15 @@ struct DuplicatesView: View {
                             // Quick Look's embedded player doesn't play inside
                             // a sheet, so use the app's own player (AVFoundation
                             // or mpv for mkv/webm), same as the main preview.
-                            VideoPlayerView(url: item.url)
+                            VideoPlayerView(url: item.url) { controller in
+                                playback = controller
+                            }
                         default:
                             QuickLookView(url: item.url)
                         }
                     }
                     .id(item.url)
+                    .background { videoHotkeys(for: item) }
                     Divider()
                     HStack {
                         Button("Previous", systemImage: "chevron.left") {
@@ -288,6 +293,41 @@ struct DuplicatesView: View {
             }
             .accessibilityAddTraits(.isModal)
         }
+    }
+
+    /// Fullscreen-viewer playback keys for a video/audio preview: 0–9 jump to
+    /// 0–90% of the duration, K/Space play-pause, U/O skip ∓/±15 s (⇧ = 60 s),
+    /// and , / . step a frame. ←/→ keep stepping between files.
+    @ViewBuilder
+    private func videoHotkeys(for item: MediaItem) -> some View {
+        if item.kind == .video || item.kind == .audio {
+            ZStack {
+                ForEach(0..<10, id: \.self) { digit in
+                    hotkey(KeyEquivalent(Character("\(digit)")), []) {
+                        playback?.seek(toFraction: Double(digit) / 10.0)
+                    }
+                }
+                hotkey("k", []) { playback?.togglePlay() }
+                hotkey(.space, []) { playback?.togglePlay() }
+                hotkey("u", []) { playback?.skip(by: -15) }
+                hotkey("o", []) { playback?.skip(by: 15) }
+                hotkey("u", .shift) { playback?.skip(by: -60) }
+                hotkey("o", .shift) { playback?.skip(by: 60) }
+                hotkey(",", []) { playback?.stepFrame(by: -1) }
+                hotkey(".", []) { playback?.stepFrame(by: 1) }
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// An invisible button that only exists to carry a key equivalent.
+    private func hotkey(_ key: KeyEquivalent, _ modifiers: EventModifiers,
+                        action: @escaping () -> Void) -> some View {
+        Button(action: action) { EmptyView() }
+            .keyboardShortcut(key, modifiers: modifiers)
+            .focusable(false)
     }
 
     /// Moves the preview to the neighboring file in the group, wrapping around.
