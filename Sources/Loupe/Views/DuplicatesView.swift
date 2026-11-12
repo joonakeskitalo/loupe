@@ -24,6 +24,7 @@ struct DuplicatesView: View {
     }
 
     private static let tileSize: CGFloat = 150
+    private static let sidebarWidth: CGFloat = 320
 
     private var markedBytes: Int64 {
         model.duplicateGroups.flatMap(\.items)
@@ -37,7 +38,12 @@ struct DuplicatesView: View {
             // can't hold focus or show a highlight through the dimmed overlay.
             header.disabled(previewing != nil)
             Divider()
-            content
+            HStack(spacing: 0) {
+                content
+                Divider()
+                previewSidebar
+                    .frame(width: Self.sidebarWidth)
+            }
             Divider()
             footer.disabled(previewing != nil)
         }
@@ -177,6 +183,18 @@ struct DuplicatesView: View {
                     .background(isMarked ? Color.red : Color.green, in: Capsule())
                     .foregroundStyle(.white)
                     .padding(6)
+                    .accessibilityHidden(true)
+                Toggle(isOn: Binding(
+                    get: { marked.contains(item.url) },
+                    set: { _ in cursor = item.url; toggle(item, in: group) }
+                )) {
+                    Text("Mark \(item.name) for removal")
+                }
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .help(isMarked ? "Keep this file" : "Mark for removal")
+                .padding(6)
+                .frame(width: Self.tileSize, height: Self.tileSize, alignment: .topTrailing)
                 Button {
                     cursor = item.url
                     previewing = PreviewTarget(groupID: group.id, url: item.url)
@@ -213,10 +231,7 @@ struct DuplicatesView: View {
             in: RoundedRectangle(cornerRadius: 9))
         .contentShape(Rectangle())
         .id(item.url)
-        .onTapGesture {
-            cursor = item.url
-            toggle(item, in: group)
-        }
+        .onTapGesture { cursor = item.url }
         .contextMenu {
             Button("Preview") {
                 cursor = item.url
@@ -228,10 +243,6 @@ struct DuplicatesView: View {
             }
         }
         .help(item.url.path)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.name), \(isMarked ? "marked for removal" : "kept")")
-        .accessibilityHint("Toggles between keep and remove")
-        .accessibilityAddTraits(.isButton)
     }
 
     private func detail(for item: MediaItem, in group: DuplicateGroup) -> String {
@@ -241,6 +252,60 @@ struct DuplicatesView: View {
         }
         parts.append(byteString(item.fileSize))
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: Preview sidebar
+
+    /// Live preview of the tile the cursor is on. Clicking a tile (or moving
+    /// with the arrow keys) selects it here; the checkbox only toggles removal.
+    @ViewBuilder
+    private var previewSidebar: some View {
+        VStack(spacing: 0) {
+            Text("Preview")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+            Divider()
+            if let (group, item) = cursorItem(in: model.duplicateGroups) {
+                Group {
+                    if previewing != nil {
+                        // The modal preview owns playback; avoid two players.
+                        sidebarPlaceholder("Previewing…", symbol: "eye")
+                    } else {
+                        switch item.kind {
+                        case .video, .audio: VideoPlayerView(url: item.url)
+                        default: QuickLookView(url: item.url)
+                        }
+                    }
+                }
+                .id(item.url)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name).font(.caption.weight(.semibold))
+                        .lineLimit(2).truncationMode(.middle)
+                    Text(detail(for: item, in: group))
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(item.url.deletingLastPathComponent().path)
+                        .font(.caption2).foregroundStyle(.tertiary)
+                        .lineLimit(2).truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(10)
+            } else {
+                sidebarPlaceholder("Select a file to preview", symbol: "sidebar.squares.right")
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func sidebarPlaceholder(_ text: String, symbol: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol).font(.largeTitle).foregroundStyle(.tertiary)
+            Text(text).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: Preview
