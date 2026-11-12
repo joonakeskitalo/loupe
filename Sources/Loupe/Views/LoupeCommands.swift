@@ -221,6 +221,12 @@ struct LoupeCommands: Commands {
             }
             .disabled(!hasSelection)
 
+            // Explicit save only: tags live in memory until the user picks
+            // this, which writes keywords/labels to .xmp sidecars next to the
+            // selected RAW files (merging with any existing sidecar).
+            Button("Save Tags to XMP Sidecar") { model?.saveTagsToXMPSidecars() }
+                .disabled(model?.xmpSidecarTargets.isEmpty ?? true)
+
             Divider()
 
             // On-device AI classification (Apple's Vision classifier, refined

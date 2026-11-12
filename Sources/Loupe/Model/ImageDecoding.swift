@@ -139,7 +139,8 @@ enum ImageDecoding {
         return preview
     }
 
-    private static func isRAW(_ url: URL) -> Bool {
+    /// True for camera RAW formats (RAF, CR3, NEF, ARW, DNG, …).
+    static func isRAW(_ url: URL) -> Bool {
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return type.conforms(to: .rawImage)
     }

@@ -3096,6 +3096,64 @@ final class BrowserModel {
     /// Total number of tagged items (any color).
     var taggedCount: Int { colorTags.count }
 
+    // MARK: - XMP sidecars
+
+    /// Selected RAW images that carry at least one tag (text or color) — the
+    /// files "Save Tags to XMP Sidecar" would write for. Falls back to the
+    /// primary item when nothing is multi-selected.
+    var xmpSidecarTargets: [MediaItem.ID] {
+        let ids = selectedItems.isEmpty
+            ? (primarySelectedItem.map { [$0.id] } ?? [])
+            : Array(selectedItems)
+        return ids.filter { id in
+            ImageDecoding.isRAW(id)
+                && (colorTags[id] != nil || !(textTags[id]?.isEmpty ?? true))
+        }
+    }
+
+    /// Writes the selection's tags into XMP sidecars next to its RAW files.
+    /// Only ever runs on this explicit user action — tagging alone never
+    /// touches the disk. Existing sidecars are merged (see `XMPSidecar`).
+    /// Reports the outcome in an alert.
+    func saveTagsToXMPSidecars() {
+        let entries = xmpSidecarTargets.map { id in
+            XMPSidecar.Entry(
+                imageURL: id,
+                keywords: textTags(id),
+                label: colorTags[id]?.displayName
+            )
+        }
+        guard !entries.isEmpty else { return }
+        Task { @MainActor in
+            let failures: [(URL, Error)] = await Task.detached(priority: .userInitiated) {
+                var failures: [(URL, Error)] = []
+                for entry in entries {
+                    do { try XMPSidecar.write(entry) } catch { failures.append((entry.imageURL, error)) }
+                }
+                return failures
+            }.value
+            presentXMPSaveResult(saved: entries.count - failures.count, failures: failures)
+        }
+    }
+
+    private func presentXMPSaveResult(saved: Int, failures: [(URL, Error)]) {
+        let alert = NSAlert()
+        if failures.isEmpty {
+            alert.messageText = saved == 1 ? "Saved Tags to XMP Sidecar" : "Saved Tags to \(saved) XMP Sidecars"
+            alert.informativeText = "Keywords and color labels were written to .xmp files next to the RAW images."
+            alert.alertStyle = .informational
+        } else {
+            alert.messageText = "Couldn’t Save Some XMP Sidecars"
+            let lines = failures.prefix(5).map { "\($0.0.lastPathComponent): \($0.1.localizedDescription)" }
+            let more = failures.count > 5 ? "\n…and \(failures.count - 5) more." : ""
+            alert.informativeText = "Saved \(saved) of \(saved + failures.count).\n\n"
+                + lines.joined(separator: "\n") + more
+            alert.alertStyle = .warning
+        }
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     // MARK: - Text tags
 
     /// The free-text tags on the given item, sorted alphabetically for stable
