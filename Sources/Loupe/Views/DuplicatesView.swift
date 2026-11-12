@@ -73,14 +73,13 @@ struct DuplicatesView: View {
             }
             Spacer()
             if model.hasSearchedDuplicates {
+                // Changing the match type re-runs the search straight away
+                // (restarting any search already in progress).
                 Picker("Match", selection: $model.duplicateSensitivity) {
                     ForEach(DuplicateSensitivity.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .frame(width: 260)
-                .disabled(model.isFindingDuplicates)
-                // Changing the match type only takes effect on the next search.
-                Button("Search Again") { model.findDuplicates() }
-                    .disabled(model.isFindingDuplicates)
+                .onChange(of: model.duplicateSensitivity) { model.findDuplicates() }
             }
         }
         .padding(10)
