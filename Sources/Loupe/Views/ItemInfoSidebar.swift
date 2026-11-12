@@ -207,11 +207,49 @@ private struct SingleItemInfo: View {
     @State private var thumbnail: NSImage?
     @State private var exif: ImageEXIF = .empty
 
+    /// Which tab images show: the summary ("info") or every metadata field
+    /// ("exif"). Persisted so the choice sticks while browsing.
+    @AppStorage("infoSidebarTab") private var tab: String = "info"
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 preview
 
+                if item.kind == .image {
+                    Picker("Section", selection: $tab) {
+                        Text("Info").tag("info")
+                        Text("EXIF").tag("exif")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
+                if item.kind == .image && tab == "exif" {
+                    EXIFTab(model: model, item: item)
+                } else {
+                    infoSections
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Resolve metadata the same way list rows do: read any cached value
+        // synchronously, then probe only when it's an image/video and missing.
+        .onChange(of: item.id, initial: true) { _, _ in
+            metadata = MediaMetadataCache.cached(for: item.url) ?? .empty
+            thumbnail = nil
+            exif = .empty
+        }
+        .task(id: metadataNeedsProbe ? item.id : nil) { await probeMetadata() }
+        .task(id: item.id) { await loadThumbnail() }
+        .task(id: item.kind == .image ? item.id : nil) { await probeEXIF() }
+    }
+
+    /// The summary tab: general info, dates, camera, tags, OCR, location, and
+    /// the rename/export tools.
+    @ViewBuilder
+    private var infoSections: some View {
                 InfoSection(title: "General") {
                     InfoRow(label: "Name", value: item.name)
                     InfoRow(label: "Kind", value: kindLabel)
@@ -314,20 +352,6 @@ private struct SingleItemInfo: View {
                 if item.kind == .video {
                     VideoExportSection(model: model, item: item)
                 }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // Resolve metadata the same way list rows do: read any cached value
-        // synchronously, then probe only when it's an image/video and missing.
-        .onChange(of: item.id, initial: true) { _, _ in
-            metadata = MediaMetadataCache.cached(for: item.url) ?? .empty
-            thumbnail = nil
-            exif = .empty
-        }
-        .task(id: metadataNeedsProbe ? item.id : nil) { await probeMetadata() }
-        .task(id: item.id) { await loadThumbnail() }
-        .task(id: item.kind == .image ? item.id : nil) { await probeEXIF() }
     }
 
     /// Camera / shooting metadata, shown only for images that carry EXIF.
@@ -1167,5 +1191,167 @@ private struct RenameSection: View {
     private func buttonTitle(_ count: Int) -> String {
         guard count > 0 else { return "Rename" }
         return count == 1 ? "Rename 1 File" : "Rename \(count) Files"
+    }
+}
+
+// MARK: - EXIF tab
+
+/// The info sidebar's EXIF tab: every metadata field embedded in the image
+/// (EXIF, TIFF, GPS, maker notes, embedded XMP), plus — for camera RAW — the
+/// XMP sidecar Loupe saves tags into, where each keyword and the label can be
+/// removed from the file. Removal is an explicit, immediate write; the
+/// sidecar is otherwise only changed by "Save Tags to XMP Sidecar".
+private struct EXIFTab: View {
+    var model: BrowserModel
+    let item: MediaItem
+
+    @State private var groups: [MetadataGroup] = []
+    @State private var sidecar: XMPSidecar.Contents?
+    @State private var loaded = false
+
+    /// Reload when the item changes or any sidecar write lands.
+    private struct LoadKey: Hashable {
+        let url: URL
+        let revision: Int
+    }
+
+    private var isRAW: Bool { ImageDecoding.isRAW(item.url) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if isRAW {
+                sidecarSection
+            }
+            if loaded && groups.isEmpty {
+                Text("No embedded metadata.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(groups) { group in
+                InfoSection(title: group.title) {
+                    ForEach(group.rows) { row in
+                        InfoRow(label: row.label, value: row.value)
+                    }
+                }
+            }
+        }
+        .task(id: LoadKey(url: item.url, revision: model.xmpSidecarRevision)) { await load() }
+    }
+
+    // MARK: Sidecar
+
+    @ViewBuilder
+    private var sidecarSection: some View {
+        InfoSection(title: "XMP Sidecar") {
+            if hasUnsavedTagChanges {
+                HStack {
+                    Label("Unsaved tag changes", systemImage: "exclamationmark.circle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("Save to Sidecar") { model.saveTagsToXMPSidecars(for: [item.id]) }
+                        .controlSize(.small)
+                }
+            }
+            if let sidecar {
+                InfoRow(label: "File", value: sidecar.sidecarURL.lastPathComponent)
+                if sidecar.keywords.isEmpty {
+                    InfoRow(label: "Keywords", value: "None")
+                } else {
+                    Text("Keywords")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ForEach(sidecar.keywords, id: \.self) { keyword in
+                        removableRow(
+                            symbol: "tag",
+                            text: keyword,
+                            ownedByLoupe: sidecar.loupeKeywords.contains(keyword),
+                            help: "Remove “\(keyword)” from the sidecar file"
+                        ) {
+                            model.removeXMPKeyword(keyword, from: item.url)
+                        }
+                    }
+                }
+                if let label = sidecar.label {
+                    Text("Label")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    removableRow(
+                        symbol: "circle.fill",
+                        text: label,
+                        ownedByLoupe: sidecar.loupeLabel != nil,
+                        help: "Remove the “\(label)” label from the sidecar file"
+                    ) {
+                        model.removeXMPLabel(from: item.url)
+                    }
+                }
+                ForEach(sidecar.otherProperties, id: \.name) { property in
+                    InfoRow(label: property.name, value: property.value)
+                }
+            } else if loaded {
+                Text("No sidecar file. Use Save Tags to XMP Sidecar to write this image’s tags.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// A keyword/label row with a remove button. Entries Loupe wrote are
+    /// marked so it's clear which ones a save would also manage.
+    private func removableRow(
+        symbol: String, text: String, ownedByLoupe: Bool, help: String,
+        remove: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .textSelection(.enabled)
+            if ownedByLoupe {
+                Text("Loupe")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
+            }
+            Spacer()
+            Button(action: remove) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(help)
+            .accessibilityLabel(help)
+        }
+        .font(.callout)
+    }
+
+    /// True when the item's in-session tags differ from what Loupe last wrote
+    /// to the sidecar, i.e. "Save Tags to XMP Sidecar" would change the file.
+    private var hasUnsavedTagChanges: Bool {
+        guard loaded else { return false }
+        let current = Set(model.textTags(item.id).map { $0.lowercased() })
+        let saved = Set((sidecar?.loupeKeywords ?? []).map { $0.lowercased() })
+        let currentLabel = model.colorTag(item.id)?.displayName.lowercased()
+        let savedLabel = sidecar?.loupeLabel?.lowercased()
+        return current != saved || currentLabel != savedLabel
+    }
+
+    private func load() async {
+        let url = item.url
+        let raw = isRAW
+        if groups.isEmpty || sidecar?.sidecarURL.deletingPathExtension().lastPathComponent
+            != url.deletingPathExtension().lastPathComponent {
+            loaded = false
+        }
+        let (groups, sidecar) = await Task.detached(priority: .userInitiated) {
+            (ImageMetadataReader.groups(for: url), raw ? XMPSidecar.read(for: url) : nil)
+        }.value
+        guard url == item.url else { return }
+        self.groups = groups
+        self.sidecar = sidecar
+        loaded = true
     }
 }

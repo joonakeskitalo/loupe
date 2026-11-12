@@ -1658,6 +1658,7 @@ final class BrowserModel {
         itemsByDirectory = byDir
         trees = newTrees
         pruneStaleChipFilters()
+        importXMPSidecarTags()
         pruneMissingMarks()
         clampSelection()
         // Keep codec data current for a codec sort as folders are added/rescanned.
@@ -3134,25 +3135,82 @@ final class BrowserModel {
 
     // MARK: - XMP sidecars
 
-    /// Selected RAW images that carry at least one tag (text or color) — the
-    /// files "Save Tags to XMP Sidecar" would write for. Falls back to the
-    /// primary item when nothing is multi-selected.
+    /// RAW files whose sidecar holds tags Loupe wrote (found on import or
+    /// written this session). Lets "Save Tags to XMP Sidecar" also run for an
+    /// item whose tags were all removed, so the removal reaches the file.
+    var xmpSidecarsWithLoupeData: Set<URL> = []
+
+    /// Bumped after every sidecar write so views showing sidecar contents
+    /// (the info sidebar's EXIF tab) reload.
+    var xmpSidecarRevision = 0
+
+    /// RAW files whose sidecar has already been read this session, so rescans
+    /// don't re-import (and resurrect tags the user has since removed).
+    private var xmpImportedURLs: Set<URL> = []
+
+    /// Selected RAW images "Save Tags to XMP Sidecar" applies to: those with a
+    /// tag (text or color), plus those whose sidecar has Loupe tags to remove.
+    /// Falls back to the primary item when nothing is multi-selected.
     var xmpSidecarTargets: [MediaItem.ID] {
         let ids = selectedItems.isEmpty
             ? (primarySelectedItem.map { [$0.id] } ?? [])
             : Array(selectedItems)
         return ids.filter { id in
             ImageDecoding.isRAW(id)
-                && (colorTags[id] != nil || !(textTags[id]?.isEmpty ?? true))
+                && (colorTags[id] != nil || !(textTags[id]?.isEmpty ?? true)
+                    || xmpSidecarsWithLoupeData.contains(id))
         }
     }
 
-    /// Writes the selection's tags into XMP sidecars next to its RAW files.
-    /// Only ever runs on this explicit user action — tagging alone never
-    /// touches the disk. Existing sidecars are merged (see `XMPSidecar`).
-    /// Reports the outcome in an alert.
+    /// Reads tags Loupe previously saved into RAW sidecars back into the
+    /// session (text tags, and the color tag when it's one of Loupe's colors),
+    /// so a later save keeps them instead of treating them as removed. Only
+    /// Loupe-owned entries are imported; other apps' keywords stay in the file
+    /// untouched. Read-only — never writes. Runs once per file per session.
+    private func importXMPSidecarTags() {
+        let pending = allItems.lazy
+            .filter { $0.kind == .image && !self.xmpImportedURLs.contains($0.id) && ImageDecoding.isRAW($0.id) }
+            .map(\.id)
+        let urls = Array(pending)
+        guard !urls.isEmpty else { return }
+        xmpImportedURLs.formUnion(urls)
+        Task { [weak self] in
+            let found: [(URL, XMPSidecar.Contents)] = await Task.detached(priority: .utility) {
+                urls.compactMap { url in
+                    guard let contents = XMPSidecar.read(for: url),
+                          !contents.loupeKeywords.isEmpty || contents.loupeLabel != nil else { return nil }
+                    return (url, contents)
+                }
+            }.value
+            guard let self, !found.isEmpty else { return }
+            let present = Set(self.allItems.map(\.id))
+            for (url, contents) in found where present.contains(url) {
+                self.xmpSidecarsWithLoupeData.insert(url)
+                for keyword in contents.loupeKeywords {
+                    self.textTags[url, default: []].insert(keyword)
+                    if !self.textTagOrder.contains(keyword) { self.textTagOrder.append(keyword) }
+                }
+                if self.colorTags[url] == nil, let label = contents.loupeLabel,
+                   let tag = ColorTag.allCases.first(where: { $0.displayName.caseInsensitiveCompare(label) == .orderedSame }) {
+                    self.colorTags[url] = tag
+                }
+            }
+            self.clampSelection()
+        }
+    }
+
+    /// Syncs the selection's tags to XMP sidecars next to its RAW files: adds
+    /// current tags and removes ones Loupe saved earlier that the item no
+    /// longer has. Only ever runs on this explicit user action — tagging alone
+    /// never touches the disk. Reports the outcome in an alert.
     func saveTagsToXMPSidecars() {
-        let entries = xmpSidecarTargets.map { id in
+        saveTagsToXMPSidecars(for: xmpSidecarTargets)
+    }
+
+    /// Syncs specific RAW items' tags to their sidecars (e.g. the item shown in
+    /// the info sidebar). Non-RAW IDs are ignored.
+    func saveTagsToXMPSidecars(for ids: [MediaItem.ID]) {
+        let entries = ids.filter(ImageDecoding.isRAW).map { id in
             XMPSidecar.Entry(
                 imageURL: id,
                 keywords: textTags(id),
@@ -3168,7 +3226,53 @@ final class BrowserModel {
                 }
                 return failures
             }.value
+            let failed = Set(failures.map(\.0))
+            for entry in entries where !failed.contains(entry.imageURL) {
+                if entry.keywords.isEmpty && entry.label == nil {
+                    xmpSidecarsWithLoupeData.remove(entry.imageURL)
+                } else {
+                    xmpSidecarsWithLoupeData.insert(entry.imageURL)
+                }
+            }
+            xmpSidecarRevision += 1
             presentXMPSaveResult(saved: entries.count - failures.count, failures: failures)
+        }
+    }
+
+    /// Removes a keyword from `url`'s sidecar — whoever wrote it — and drops
+    /// the matching in-session tag so a later save doesn't re-add it. An
+    /// explicit, immediate write triggered from the info sidebar.
+    func removeXMPKeyword(_ keyword: String, from url: URL) {
+        if let tags = textTags[url], let match = tags.first(where: { $0.caseInsensitiveCompare(keyword) == .orderedSame }) {
+            textTags[url]?.remove(match)
+            if textTags[url]?.isEmpty == true { textTags[url] = nil }
+        }
+        performXMPEdit(on: url) { try XMPSidecar.removeKeyword(keyword, imageURL: url) }
+    }
+
+    /// Removes the label from `url`'s sidecar — whoever wrote it — and clears
+    /// the in-session color tag. Explicit, immediate write.
+    func removeXMPLabel(from url: URL) {
+        colorTags[url] = nil
+        performXMPEdit(on: url) { try XMPSidecar.removeLabel(imageURL: url) }
+    }
+
+    private func performXMPEdit(on url: URL, _ edit: @escaping @Sendable () throws -> Void) {
+        Task { @MainActor in
+            let error: Error? = await Task.detached(priority: .userInitiated) {
+                do { try edit(); return nil } catch { return error }
+            }.value
+            if let contents = XMPSidecar.read(for: url),
+               !contents.loupeKeywords.isEmpty || contents.loupeLabel != nil {
+                xmpSidecarsWithLoupeData.insert(url)
+            } else {
+                xmpSidecarsWithLoupeData.remove(url)
+            }
+            xmpSidecarRevision += 1
+            clampSelection()
+            if let error {
+                presentXMPSaveResult(saved: 0, failures: [(url, error)])
+            }
         }
     }
 
