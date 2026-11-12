@@ -853,6 +853,25 @@ struct BrowserGridView: View {
             return .handled
         }
 
+        // X hides the selection (never toggles) and advances to the next
+        // survivor; C steps to the next item. Handled here as well as via the
+        // window-level hidden buttons in ContentView, because those SwiftUI key
+        // equivalents can silently stop firing depending on which view holds
+        // first responder. A focused grid consuming the key here (returning
+        // .handled) means the window-level copy never double-fires.
+        if press.modifiers.isEmpty, !model.showTagInput {
+            if press.key == KeyEquivalent("x") {
+                guard !model.selectedItems.isEmpty else { return .ignored }
+                model.hideSelection()
+                return .handled
+            }
+            if press.key == KeyEquivalent("c") {
+                guard !model.displayedItems.isEmpty else { return .ignored }
+                model.moveSelection(by: 1)
+                return .handled
+            }
+        }
+
         // Y (no modifiers) opens the tag-input overlay for the selection.
         // Handled here (not only via the hidden window-level shortcut) so it
         // works regardless of focus state — including right after building a
