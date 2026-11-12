@@ -723,6 +723,9 @@ struct MediaViewer: View {
     private var copyHotkey: some View {
         hotkey("c", .command) {
             // Selected Live Text in the image wins over copying the file.
+            // Whichever text owns keyboard focus wins: a focused sidebar text
+            // view first, then Live Text, then any other selectable text.
+            if NSApp.focusedTextView != nil, NSApp.copyTextSelectionIfAny() { return }
             if LiveTextSelection.shared.copySelectedText() { return }
             if NSApp.copyTextSelectionIfAny() { return }
             model.copyToClipboard()

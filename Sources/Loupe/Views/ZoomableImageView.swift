@@ -521,6 +521,7 @@ final class ZoomScrollView: NSScrollView {
     var onArrow: ((Bool, Bool) -> Void)?
     var onReturnFocus: (() -> Void)?
     private var keyMonitor: Any?
+    private var mouseMonitor: Any?
 
     /// True when keyboard focus sits inside this view, i.e. the user clicked
     /// into the Live Text overlay to select text.
@@ -559,6 +560,28 @@ final class ZoomScrollView: NSScrollView {
     private func removeKeyMonitor() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        mouseMonitor = nil
+    }
+    /// Keeps a single text selection alive: clicking into the Live Text
+    /// overlay clears any selection in a sidebar text view, and clicking
+    /// anywhere else clears the overlay's selection. Events pass through.
+    private func installMouseMonitor() {
+        guard mouseMonitor == nil else { return }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            nonisolated(unsafe) let event = event
+            MainActor.assumeIsolated {
+                guard let self, let window = self.window, event.window === window else { return }
+                if self.owns(event) {
+                    if let tv = window.firstResponder as? NSTextView {
+                        tv.setSelectedRange(NSRange(location: 0, length: 0))
+                    }
+                } else {
+                    LiveTextSelection.shared.overlay?.resetSelection()
+                }
+            }
+            return event
+        }
     }
 
     override func viewDidMoveToWindow() {
@@ -567,6 +590,7 @@ final class ZoomScrollView: NSScrollView {
             removeKeyMonitor()
         } else {
             installKeyMonitor()
+            installMouseMonitor()
         }
         if window == nil {
             removeMagnifyMonitor()
