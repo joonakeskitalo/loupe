@@ -539,6 +539,13 @@ final class BrowserModel {
         didSet { clampSelection() }
     }
 
+    /// Whether the free-text search also matches the text recognized in images
+    /// (OCR), in addition to filenames. On by default; only images that have
+    /// been through "Extract Text" can match this way.
+    var searchRecognizedText = true {
+        didSet { clampSelection() }
+    }
+
     /// Files flagged "for later". In-session only: cleared when a new folder is
     /// opened and gone when the window closes (the model is per-window).
     var flaggedItems: Set<MediaItem.ID> = []
@@ -928,6 +935,8 @@ final class BrowserModel {
 
     /// Recomputes `ocrTagItems` from `ocrText`, reusing cached tokenization.
     private func rebuildOCRTags() {
+        // OCR text feeds the search, so results change as text lands.
+        if searchRecognizedText, !searchText.isEmpty { invalidateDisplayCache() }
         var next: [MediaItem.ID: (text: String, words: Set<String>)] = [:]
         next.reserveCapacity(ocrText.count)
         var index: [String: Set<MediaItem.ID>] = [:]
@@ -1763,14 +1772,21 @@ final class BrowserModel {
         let matches: (String, String) -> Bool = caseSensitiveSearch
             ? { name, term in name.contains(term) }
             : { name, term in name.localizedCaseInsensitiveContains(term) }
+        // A term matches the filename or, when enabled, the item's OCR text.
+        let useOCR = searchRecognizedText && !ocrText.isEmpty
+        let matchesNameOrText: (MediaItem, String) -> Bool = { item, term in
+            if matches(item.name, term) { return true }
+            guard useOCR, let text = self.ocrText[item.id], !text.isEmpty else { return false }
+            return matches(text, term)
+        }
         if !includeTerms.isEmpty {
             base = base.filter { item in
-                includeTerms.allSatisfy { matches(item.name, $0) }
+                includeTerms.allSatisfy { matchesNameOrText(item, $0) }
             }
         }
         if !excludeTerms.isEmpty {
             base = base.filter { item in
-                !excludeTerms.contains { matches(item.name, $0) }
+                !excludeTerms.contains { matchesNameOrText(item, $0) }
             }
         }
         return base

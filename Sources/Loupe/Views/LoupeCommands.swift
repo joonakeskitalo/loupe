@@ -371,6 +371,8 @@ struct LoupeCommands: Commands {
             // Search matching. Off by default (search is case-insensitive);
             // turning this on makes the free-text filter match case exactly.
             Toggle("Case-Sensitive Search", isOn: caseSensitiveSearchBinding)
+            Toggle("Search Recognized Text", isOn: searchRecognizedTextBinding)
+                .disabled(model == nil)
                 .disabled(model == nil)
 
             // Reveal filesystem-hidden files (dotfiles / macOS hidden flag) in
@@ -675,6 +677,7 @@ struct LoupeCommands: Commands {
     private var modeBinding: Binding<BrowseMode> { binding(\.mode, default: .flattened) }
     private var includeSubfoldersBinding: Binding<Bool> { binding(\.includeSubfolders, default: false) }
     private var caseSensitiveSearchBinding: Binding<Bool> { binding(\.caseSensitiveSearch, default: false) }
+    private var searchRecognizedTextBinding: Binding<Bool> { binding(\.searchRecognizedText, default: true) }
     private var showHiddenFilesBinding: Binding<Bool> { binding(\.showHiddenFiles, default: false) }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var fillGridCellsBinding: Binding<Bool> { binding(\.fillGridCells, default: false) }
