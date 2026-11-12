@@ -39,6 +39,13 @@ struct ZoomableImageView: NSViewRepresentable {
     /// Called after an arrow press is handled here, so the host can take
     /// SwiftUI keyboard focus back from the overlay.
     var onReturnFocus: (() -> Void)?
+    /// When true and `url` is a camera RAW, develop it at native sensor
+    /// resolution instead of showing the embedded preview. Flipping this for
+    /// the same URL swaps the image in place, keeping the zoom and pan.
+    var fullResolutionRAW = false
+    /// Reports each image that lands in the view (nil if decoding failed), so
+    /// the host can show whether a RAW is its embedded preview or developed.
+    var onImageLoaded: ((URL, PreloadedImage?) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(zoomFactor: $zoomFactor)
@@ -68,6 +75,8 @@ struct ZoomableImageView: NSViewRepresentable {
 
         context.coordinator.scrollView = scrollView
         context.coordinator.url = url
+        context.coordinator.fullResolutionRAW = fullResolutionRAW
+        context.coordinator.onImageLoaded = onImageLoaded
         if enableTextSelection {
             context.coordinator.installTextOverlay(on: imageView)
         }
@@ -104,9 +113,24 @@ struct ZoomableImageView: NSViewRepresentable {
         nsView.onSwipeNext = onSwipeNext
         nsView.onArrow = onArrow
         nsView.onReturnFocus = onReturnFocus
+        context.coordinator.onImageLoaded = onImageLoaded
+
+        if context.coordinator.url == url,
+           context.coordinator.fullResolutionRAW != fullResolutionRAW {
+            // Same image, different resolution: swap in place, keeping the
+            // current zoom/pan so a zoomed-in inspection stays on the same spot.
+            context.coordinator.fullResolutionRAW = fullResolutionRAW
+            let coordinator = context.coordinator
+            let sameURL = url
+            DispatchQueue.main.async { [weak coordinator] in
+                guard let coordinator, coordinator.url == sameURL else { return }
+                coordinator.loadImage(sameURL, fitWhenReady: false)
+            }
+        }
 
         if context.coordinator.url != url {
             context.coordinator.url = url
+            context.coordinator.fullResolutionRAW = fullResolutionRAW
             // Prefer an already-decoded image from the preloader so navigation
             // swaps instantly and refits in the same pass (no flash of the
             // previous image's magnification). Falls back to an async decode
@@ -151,6 +175,9 @@ struct ZoomableImageView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var url: URL?
+        /// Whether the current URL should be developed at full RAW resolution.
+        var fullResolutionRAW = false
+        var onImageLoaded: ((URL, PreloadedImage?) -> Void)?
         /// True while a zoom command is queued, so repeated view updates don't
         /// run it twice.
         var commandPending = false
@@ -169,27 +196,66 @@ struct ZoomableImageView: NSViewRepresentable {
         /// When `fitWhenReady` is true the image is refit as soon as it's set,
         /// so the new image never paints at the previous image's magnification.
         func loadImage(_ url: URL, fitWhenReady: Bool) {
+            let fullResolution = fullResolutionRAW
             // Fast path: already decoded by the preloader — set + fit in one
             // synchronous pass, exactly like the old synchronous load.
-            if let cached = ImagePreloader.shared.cachedImageSync(for: url) {
+            if let cached = ImagePreloader.shared.cachedImageSync(for: url, fullResolution: fullResolution) {
                 apply(cached, for: url, fit: fitWhenReady)
                 return
             }
 
             // Not warmed yet: decode in the background, then apply only if the
-            // view is still showing this URL (navigation may have moved on).
+            // view is still showing this URL at this resolution (navigation or
+            // a resolution toggle may have moved on). The previous image stays
+            // up meanwhile, so a full-RAW request keeps the preview visible
+            // until the developed image is ready.
             Task { [weak self] in
-                let image = await ImagePreloader.shared.image(for: url)
-                guard let self, self.url == url else { return }
-                self.apply(image, for: url, fit: fitWhenReady)
+                let loaded = await ImagePreloader.shared.image(for: url, fullResolution: fullResolution)
+                guard let self, self.url == url, self.fullResolutionRAW == fullResolution else { return }
+                self.apply(loaded, for: url, fit: fitWhenReady)
             }
         }
 
-        private func apply(_ image: NSImage?, for url: URL, fit: Bool) {
-            guard let imageView = scrollView?.imageView else { return }
-            imageView.image = image
-            if fit { self.fit() }
+        private func apply(_ loaded: PreloadedImage?, for url: URL, fit: Bool) {
+            guard let scrollView, let imageView = scrollView.imageView else { return }
+            let image = loaded?.image
+            if fit || isFitMode || imageView.image == nil || image == nil {
+                imageView.image = image
+                if fit || isFitMode { self.fit() }
+            } else {
+                replacePreservingView(with: image!)
+            }
             analyzeText(in: image, for: url)
+            onImageLoaded?(url, loaded)
+        }
+
+        /// Swaps in a same-content image of a different pixel size (preview ↔
+        /// full RAW) while zoomed, scaling the magnification by the size ratio
+        /// and keeping the same point of the photo centered — so the view
+        /// doesn't jump, it just gets sharper.
+        private func replacePreservingView(with image: NSImage) {
+            guard let scrollView, let imageView = scrollView.imageView,
+                  let old = imageView.image else { return }
+            let oldSize = pixelSize(of: old)
+            let newSize = pixelSize(of: image)
+            guard oldSize.width > 0, newSize.width > 0 else {
+                imageView.image = image
+                return
+            }
+            let clip = scrollView.contentView
+            let center = CGPoint(x: clip.bounds.midX / oldSize.width,
+                                 y: clip.bounds.midY / oldSize.height)
+            let ratio = oldSize.width / newSize.width
+
+            imageView.image = image
+            sizeImageViewToPixels(image)
+            let magnification = (scrollView.magnification * ratio)
+                .clamped(to: scrollView.minMagnification...scrollView.maxMagnification)
+            scrollView.setMagnification(
+                magnification,
+                centeredAt: CGPoint(x: center.x * newSize.width, y: center.y * newSize.height))
+            scrollView.recenter()
+            reportZoom(magnification)
         }
 
         // MARK: Live Text

@@ -14,14 +14,42 @@ import ImageIO
 /// Only the fast bookkeeping (cache lookup + in-flight dedupe) runs isolated;
 /// the slow decode happens inside a `Task` that isn't awaited while isolated,
 /// so several prefetches overlap instead of serializing.
+/// A decoded fullscreen image plus how it was produced, so the viewer can
+/// show whether a RAW is its embedded preview or a real RAW development.
+final class PreloadedImage: @unchecked Sendable {
+    let image: NSImage
+    let source: DecodedImageSource
+    /// Pixel dimensions of the decoded bitmap.
+    let pixelSize: CGSize
+
+    init(image: NSImage, source: DecodedImageSource, pixelSize: CGSize) {
+        self.image = image
+        self.source = source
+        self.pixelSize = pixelSize
+    }
+}
+
 actor ImagePreloader {
     static let shared = ImagePreloader()
+
+    /// Identifies one decode: the file plus whether a native-resolution RAW
+    /// development was requested. `fullResolution` is only ever true for RAW
+    /// files (normalized in `key(_:_:)`), so other images share one entry.
+    private struct Key: Hashable {
+        let url: URL
+        let fullResolution: Bool
+    }
 
     /// NSCache is internally thread-safe, so it can be read without hopping onto
     /// the actor. Marked `nonisolated(unsafe)` to allow the synchronous cache
     /// peek used by the viewer for an instant, flash-free image swap.
-    nonisolated(unsafe) private let cache = NSCache<NSURL, NSImage>()
-    private var inFlight: [URL: Task<NSImage?, Never>] = [:]
+    nonisolated(unsafe) private let cache = NSCache<NSURL, PreloadedImage>()
+    /// Native-resolution RAW developments, kept apart from `cache` because
+    /// each is sensor-sized (~160 MB for 40 MP). Only the last couple are
+    /// kept, so toggling back and forth on the image you're inspecting is
+    /// instant without letting full RAWs accumulate.
+    nonisolated(unsafe) private let fullResolutionCache = NSCache<NSURL, PreloadedImage>()
+    private var inFlight: [Key: Task<PreloadedImage?, Never>] = [:]
 
     /// Byte budget for cached full images: 15% of physical RAM, but never more
     /// than 1 GB. A fraction of RAM alone scaled to several GB on large
@@ -58,93 +86,88 @@ actor ImagePreloader {
     init() {
         cache.totalCostLimit = Self.cacheByteLimit
         cache.countLimit = 12
+        fullResolutionCache.countLimit = 2
+    }
+
+    nonisolated private static func key(_ url: URL, _ fullResolution: Bool) -> Key {
+        Key(url: url, fullResolution: fullResolution && ImageDecoding.isRAW(url))
+    }
+
+    nonisolated private func cacheFor(_ key: Key) -> NSCache<NSURL, PreloadedImage> {
+        key.fullResolution ? fullResolutionCache : cache
     }
 
     /// Returns the cached image for `url` if it's already decoded, without
     /// triggering any work or hopping onto the actor. Safe to call from the
     /// main thread for an instant swap because NSCache is thread-safe.
-    nonisolated func cachedImageSync(for url: URL) -> NSImage? {
-        cache.object(forKey: url as NSURL)
+    /// `fullResolution` requests a native-resolution RAW development; it's
+    /// ignored for non-RAW files.
+    nonisolated func cachedImageSync(for url: URL, fullResolution: Bool = false) -> PreloadedImage? {
+        let key = Self.key(url, fullResolution)
+        return cacheFor(key).object(forKey: url as NSURL)
     }
 
     /// Returns the decoded image for `url`, decoding it in the background if it
-    /// isn't cached yet. Concurrent callers for the same URL share one decode.
-    func image(for url: URL) async -> NSImage? {
-        if let cached = cache.object(forKey: url as NSURL) {
+    /// isn't cached yet. Concurrent callers for the same request share one
+    /// decode.
+    func image(for url: URL, fullResolution: Bool = false) async -> PreloadedImage? {
+        let key = Self.key(url, fullResolution)
+        if let cached = cacheFor(key).object(forKey: url as NSURL) {
             return cached
         }
-        return await task(for: url).value
+        return await task(for: key).value
     }
 
     /// Kicks off a background decode for `url` (if not cached or in flight)
     /// without waiting for the result. Used to warm neighbors ahead of time.
-    func prefetch(_ url: URL) {
-        guard cache.object(forKey: url as NSURL) == nil else { return }
-        _ = task(for: url)
+    func prefetch(_ url: URL, fullResolution: Bool = false) {
+        let key = Self.key(url, fullResolution)
+        guard cacheFor(key).object(forKey: url as NSURL) == nil else { return }
+        _ = task(for: key)
     }
 
     /// Warms the cache for a list of URLs (e.g. the next couple of images).
-    func prefetch(_ urls: [URL]) {
-        for url in urls { prefetch(url) }
+    func prefetch(_ urls: [URL], fullResolution: Bool = false) {
+        for url in urls { prefetch(url, fullResolution: fullResolution) }
     }
 
-    private func task(for url: URL) -> Task<NSImage?, Never> {
-        if let existing = inFlight[url] {
+    private func task(for key: Key) -> Task<PreloadedImage?, Never> {
+        if let existing = inFlight[key] {
             return existing
         }
         let maxPixel = Self.maxDecodePixelSize
-        let wrapper = Task<NSImage?, Never> { [weak self] in
+        let wrapper = Task<PreloadedImage?, Never> { [weak self] in
             guard let self else { return nil }
             await self.acquireDecodeSlot()
-            let image = await Task<NSImage?, Never>.detached(priority: .userInitiated) {
-            // Decode with ImageIO at a display-sized cap rather than
-            // `NSImage(contentsOf:)`. For ordinary photos the two are
-            // equivalent, but a camera-raw file (e.g. Fujifilm `.raf`) decoded
-            // the old way realized the ENTIRE sensor mosaic at native
-            // resolution — a 40MP RAF is ~160 MB of RGBA — and the viewer never
-            // shows more than screen-many pixels anyway. Capping the longest
-            // edge to the largest screen dimension keeps full on-screen quality
-            // (including room to zoom) while bounding the decoded buffer, and
-            // ImageIO reports the true decoded size so the cache cost below is
-            // accurate (an `NSImage` from a RAF reports a proxy size that made
-            // the NSCache budget under-count and never evict — the apparent
-            // "leak"). The `autoreleasepool` drains the large CG temporaries a
-            // RAW decode spins up on this worker thread instead of letting them
-            // accumulate.
-            autoreleasepool {
-                Self.decode(url: url, maxPixelSize: maxPixel)
-            }
+            let image = await Task<PreloadedImage?, Never>.detached(priority: .userInitiated) {
+                // Decode at a display-sized cap rather than
+                // `NSImage(contentsOf:)`: a camera-raw file decoded the old way
+                // realized the ENTIRE sensor mosaic (~160 MB for 40 MP) and the
+                // viewer rarely shows more than screen-many pixels. The
+                // full-resolution path is the explicit exception. ImageIO /
+                // Core Image report the true decoded size so the cache cost is
+                // accurate, and the `autoreleasepool` drains the large CG
+                // temporaries a RAW decode spins up on this worker thread.
+                autoreleasepool {
+                    key.fullResolution
+                        ? Self.decodeFullResolution(url: key.url)
+                        : Self.decode(url: key.url, maxPixelSize: maxPixel)
+                }
             }.value
             await self.releaseDecodeSlot()
-            await self.finish(url: url, image: image)
+            await self.finish(key: key, image: image)
             return image
         }
-        inFlight[url] = wrapper
+        inFlight[key] = wrapper
         return wrapper
     }
 
-    private func finish(url: URL, image: NSImage?) {
-        inFlight[url] = nil
+    private func finish(key: Key, image: PreloadedImage?) {
+        inFlight[key] = nil
         if let image {
-            cache.setObject(image, forKey: url as NSURL, cost: Self.byteCost(of: image))
+            let cost = max(1, Int(image.pixelSize.width * image.pixelSize.height) * 4)
+            cacheFor(key).setObject(image, forKey: key.url as NSURL, cost: cost)
         }
-    }
-
-    /// Estimated decoded size of an image in bytes (RGBA, 4 bytes per pixel),
-    /// used as the NSCache cost so eviction tracks real memory use. Reads the
-    /// backing bitmap's pixel dimensions, which — because we build the image
-    /// from a concrete `CGImage` in `decode` — reflect the true decoded buffer.
-    private static func byteCost(of image: NSImage) -> Int {
-        let pixelWidth: Int
-        let pixelHeight: Int
-        if let rep = image.representations.first {
-            pixelWidth = rep.pixelsWide
-            pixelHeight = rep.pixelsHigh
-        } else {
-            pixelWidth = Int(image.size.width)
-            pixelHeight = Int(image.size.height)
-        }
-        return max(1, pixelWidth * pixelHeight * 4)
     }
 
     /// Longest-edge cap, in pixels, for a decoded full image: the largest
@@ -171,15 +194,28 @@ actor ImagePreloader {
     /// (notably 10-bit `.HIF`), which previously showed a black fullscreen
     /// image. Returns an `NSImage` wrapping the concrete `CGImage` so its
     /// reported pixel size matches the real buffer.
-    nonisolated private static func decode(url: URL, maxPixelSize: Int) -> NSImage? {
-        guard let cgImage = ImageDecoding.decodeCGImage(
+    nonisolated private static func decode(url: URL, maxPixelSize: Int) -> PreloadedImage? {
+        guard let (cgImage, source) = ImageDecoding.decodeCGImageWithSource(
             url: url,
             maxPixelSize: maxPixelSize,
             alwaysDecodeFromFullImage: true
         ) else {
             return nil
         }
+        return wrap(cgImage, source: source)
+    }
+
+    /// Develops a RAW at native sensor resolution (the explicit "Load Full
+    /// Resolution RAW" request).
+    nonisolated private static func decodeFullResolution(url: URL) -> PreloadedImage? {
+        guard let cgImage = ImageDecoding.decodeFullResolutionRAW(url: url) else { return nil }
+        return wrap(cgImage, source: .rawFullResolution)
+    }
+
+    /// Wraps a concrete `CGImage` in an `NSImage` whose reported size matches
+    /// the real buffer.
+    nonisolated private static func wrap(_ cgImage: CGImage, source: DecodedImageSource) -> PreloadedImage {
         let size = CGSize(width: cgImage.width, height: cgImage.height)
-        return NSImage(cgImage: cgImage, size: size)
+        return PreloadedImage(image: NSImage(cgImage: cgImage, size: size), source: source, pixelSize: size)
     }
 }

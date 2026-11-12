@@ -451,6 +451,42 @@ final class BrowserModel {
 
     private static let showHiddenFilesKey = "showHiddenFiles"
 
+    // MARK: - RAW resolution in the viewer
+
+    /// When true, the viewer develops camera RAW files at native sensor
+    /// resolution instead of showing their embedded camera JPEG. Off by
+    /// default: the preview loads in ~50 ms vs ~1 s for a full development and
+    /// a sensor-sized buffer (~160 MB for 40 MP). Persisted across launches.
+    var alwaysLoadFullResolutionRAW: Bool =
+        UserDefaults.standard.bool(forKey: alwaysLoadFullResolutionRAWKey) {
+        didSet {
+            UserDefaults.standard.set(alwaysLoadFullResolutionRAW, forKey: Self.alwaysLoadFullResolutionRAWKey)
+            // The global choice supersedes any per-image toggles.
+            rawResolutionOverrides = [:]
+        }
+    }
+
+    private static let alwaysLoadFullResolutionRAWKey = "alwaysLoadFullResolutionRAW"
+
+    /// Per-image choices made in the viewer (R / the resolution badge) that
+    /// differ from `alwaysLoadFullResolutionRAW`. In-session only.
+    var rawResolutionOverrides: [URL: Bool] = [:]
+
+    /// Whether the viewer should show `url` as a full-resolution RAW
+    /// development. Always false for non-RAW files.
+    func wantsFullResolutionRAW(_ url: URL) -> Bool {
+        guard ImageDecoding.isRAW(url) else { return false }
+        return rawResolutionOverrides[url] ?? alwaysLoadFullResolutionRAW
+    }
+
+    /// Toggles `url` between its embedded preview and a full-resolution RAW
+    /// development. No-op for non-RAW files.
+    func toggleFullResolutionRAW(_ url: URL) {
+        guard ImageDecoding.isRAW(url) else { return }
+        let next = !wantsFullResolutionRAW(url)
+        rawResolutionOverrides[url] = next == alwaysLoadFullResolutionRAW ? nil : next
+    }
+
     /// Whether the "Copy Image" actions strip EXIF/metadata from the copied
     /// pixels. Window-scoped and in-session only — NOT persisted, so each new
     /// window and each launch starts from the default. Defaults to `true`

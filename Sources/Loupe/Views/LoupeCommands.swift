@@ -390,6 +390,11 @@ struct LoupeCommands: Commands {
             // filters the in-session triage annotation.
             Toggle("Show Hidden Files", isOn: showHiddenFilesBinding)
                 .disabled(model == nil)
+            // Viewer: develop camera RAWs at full sensor resolution instead of
+            // showing the embedded JPEG preview. R in the viewer toggles a
+            // single image either way.
+            Toggle("Always Load Full-Resolution RAW", isOn: alwaysLoadFullResolutionRAWBinding)
+                .disabled(model == nil)
 
             Divider()
 
@@ -688,6 +693,9 @@ struct LoupeCommands: Commands {
     private var caseSensitiveSearchBinding: Binding<Bool> { binding(\.caseSensitiveSearch, default: false) }
     private var searchRecognizedTextBinding: Binding<Bool> { binding(\.searchRecognizedText, default: true) }
     private var showHiddenFilesBinding: Binding<Bool> { binding(\.showHiddenFiles, default: false) }
+    private var alwaysLoadFullResolutionRAWBinding: Binding<Bool> {
+        binding(\.alwaysLoadFullResolutionRAW, default: false)
+    }
     private var hideFilenamesBinding: Binding<Bool> { binding(\.hideFilenames, default: false) }
     private var fillGridCellsBinding: Binding<Bool> { binding(\.fillGridCells, default: false) }
     private var showFlaggedOnlyBinding: Binding<Bool> { binding(\.showFlaggedOnly, default: false) }

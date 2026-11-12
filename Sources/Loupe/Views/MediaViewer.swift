@@ -22,6 +22,10 @@ struct MediaViewer: View {
     /// ⌘+/−/0 hotkeys scale the picture and the "%" readout stays live.
     @State private var videoZoom: VideoZoomState?
 
+    /// What the single-image view last displayed — its URL, decode source and
+    /// pixel size — driving the RAW preview/full-resolution badge.
+    @State private var loadedImage: LoadedImageInfo?
+
     /// Drives keyboard focus for the viewer. Set true on appear so arrow-key
     /// navigation and the other `onKeyPress` hotkeys work immediately after the
     /// viewer opens (e.g. from a double-click on a grid item), without the user
@@ -44,6 +48,12 @@ struct MediaViewer: View {
     /// True when the single-item view is showing a zoomable image.
     private var showingSingleImage: Bool {
         !isMulti && items.first?.kind == .image
+    }
+
+    /// The single shown image when it's a camera RAW, else nil.
+    private var singleRAWItem: MediaItem? {
+        guard showingSingleImage, let item = items.first, ImageDecoding.isRAW(item.url) else { return nil }
+        return item
     }
 
     /// Whether the film strip is applicable: there's more than one item to
@@ -257,8 +267,11 @@ struct MediaViewer: View {
         let count = max(2, items.count)
         let urls = model.upcomingImageURLs(count: count)
         guard !urls.isEmpty else { return }
+        // Neighbors are warmed at the resolution they'll open at, so with
+        // "Always Load Full-Resolution RAW" on the next RAW is developed ahead.
+        let fullResolution = model.alwaysLoadFullResolutionRAW
         Task.detached(priority: .userInitiated) {
-            await ImagePreloader.shared.prefetch(urls)
+            await ImagePreloader.shared.prefetch(urls, fullResolution: fullResolution)
         }
     }
 
@@ -413,6 +426,12 @@ struct MediaViewer: View {
                     // believes the viewer is focused after AppKit moved it.
                     isFocused = false
                     DispatchQueue.main.async { isFocused = true }
+                },
+                fullResolutionRAW: model.wantsFullResolutionRAW(item.url),
+                onImageLoaded: { url, loaded in
+                    loadedImage = loaded.map {
+                        LoadedImageInfo(url: url, source: $0.source, pixelSize: $0.pixelSize)
+                    }
                 }
             )
         case .video, .audio:
@@ -487,6 +506,10 @@ struct MediaViewer: View {
 
             Spacer()
 
+            if let rawItem = singleRAWItem {
+                rawResolutionBadge(for: rawItem)
+                Divider().frame(height: 16).overlay(Color.white.opacity(0.2))
+            }
             if showingSingleImage {
                 zoomControls
             } else if showingSingleVideo, let videoZoom {
@@ -570,6 +593,42 @@ struct MediaViewer: View {
         }
         .buttonStyle(.plain)
         .help(model.isFilmStripVisible ? "Hide film strip (T)" : "Show film strip (T)")
+    }
+
+    /// Shows whether the shown RAW is the camera's embedded JPEG or developed
+    /// from the sensor data (and at what pixel size), with a button to switch.
+    /// While a full-resolution development is in progress the previous image
+    /// stays on screen and the badge shows a spinner.
+    @ViewBuilder
+    private func rawResolutionBadge(for item: MediaItem) -> some View {
+        let wantsFull = model.wantsFullResolutionRAW(item.url)
+        let info = loadedImage?.url == item.url ? loadedImage : nil
+        let loading = info == nil || wantsFull != (info?.source == .rawFullResolution)
+
+        HStack(spacing: 8) {
+            if loading {
+                ProgressView().controlSize(.small)
+                Text(wantsFull ? "Developing full RAW…" : "Loading preview…")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.8))
+            } else if let info {
+                Label(info.source.badgeTitle, systemImage: info.source.badgeSymbol)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(info.source == .rawFullResolution ? .green : .yellow)
+                Text("\(Int(info.pixelSize.width)) × \(Int(info.pixelSize.height))")
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            pillButton(
+                wantsFull ? "Show Preview" : "Load Full RAW",
+                help: wantsFull
+                    ? "Show the camera’s embedded JPEG preview (R)"
+                    : "Develop the RAW at full sensor resolution (R)"
+            ) {
+                model.toggleFullResolutionRAW(item.url)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// Zoom toolbar for the single-image viewer: zoom out / level / zoom in,
@@ -707,6 +766,11 @@ struct MediaViewer: View {
             }
             // Y opens the free-text tag input for the shown item(s).
             hotkey("y", []) { model.beginTagging() }
+            // R switches a RAW between its embedded preview and a
+            // full-resolution development.
+            if let rawItem = singleRAWItem {
+                hotkey("r", []) { model.toggleFullResolutionRAW(rawItem.url) }
+            }
             if showingSingleVideo {
                 hotkey("k", []) { videoController?.togglePlay() }
                 hotkey("u", []) { videoController?.skip(by: -15) }
@@ -854,6 +918,34 @@ struct MediaViewer: View {
         // Arrow-key navigation is handled centrally via `.onKeyPress` on the
         // viewer (see `handleArrow`) so plain and Shift arrows disambiguate;
         // these buttons stay click-only.
+    }
+}
+
+// MARK: - RAW resolution badge
+
+/// What the single-image view is currently displaying.
+private struct LoadedImageInfo: Equatable {
+    let url: URL
+    let source: DecodedImageSource
+    let pixelSize: CGSize
+}
+
+private extension DecodedImageSource {
+    var badgeTitle: String {
+        switch self {
+        case .standard: return "Image"
+        case .rawEmbeddedPreview: return "Embedded Preview"
+        case .rawDecoded: return "RAW"
+        case .rawFullResolution: return "Full RAW"
+        }
+    }
+
+    var badgeSymbol: String {
+        switch self {
+        case .rawFullResolution: return "camera.aperture"
+        case .rawDecoded: return "camera.aperture"
+        default: return "photo"
+        }
     }
 }
 

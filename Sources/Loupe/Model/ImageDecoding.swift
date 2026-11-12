@@ -23,6 +23,19 @@ import UniformTypeIdentifiers
 /// decode that handles these files correctly. The black check samples a small
 /// grid of pixels on the already-downscaled result, so it costs essentially
 /// nothing on the normal path.
+/// Which decode path produced an image. Shown in the viewer so the user can
+/// tell a camera RAW's embedded JPEG from a real RAW development.
+enum DecodedImageSource: Sendable, Equatable {
+    /// A non-RAW image (JPEG, HEIC, PNG, …).
+    case standard
+    /// The camera-rendered JPEG embedded in a RAW file.
+    case rawEmbeddedPreview
+    /// Developed from the RAW sensor data (possibly scaled to the screen).
+    case rawDecoded
+    /// Developed from the RAW sensor data at native sensor resolution.
+    case rawFullResolution
+}
+
 enum ImageDecoding {
     /// Decodes `url` to a `CGImage` whose longest edge is capped at
     /// `maxPixelSize`, honoring EXIF orientation. Tries ImageIO's fast
@@ -40,8 +53,62 @@ enum ImageDecoding {
         maxPixelSize: Int,
         alwaysDecodeFromFullImage: Bool = false
     ) -> CGImage? {
+        decodeCGImageWithSource(
+            url: url, maxPixelSize: maxPixelSize,
+            alwaysDecodeFromFullImage: alwaysDecodeFromFullImage
+        )?.image
+    }
+
+    /// Same as `decodeCGImage`, also reporting which path produced the image.
+    ///
+    /// For camera RAW (e.g. Fujifilm RAF) with `alwaysDecodeFromFullImage`:
+    /// demosaicing the sensor data takes ~a second and hundreds of MB of
+    /// intermediates per image, which made fullscreen browsing slow and
+    /// memory-hungry. These files embed a camera-rendered JPEG (large on recent
+    /// bodies), so it's used when big enough for the screen; only otherwise is
+    /// the RAW actually developed (via CIRAWFilter — ImageIO's full-image RAW
+    /// path retains ~130 MB per decode that is never released, measured on an
+    /// X-T5 RAF).
+    static func decodeCGImageWithSource(
+        url: URL,
+        maxPixelSize: Int,
+        alwaysDecodeFromFullImage: Bool = false
+    ) -> (image: CGImage, source: DecodedImageSource)? {
         let maxPixel = max(1, maxPixelSize)
 
+        if alwaysDecodeFromFullImage, isRAW(url) {
+            if let source = CGImageSourceCreateWithURL(
+                url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+               CGImageSourceGetCount(source) > 0,
+               let preview = embeddedRAWPreview(from: source, maxPixelSize: maxPixel) {
+                return (preview, .rawEmbeddedPreview)
+            }
+            if let raw = rawFilterDecode(url: url, maxPixelSize: maxPixel) {
+                return (raw, .rawDecoded)
+            }
+        }
+
+        if let cg = decodeStandard(
+            url: url, maxPixelSize: maxPixel,
+            alwaysDecodeFromFullImage: alwaysDecodeFromFullImage
+        ) {
+            return (cg, .standard)
+        }
+        return nil
+    }
+
+    /// Develops a camera RAW at its native sensor resolution (no downscale),
+    /// for inspecting full detail. Expensive: ~a second and a sensor-sized
+    /// buffer (~160 MB for 40 MP), so only done on explicit request.
+    static func decodeFullResolutionRAW(url: URL) -> CGImage? {
+        rawFilterDecode(url: url, maxPixelSize: Int.max)
+    }
+
+    private static func decodeStandard(
+        url: URL,
+        maxPixelSize maxPixel: Int,
+        alwaysDecodeFromFullImage: Bool
+    ) -> CGImage? {
         if let cg = imageIOThumbnail(
             url: url,
             maxPixelSize: maxPixel,
@@ -83,25 +150,6 @@ enum ImageDecoding {
         }
 
         if alwaysDecodeFromFullImage {
-            // Camera RAW (e.g. Fujifilm RAF): demosaicing the sensor data takes
-            // ~a second and hundreds of MB of intermediates per image, which is
-            // what made fullscreen browsing slow and memory-hungry. These files
-            // embed a camera-rendered JPEG (full-size on recent bodies), so use
-            // it when it's big enough for the screen and only fall back to a
-            // real RAW decode when it isn't.
-            if isRAW(url) {
-                if let preview = embeddedRAWPreview(from: source, maxPixelSize: maxPixelSize) {
-                    return preview
-                }
-                // Preview too small: do a real RAW decode, but through
-                // CIRAWFilter. ImageIO's full-image RAW path retains ~130 MB
-                // per decode that is never released (measured on an X-T5
-                // RAF), which is what pushed the app to 10+ GB while browsing.
-                // CIRAWFilter plateaus at a stable footprint.
-                if let raw = rawFilterDecode(url: url, maxPixelSize: maxPixelSize) {
-                    return raw
-                }
-            }
             let fullLongest = fullImagePixelLongestEdge(source)
             return createThumbnail(
                 from: source, maxPixelSize: maxPixelSize, fromFullImage: true,
