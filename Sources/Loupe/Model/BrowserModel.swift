@@ -1070,10 +1070,12 @@ final class BrowserModel {
     private var duplicateTask: Task<Void, Never>?
 
     /// Files a duplicate search would cover: the selection when more than one
-    /// file is selected, otherwise everything in the current scope.
+    /// file is selected, otherwise everything in the current scope. Either way
+    /// the type and extension chip filters apply.
     var duplicateSearchItems: [MediaItem] {
         let selected = selectedMediaItems
-        return selected.count > 1 ? selected : scopedItems
+        let base = selected.count > 1 ? selected : scopedItems
+        return base.filter { passesChipFilters($0) }
     }
 
     /// Whether the search is limited to a multi-file selection.
