@@ -1718,7 +1718,9 @@ final class BrowserModel {
         // exception is the "Hidden" Library view (`showHiddenOnly`), which
         // flips the polarity to show only hidden items so they can be unhidden.
         if showHiddenOnly {
-            base = base.filter { hiddenItems.contains($0.id) }
+            // The Hidden view is a library-wide scope: ignore any folder
+            // selection left over from before so every hidden item shows.
+            base = allItems.filter { hiddenItems.contains($0.id) }
         } else if !hiddenItems.isEmpty {
             base = base.filter { !hiddenItems.contains($0.id) }
         }
