@@ -974,14 +974,13 @@ final class BrowserModel {
 
     /// Bounded, concurrent OCR pass; results land progressively on the main
     /// actor. Shares the single-pass guard and progress channel with
-    /// classification and face recognition. Opens the text browser on finish
-    /// when anything was found.
+    /// classification and face recognition. The text browser isn't opened
+    /// automatically; the sidebar's Text Tags surface the results.
     private func runOCR(items: [MediaItem]) {
         guard !isRunningClassification else { return }
         let pending = items.filter { $0.kind == .image && ocrText[$0.id] == nil }
         guard !pending.isEmpty else {
-            // Everything requested was already scanned: just show the results.
-            if ocrTextCount > 0 { showOCRPanel = true }
+            // Everything requested was already scanned: nothing to do.
             return
         }
 
@@ -1021,7 +1020,6 @@ final class BrowserModel {
 
             self.isClassifying = false
             self.isRunningClassification = false
-            if self.ocrTextCount > 0 { self.showOCRPanel = true }
         }
     }
 
