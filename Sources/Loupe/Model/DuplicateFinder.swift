@@ -120,26 +120,69 @@ enum DuplicateFinder {
             if ra != rb { parent[max(ra, rb)] = min(ra, rb) }
         }
 
-        let bySize = Dictionary(grouping: items.indices) { items[$0].fileSize }
-        let hashCandidates = bySize.filter { $0.key > 0 && $0.value.count > 1 }
-            .values.flatMap { $0 }.sorted()
         let fuzzyCandidates = sensitivity.maxDistance == nil
             ? [] : items.indices.filter { family(of: items[$0].kind) != nil }
-        var total = hashCandidates.count
+        let urls = items.map(\.url)
+
+        // Exact matching narrows candidates in cheap stages so most files are
+        // never read in full:
+        //   1. size — free, from the scan;
+        //   2. hard links to one file are dropped (they free no space);
+        //   3. a "quick hash" of the first and last 64 KB, which separates
+        //      nearly all same-size files that differ;
+        //   4. a full SHA-256, only for files whose quick hashes still collide.
+        // Small files (≤ 128 KB) get their full hash directly in stage 3.
+        let bySize = Dictionary(grouping: items.indices) { items[$0].fileSize }
+        var quickCandidates: [Int] = []
+        for (size, indices) in bySize where size > 0 && indices.count > 1 {
+            var seenFiles = Set<AnyHashable>()
+            for i in indices.sorted() {
+                if let id = fileIdentifier(of: urls[i]), !seenFiles.insert(id).inserted { continue }
+                quickCandidates.append(i)
+            }
+        }
+        quickCandidates.sort()
+        // Disk-bound work: too many readers thrash spinning/network volumes.
+        let hashLimit = min(limit, 6)
+        var total = quickCandidates.count
         var done = 0
         await progress(0, total)
 
-        let urls = items.map(\.url)
-        let hashes = await parallelMap(hashCandidates, limit: limit, onDone: {
+        let quick = await parallelMap(quickCandidates, limit: hashLimit, onDone: {
+            done += 1
+            await progress(done, total)
+        }, work: { quickHash(of: urls[$0], size: items[$0].fileSize) })
+        if Task.isCancelled { return [] }
+
+        var byQuick: [HashKey: [Int]] = [:]
+        for (n, idx) in quickCandidates.enumerated() {
+            guard let q = quick[n] else { continue }
+            byQuick[HashKey(size: items[idx].fileSize, digest: q.digest, complete: q.complete),
+                    default: []].append(idx)
+        }
+        var needFull: [Int] = []
+        for (key, indices) in byQuick where indices.count > 1 {
+            if key.complete {
+                // The quick hash already covered the whole file.
+                for i in indices.dropFirst() { union(indices[0], i) }
+            } else {
+                needFull.append(contentsOf: indices)
+            }
+        }
+        needFull.sort()
+        total += needFull.count
+        await progress(done, total)
+
+        let full = await parallelMap(needFull, limit: hashLimit, onDone: {
             done += 1
             await progress(done, total)
         }, work: { contentHash(of: urls[$0]) })
         if Task.isCancelled { return [] }
 
-        var seen: [String: Int] = [:]
-        for (n, idx) in hashCandidates.enumerated() {
-            guard let h = hashes[n] else { continue }
-            let key = "\(items[idx].fileSize)-\(h)"
+        var seen: [HashKey: Int] = [:]
+        for (n, idx) in needFull.enumerated() {
+            guard let digest = full[n] else { continue }
+            let key = HashKey(size: items[idx].fileSize, digest: digest, complete: true)
             if let first = seen[key] { union(first, idx) } else { seen[key] = idx }
         }
         let exactRoot = (0..<items.count).map { root($0) }
@@ -252,20 +295,63 @@ enum DuplicateFinder {
 
     // MARK: - Hashing
 
-    /// SHA-256 of the file's bytes, streamed so large videos don't load fully.
-    private static func contentHash(of url: URL) -> String? {
+    private struct HashKey: Hashable {
+        let size: Int64
+        let digest: Data
+        /// Whether `digest` covers the entire file (vs. a head+tail sample).
+        let complete: Bool
+    }
+
+    private static let sampleLength = 64 * 1024
+    private static let readChunk = 4 << 20
+
+    /// Identity of the underlying file, so hard links to one file compare equal.
+    private static func fileIdentifier(of url: URL) -> AnyHashable? {
+        guard let id = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey])
+            .fileResourceIdentifier as? NSObject
+        else { return nil }
+        return AnyHashable(id)
+    }
+
+    /// SHA-256 of the first and last 64 KB. For files small enough that those
+    /// overlap, it hashes the whole file and reports `complete`.
+    private static func quickHash(of url: URL, size: Int64) -> (digest: Data, complete: Bool)? {
+        if size <= Int64(sampleLength * 2) {
+            guard let digest = contentHash(of: url) else { return nil }
+            return (digest, true)
+        }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        do {
+            guard let head = try handle.read(upToCount: sampleLength), head.count == sampleLength
+            else { return nil }
+            hasher.update(data: head)
+            try handle.seek(toOffset: UInt64(size) - UInt64(sampleLength))
+            guard let tail = try handle.read(upToCount: sampleLength), tail.count == sampleLength
+            else { return nil }
+            hasher.update(data: tail)
+        } catch {
+            return nil
+        }
+        return (Data(hasher.finalize()), false)
+    }
+
+    /// SHA-256 of the file's bytes, streamed in large chunks so big videos
+    /// don't load fully into memory.
+    private static func contentHash(of url: URL) -> Data? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var hasher = SHA256()
         while true {
             if Task.isCancelled { return nil }
             let chunk: Data? = autoreleasepool {
-                (try? handle.read(upToCount: 1 << 20)) ?? nil
+                (try? handle.read(upToCount: readChunk)) ?? nil
             }
             guard let chunk, !chunk.isEmpty else { break }
             hasher.update(data: chunk)
         }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return Data(hasher.finalize())
     }
 
     private static func similar(_ a: Fingerprint, _ b: Fingerprint, _ maxDistance: Int) -> Bool {
