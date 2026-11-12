@@ -231,6 +231,10 @@ struct DuplicatesView: View {
             in: RoundedRectangle(cornerRadius: 9))
         .contentShape(Rectangle())
         .id(item.url)
+        .onTapGesture(count: 2) {
+            cursor = item.url
+            previewing = PreviewTarget(groupID: group.id, url: item.url)
+        }
         .onTapGesture { cursor = item.url }
         .contextMenu {
             Button("Preview") {
@@ -429,7 +433,7 @@ struct DuplicatesView: View {
 
     /// Handles a key from the window-level monitor; returns true if consumed.
     /// Grid: arrows move the cursor (←/→ through the files in order, ↑/↓ between
-    /// groups), Space previews, Return toggles Keep/Remove. Preview: ←/→ step
+    /// groups), Space / Return toggle Keep/Remove (double-click opens the preview). Preview: ←/→ step
     /// through the group's files, Return toggles Keep/Remove.
     private func handleKey(_ code: UInt16) -> Bool {
         guard !confirmTrash, !model.isFindingDuplicates else { return false }
@@ -452,11 +456,7 @@ struct DuplicatesView: View {
         case 123, 124, 125, 126:
             moveCursor(code, in: groups)
             return true
-        case 49:
-            guard let (group, item) = cursorItem(in: groups) else { return false }
-            previewing = PreviewTarget(groupID: group.id, url: item.url)
-            return true
-        case 36, 76:
+        case 49, 36, 76:
             guard let (group, item) = cursorItem(in: groups) else { return false }
             toggle(item, in: group)
             return true
