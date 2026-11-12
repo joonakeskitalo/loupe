@@ -33,11 +33,13 @@ struct DuplicatesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            // The sheet's own buttons are disabled while previewing so they
+            // can't hold focus or show a highlight through the dimmed overlay.
+            header.disabled(previewing != nil)
             Divider()
             content
             Divider()
-            footer
+            footer.disabled(previewing != nil)
         }
         .frame(minWidth: 760, idealWidth: 960, maxWidth: .infinity,
                minHeight: 520, idealHeight: 680, maxHeight: .infinity)
