@@ -210,15 +210,54 @@ enum DuplicateFinder {
 
             // Videos decode frames and are heavy, so fewer run at once.
             let families: [(Fingerprint.Family, Int)] = [
-                (.image, limit), (.video, 2), (.audio, max(2, limit / 2)), (.document, limit),
+                (.image, limit), (.video, min(max(2, limit), 4)), (.audio, max(2, limit / 2)), (.document, limit),
             ]
             for (fam, familyLimit) in families {
                 let indices = reps.filter { family(of: items[$0].kind) == fam }
                 guard !indices.isEmpty else { continue }
-                let prints = await parallelMap(indices, limit: familyLimit, onDone: {
-                    done += 1
+                let prints: [Fingerprint?]
+                if fam == .video {
+                    // Read durations first (metadata only). A video whose length
+                    // matches no other video can't be a duplicate, so it never
+                    // needs its frames decoded.
+                    let durations = await parallelMap(indices, limit: limit, onDone: {}, work: {
+                        await videoDuration(of: urls[$0])
+                    })
+                    if Task.isCancelled { return [] }
+                    let candidate = durationCandidates(durations)
+                    let skipped = indices.indices.filter { !candidate[$0] }
+                    done += skipped.count
                     await progress(done, total)
-                }, work: { await fingerprint(of: items[$0], family: fam) })
+
+                    // Skipped videos in exact-copy groups still want a pixel size
+                    // for display; that only needs the track header.
+                    var classCounts: [Int: Int] = [:]
+                    for i in items.indices { classCounts[root(i), default: 0] += 1 }
+                    let needSize = skipped.filter { (classCounts[indices[$0]] ?? 0) > 1 }
+                    let skippedSizes = await parallelMap(needSize, limit: limit, onDone: {}, work: {
+                        await videoSize(of: AVURLAsset(url: urls[indices[$0]]))
+                    })
+                    for (n, slot) in needSize.enumerated() {
+                        if let size = skippedSizes[n] { sizes[indices[slot]] = size }
+                    }
+                    if Task.isCancelled { return [] }
+
+                    let todo = indices.indices.filter { candidate[$0] }
+                    let results = await parallelMap(todo, limit: familyLimit, onDone: {
+                        done += 1
+                        await progress(done, total)
+                    }, work: {
+                        await videoFingerprint(of: urls[indices[$0]], duration: durations[$0] ?? 0)
+                    })
+                    var merged = [Fingerprint?](repeating: nil, count: indices.count)
+                    for (n, slot) in todo.enumerated() { merged[slot] = results[n] }
+                    prints = merged
+                } else {
+                    prints = await parallelMap(indices, limit: familyLimit, onDone: {
+                        done += 1
+                        await progress(done, total)
+                    }, work: { await fingerprint(of: items[$0], family: fam) })
+                }
                 if Task.isCancelled { return [] }
 
                 // Clusters never span families, so each family gets its own set.
@@ -442,7 +481,9 @@ enum DuplicateFinder {
     private static func fingerprint(of item: MediaItem, family: Fingerprint.Family) async -> Fingerprint? {
         switch family {
         case .image: return imageFingerprint(of: item.url)
-        case .video: return await videoFingerprint(of: item.url)
+        case .video:
+            guard let duration = await videoDuration(of: item.url) else { return nil }
+            return await videoFingerprint(of: item.url, duration: duration)
         case .audio: return await audioFingerprint(of: item.url)
         case .document: return documentFingerprint(of: item)
         }
@@ -517,11 +558,12 @@ enum DuplicateFinder {
     /// dHashes of frames at 15%, 50% and 85% of the runtime, plus the duration.
     /// Containers AVFoundation can't open (mkv/webm) return nil and are only
     /// matched as exact copies.
-    private static func videoFingerprint(of url: URL) async -> Fingerprint? {
+    private static func videoFingerprint(of url: URL, duration: Double) async -> Fingerprint? {
         let asset = AVURLAsset(url: url)
-        guard let duration = try? await asset.load(.duration).seconds,
-              duration.isFinite, duration > 0
-        else { return nil }
+        guard duration.isFinite, duration > 0 else { return nil }
+
+        // Read the track size while the frames decode.
+        async let size = videoSize(of: asset)
 
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -530,25 +572,62 @@ enum DuplicateFinder {
         generator.requestedTimeToleranceBefore = tolerance
         generator.requestedTimeToleranceAfter = tolerance
 
-        var words: [UInt64] = []
+        // One batched request lets AVFoundation schedule the seeks together.
+        // Results can arrive in any order, so slot them by requested time.
+        let times = [0.15, 0.5, 0.85].map { CMTime(seconds: duration * $0, preferredTimescale: 600) }
+        var hashes = [UInt64?](repeating: nil, count: times.count)
         var aspect: Double?
-        for fraction in [0.15, 0.5, 0.85] {
+        for await result in generator.images(for: times) {
             if Task.isCancelled { return nil }
-            let time = CMTime(seconds: duration * fraction, preferredTimescale: 600)
-            guard let frame = try? await generator.image(at: time).image,
+            guard let frame = try? result.image,
+                  let slot = times.firstIndex(of: result.requestedTime),
                   let hash = differenceHash(of: frame)
             else { return nil }
-            words.append(hash)
+            hashes[slot] = hash
             if aspect == nil, frame.height > 0 { aspect = Double(frame.width) / Double(frame.height) }
         }
+        let words = hashes.compactMap { $0 }
+        guard words.count == times.count else { return nil }
 
-        var size: CGSize?
-        if let track = try? await asset.loadTracks(withMediaType: .video).first,
-           let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform) {
-            let rect = CGRect(origin: .zero, size: natural).applying(transform)
-            size = CGSize(width: abs(rect.width), height: abs(rect.height))
+        return Fingerprint(
+            family: .video, words: words, aspect: aspect, scalar: duration, size: await size)
+    }
+
+    /// Runtime in seconds from container metadata, or nil if unreadable.
+    private static func videoDuration(of url: URL) async -> Double? {
+        guard let seconds = try? await AVURLAsset(url: url).load(.duration).seconds,
+              seconds.isFinite, seconds > 0
+        else { return nil }
+        return seconds
+    }
+
+    /// Display size of the first video track, with its transform applied.
+    private static func videoSize(of asset: AVURLAsset) async -> CGSize? {
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform)
+        else { return nil }
+        let rect = CGRect(origin: .zero, size: natural).applying(transform)
+        return CGSize(width: abs(rect.width), height: abs(rect.height))
+    }
+
+    /// Flags videos whose duration is within `similar()`'s tolerance of at least
+    /// one other video's. The rest can't match anything. Durations are sorted,
+    /// and the tolerance only widens slowly, so once a later video is out of
+    /// range every one after it is too.
+    private static func durationCandidates(_ durations: [Double?]) -> [Bool] {
+        var flags = [Bool](repeating: false, count: durations.count)
+        let order = durations.indices.filter { durations[$0] != nil }
+            .sorted { durations[$0]! < durations[$1]! }
+        for (a, i) in order.enumerated() {
+            let x = durations[i]!
+            for j in order[(a + 1)...] {
+                let y = durations[j]!
+                if y - x > max(1.5, 0.03 * y) { break }
+                flags[i] = true
+                flags[j] = true
+            }
         }
-        return Fingerprint(family: .video, words: words, aspect: aspect, scalar: duration, size: size)
+        return flags
     }
 
     // MARK: - Audio fingerprint
