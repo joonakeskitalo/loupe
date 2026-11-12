@@ -1803,15 +1803,24 @@ final class BrowserModel {
         // text after the minus are excluded. So "beach -sunset" keeps names with
         // "beach" but drops any that also contain "sunset". A bare "-" (nothing
         // after it) is ignored.
-        var includeTerms: [String] = []
-        var excludeTerms: [String] = []
-        for rawTerm in searchText.split(whereSeparator: { $0 == "," || $0.isWhitespace }) {
-            if rawTerm.first == "-" {
-                let term = String(rawTerm.dropFirst())
-                if !term.isEmpty { excludeTerms.append(term) }
-            } else {
-                includeTerms.append(String(rawTerm))
+        //
+        // A "|" separates alternatives (OR): "beach|sunset" matches names with
+        // either word. Each alternative is parsed independently, so
+        // "red car|blue bike -old" means (red AND car) OR (blue AND bike AND
+        // NOT old). Empty alternatives (e.g. a trailing "|") are dropped.
+        var alternatives: [(include: [String], exclude: [String])] = []
+        for part in searchText.split(separator: "|", omittingEmptySubsequences: true) {
+            var include: [String] = []
+            var exclude: [String] = []
+            for rawTerm in part.split(whereSeparator: { $0 == "," || $0.isWhitespace }) {
+                if rawTerm.first == "-" {
+                    let term = String(rawTerm.dropFirst())
+                    if !term.isEmpty { exclude.append(term) }
+                } else {
+                    include.append(String(rawTerm))
+                }
             }
+            if !include.isEmpty || !exclude.isEmpty { alternatives.append((include, exclude)) }
         }
         // Match honors `caseSensitiveSearch`: off (the default) folds case via
         // the localized case-insensitive contains; on compares case exactly.
@@ -1825,14 +1834,12 @@ final class BrowserModel {
             guard useOCR, let text = self.ocrText[item.id], !text.isEmpty else { return false }
             return matches(text, term)
         }
-        if !includeTerms.isEmpty {
+        if !alternatives.isEmpty {
             base = base.filter { item in
-                includeTerms.allSatisfy { matchesNameOrText(item, $0) }
-            }
-        }
-        if !excludeTerms.isEmpty {
-            base = base.filter { item in
-                !excludeTerms.contains { matchesNameOrText(item, $0) }
+                alternatives.contains { alt in
+                    alt.include.allSatisfy { matchesNameOrText(item, $0) }
+                        && !alt.exclude.contains { matchesNameOrText(item, $0) }
+                }
             }
         }
         return base
