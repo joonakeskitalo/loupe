@@ -298,6 +298,7 @@ private struct TaggingTextField: NSViewRepresentable {
         coordinator.removeMonitor()
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: TaggingTextField
         weak var field: NSTextField?
@@ -335,48 +336,64 @@ private struct TaggingTextField: NSViewRepresentable {
         /// (field empty, no modifiers) and let every other key type normally.
         func installMonitor() {
             guard monitor == nil else { return }
+            // AppKit delivers local monitors on the main thread, but the closure
+            // isn't main-actor isolated in its signature, so assert it.
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, let field = self.field,
-                      field.window?.isKeyWindow == true,
-                      field.currentEditor() != nil  // field is focused
-                else { return event }
+                let incoming = EventBox(event: event)
+                return MainActor.assumeIsolated {
+                    guard let self else { return incoming }
+                    return EventBox(event: self.handle(incoming.event))
+                }.event
+            }
+        }
 
-                // Ignore ⌘/⌃/⌥ combos (their own shortcuts). Shift is allowed —
-                // it's the "extend selection" modifier for the arrow keys.
-                let mods = event.modifierFlags.intersection([.command, .control, .option])
-                guard mods.isEmpty, field.stringValue.isEmpty else { return event }
+        /// Carries a non-Sendable `NSEvent` across `assumeIsolated`; the event
+        /// never leaves the main thread.
+        private struct EventBox: @unchecked Sendable { let event: NSEvent? }
 
-                let shift = event.modifierFlags.contains(.shift)
+        /// Returns `nil` when the event was consumed, otherwise the event.
+        private func handle(_ event: NSEvent?) -> NSEvent? {
+            guard let event else { return nil }
+            guard let field = self.field,
+                  field.window?.isKeyWindow == true,
+                  field.currentEditor() != nil  // field is focused
+            else { return event }
 
-                // Browse keys: the arrow keys navigate the grid (←/→ by one
-                // item, ↑/↓ by a full row), with Shift extending the
-                // multi-selection. Letters are left to type into the field —
-                // the input is for tag text, so only arrows navigate here.
-                // Active only while the draft is empty so they don't fight
-                // cursor movement.
-                let direction: BrowserModel.MoveDirection?
-                switch event.keyCode {
-                case 123: direction = .left
-                case 124: direction = .right
-                case 126: direction = .up
-                case 125: direction = .down
-                default:  direction = nil
-                }
-                if let direction {
-                    if self.parent.onNavigate(direction, shift) { return nil }
-                    return event
-                }
+            // Ignore ⌘/⌃/⌥ combos (their own shortcuts). Shift is allowed —
+            // it's the "extend selection" modifier for the arrow keys.
+            let mods = event.modifierFlags.intersection([.command, .control, .option])
+            guard mods.isEmpty, field.stringValue.isEmpty else { return event }
 
-                // Quick-assign digits 1–9 (plain only — Shift+digit is a
-                // symbol, not a tag shortcut).
-                if !shift,
-                   let ch = event.charactersIgnoringModifiers, ch.count == 1,
-                   let digit = Int(ch), (1...9).contains(digit),
-                   self.parent.onDigit(digit) {
-                    return nil
-                }
+            let shift = event.modifierFlags.contains(.shift)
+
+            // Browse keys: the arrow keys navigate the grid (←/→ by one
+            // item, ↑/↓ by a full row), with Shift extending the
+            // multi-selection. Letters are left to type into the field —
+            // the input is for tag text, so only arrows navigate here.
+            // Active only while the draft is empty so they don't fight
+            // cursor movement.
+            let direction: BrowserModel.MoveDirection?
+            switch event.keyCode {
+            case 123: direction = .left
+            case 124: direction = .right
+            case 126: direction = .up
+            case 125: direction = .down
+            default:  direction = nil
+            }
+            if let direction {
+                if self.parent.onNavigate(direction, shift) { return nil }
                 return event
             }
+
+            // Quick-assign digits 1–9 (plain only — Shift+digit is a
+            // symbol, not a tag shortcut).
+            if !shift,
+               let ch = event.charactersIgnoringModifiers, ch.count == 1,
+               let digit = Int(ch), (1...9).contains(digit),
+               self.parent.onDigit(digit) {
+                return nil
+            }
+            return event
         }
 
         func removeMonitor() {
