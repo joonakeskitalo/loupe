@@ -269,6 +269,8 @@ struct LoupeCommands: Commands {
             .keyboardShortcut("t", modifiers: [.command, .option])
             .disabled(!canClassify)
 
+            Button("Cancel Text Extraction") { model?.cancelOCR() }
+                .disabled(!(model?.isCancellablePass ?? false))
             Button("View Recognized Text…") { model?.showOCRPanel = true }
                 .disabled((model?.ocrTextCount ?? 0) == 0)
 

@@ -28,20 +28,27 @@ enum TextRecognizer {
     /// concurrently without blocking the main actor. If the work hangs, it is
     /// abandoned after `timeout` and the caller moves on.
     static func recognizeText(in url: URL) async -> String? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
-            let gate = ResumeOnce(continuation)
-            let work = Task.detached(priority: .utility) {
-                gate.resume(await perform(on: url))
+        let pending = Pending()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+                let gate = ResumeOnce(continuation)
+                pending.attach(gate)
+                let work = Task.detached(priority: .utility) {
+                    if gate.resume(await perform(on: url)) { pending.cancelTasks() }
+                }
+                let timer = Task.detached(priority: .utility) {
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    if gate.resume(nil) { pending.cancelTasks() }
+                }
+                pending.track([work, timer])
             }
-            Task.detached(priority: .utility) {
-                try? await Task.sleep(for: timeout)
-                guard gate.resume(nil) else { return }
-                work.cancel()
-            }
+        } onCancel: {
+            pending.cancel()
         }
     }
 
-    /// Resumes a continuation at most once, whichever of work/timeout is first.
+    /// Resumes a continuation at most once, whichever of work/timeout/cancel
+    /// is first.
     private final class ResumeOnce: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<String?, Never>?
@@ -55,6 +62,48 @@ enum TextRecognizer {
             guard let c else { return false }
             c.resume(returning: value)
             return true
+        }
+    }
+
+    /// Ties one recognition's gate and helper tasks to task cancellation, so
+    /// cancelling the OCR pass returns immediately instead of waiting on Vision.
+    private final class Pending: @unchecked Sendable {
+        private let lock = NSLock()
+        private var gate: ResumeOnce?
+        private var tasks: [Task<Void, Never>] = []
+        private var cancelled = false
+
+        func attach(_ gate: ResumeOnce) {
+            lock.lock()
+            self.gate = gate
+            let already = cancelled
+            lock.unlock()
+            if already { gate.resume(nil) }
+        }
+
+        func track(_ new: [Task<Void, Never>]) {
+            lock.lock()
+            tasks = new
+            let already = cancelled
+            lock.unlock()
+            if already { new.forEach { $0.cancel() } }
+        }
+
+        func cancelTasks() {
+            lock.lock()
+            let current = tasks
+            lock.unlock()
+            current.forEach { $0.cancel() }
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let gate = self.gate
+            let current = tasks
+            lock.unlock()
+            gate?.resume(nil)
+            current.forEach { $0.cancel() }
         }
     }
 

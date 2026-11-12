@@ -435,6 +435,17 @@ struct ContentView: View {
                     Text("\(model.classifyActivity) \(model.classifyProgress)/\(model.classifyTotal)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                    if model.isCancellablePass {
+                        Button {
+                            model.cancelOCR()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .symbolRenderingMode(.hierarchical)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cancel text recognition")
+                        .accessibilityLabel("Cancel text recognition")
+                    }
                 }
                 // Toolbar items sit in a capsule on macOS 26; without padding
                 // the content touches its edges.

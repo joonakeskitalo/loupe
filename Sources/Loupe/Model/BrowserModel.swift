@@ -956,6 +956,9 @@ final class BrowserModel {
         if grouping == .ocrText { invalidateDisplayCache() }
     }
 
+    @ObservationIgnored private var ocrTask: Task<Void, Never>?
+    /// True while the running pass can be cancelled (text recognition).
+    private(set) var isCancellablePass = false
     /// Whether the recognized-text browser sheet is showing.
     var showOCRPanel = false
 
@@ -1002,11 +1005,12 @@ final class BrowserModel {
 
         isRunningClassification = true
         isClassifying = true
+        isCancellablePass = true
         classifyActivity = "Reading Text"
         classifyProgress = 0
         classifyTotal = pending.count
 
-        Task { @MainActor in
+        ocrTask = Task { @MainActor in
             // Vision's accurate recognizer saturates the Neural Engine/GPU on
             // its own; more than a few in flight just adds memory pressure and
             // contention with the UI.
@@ -1017,7 +1021,7 @@ final class BrowserModel {
                 var inFlight = 0
 
                 func addNext() {
-                    guard let item = iterator.next() else { return }
+                    guard !Task.isCancelled, let item = iterator.next() else { return }
                     inFlight += 1
                     group.addTask {
                         (item.id, await TextRecognizer.recognizeText(in: item.url))
@@ -1037,7 +1041,15 @@ final class BrowserModel {
 
             self.isClassifying = false
             self.isRunningClassification = false
+            self.isCancellablePass = false
+            self.ocrTask = nil
         }
+    }
+
+    /// Stops a running text-recognition pass. Images already read keep their
+    /// text; the rest stay unscanned so a later run picks them up.
+    func cancelOCR() {
+        ocrTask?.cancel()
     }
 
     // MARK: - Duplicates
