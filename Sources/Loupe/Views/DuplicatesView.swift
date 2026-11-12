@@ -13,6 +13,8 @@ struct DuplicatesView: View {
     @State private var isTrashing = false
     /// The file shown in the large preview, if any.
     @State private var previewing: PreviewTarget?
+    /// The tile the keyboard cursor is on (highlighted; arrow keys move it).
+    @State private var cursor: URL?
     /// Transport of the video/audio currently in the preview, for its hotkeys.
     @State private var playback: (any PlaybackController)?
 
@@ -40,6 +42,7 @@ struct DuplicatesView: View {
         .frame(minWidth: 760, idealWidth: 960, maxWidth: .infinity,
                minHeight: 520, idealHeight: 680, maxHeight: .infinity)
         .background(ResizableSheet(minSize: CGSize(width: 760, height: 520)))
+        .background(KeyCommandMonitor { handleKey($0) })
         .overlay { previewOverlay }
         .onAppear { resetMarks() }
         .onChange(of: model.duplicateRunID) { resetMarks() }
@@ -111,13 +114,18 @@ struct DuplicatesView: View {
         } else if model.duplicateGroups.isEmpty {
             placeholder("No duplicates found.")
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(model.duplicateGroups) { group in
-                        groupView(group)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        ForEach(model.duplicateGroups) { group in
+                            groupView(group)
+                        }
                     }
+                    .padding(12)
                 }
-                .padding(12)
+                .onChange(of: cursor) {
+                    if let cursor { withAnimation { proxy.scrollTo(cursor, anchor: .center) } }
+                }
             }
         }
     }
@@ -153,6 +161,7 @@ struct DuplicatesView: View {
 
     private func tile(_ item: MediaItem, in group: DuplicateGroup) -> some View {
         let isMarked = marked.contains(item.url)
+        let isCursor = cursor == item.url
         return VStack(alignment: .leading, spacing: 3) {
             ZStack(alignment: .topLeading) {
                 DuplicateThumbnail(item: item, size: Self.tileSize)
@@ -168,6 +177,7 @@ struct DuplicatesView: View {
                     .foregroundStyle(.white)
                     .padding(6)
                 Button {
+                    cursor = item.url
                     previewing = PreviewTarget(groupID: group.id, url: item.url)
                 } label: {
                     Image(systemName: "eye.circle.fill")
@@ -196,10 +206,21 @@ struct DuplicatesView: View {
                 .lineLimit(1)
         }
         .frame(width: Self.tileSize)
+        .padding(4)
+        .background(
+            isCursor ? Color.accentColor.opacity(0.2) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 9))
         .contentShape(Rectangle())
-        .onTapGesture { toggle(item, in: group) }
+        .id(item.url)
+        .onTapGesture {
+            cursor = item.url
+            toggle(item, in: group)
+        }
         .contextMenu {
-            Button("Preview") { previewing = PreviewTarget(groupID: group.id, url: item.url) }
+            Button("Preview") {
+                cursor = item.url
+                previewing = PreviewTarget(groupID: group.id, url: item.url)
+            }
             Button("Keep Only This One") { keepOnly(item, in: group) }
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([item.url])
@@ -271,12 +292,10 @@ struct DuplicatesView: View {
                         Button("Previous", systemImage: "chevron.left") {
                             step(-1, in: group, from: index)
                         }
-                        .keyboardShortcut(.leftArrow, modifiers: [])
                         .disabled(group.items.count < 2)
                         Button("Next", systemImage: "chevron.right") {
                             step(1, in: group, from: index)
                         }
-                        .keyboardShortcut(.rightArrow, modifiers: [])
                         .disabled(group.items.count < 2)
                         Spacer()
                         Button(isMarked ? "Keep This File" : "Mark for Removal") {
@@ -335,7 +354,80 @@ struct DuplicatesView: View {
         let count = group.items.count
         guard count > 1 else { return }
         let next = (index + delta + count) % count
-        previewing = PreviewTarget(groupID: group.id, url: group.items[next].url)
+        let url = group.items[next].url
+        cursor = url
+        previewing = PreviewTarget(groupID: group.id, url: url)
+    }
+
+    // MARK: Keyboard
+
+    /// Handles a key from the window-level monitor; returns true if consumed.
+    /// Grid: arrows move the cursor (←/→ through the files in order, ↑/↓ between
+    /// groups), Space previews, Return toggles Keep/Remove. Preview: ←/→ step
+    /// through the group's files, Return toggles Keep/Remove.
+    private func handleKey(_ code: UInt16) -> Bool {
+        guard !confirmTrash, !model.isFindingDuplicates else { return false }
+        let groups = model.duplicateGroups
+        guard !groups.isEmpty else { return false }
+
+        if let target = previewing {
+            guard let group = groups.first(where: { $0.id == target.groupID }),
+                  let index = group.items.firstIndex(where: { $0.url == target.url })
+            else { return false }
+            switch code {
+            case 123: step(-1, in: group, from: index); return true
+            case 124: step(1, in: group, from: index); return true
+            case 36, 76: toggle(group.items[index], in: group); return true
+            default: return false
+            }
+        }
+
+        switch code {
+        case 123, 124, 125, 126:
+            moveCursor(code, in: groups)
+            return true
+        case 49:
+            guard let (group, item) = cursorItem(in: groups) else { return false }
+            previewing = PreviewTarget(groupID: group.id, url: item.url)
+            return true
+        case 36, 76:
+            guard let (group, item) = cursorItem(in: groups) else { return false }
+            toggle(item, in: group)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func cursorItem(in groups: [DuplicateGroup]) -> (DuplicateGroup, MediaItem)? {
+        guard let cursor else { return nil }
+        for group in groups {
+            if let item = group.items.first(where: { $0.url == cursor }) { return (group, item) }
+        }
+        return nil
+    }
+
+    private func moveCursor(_ code: UInt16, in groups: [DuplicateGroup]) {
+        guard let current = cursor,
+              let gi = groups.firstIndex(where: { $0.items.contains { $0.url == current } }),
+              let ii = groups[gi].items.firstIndex(where: { $0.url == current })
+        else {
+            cursor = groups.first?.items.first?.url
+            return
+        }
+        switch code {
+        case 123, 124:
+            // Walk the files in display order, crossing group boundaries.
+            let flat = groups.flatMap(\.items)
+            guard let pos = flat.firstIndex(where: { $0.url == current }) else { return }
+            let next = min(max(pos + (code == 124 ? 1 : -1), 0), flat.count - 1)
+            cursor = flat[next].url
+        default:
+            let target = gi + (code == 125 ? 1 : -1)
+            guard groups.indices.contains(target) else { return }
+            let items = groups[target].items
+            cursor = items[min(ii, items.count - 1)].url
+        }
     }
 
     // MARK: Footer
@@ -363,6 +455,7 @@ struct DuplicatesView: View {
 
     /// Marks everything except each group's suggested keeper.
     private func resetMarks() {
+        cursor = model.duplicateGroups.first?.items.first?.url
         marked = Set(model.duplicateGroups.flatMap { $0.items.dropFirst().map(\.url) })
     }
 
@@ -394,6 +487,7 @@ struct DuplicatesView: View {
             let present = Set(model.duplicateGroups.flatMap { $0.items.map(\.url) })
             marked.formIntersection(present)
             if let target = previewing, !present.contains(target.url) { previewing = nil }
+            if let c = cursor, !present.contains(c) { cursor = model.duplicateGroups.first?.items.first?.url }
             isTrashing = false
         }
     }
@@ -476,5 +570,58 @@ private final class ResizableSheetView: NSView {
     @objc private func didEndLiveResize(_ note: Notification) {
         guard let size = window?.contentView?.frame.size else { return }
         UserDefaults.standard.set(NSStringFromSize(size), forKey: Self.sizeKey)
+    }
+}
+
+/// Window-level key monitor for the duplicates sheet. SwiftUI shortcuts stop
+/// firing once a Quick Look or video view takes first responder, so arrow keys
+/// are caught here, before the responder chain. The handler returns true to
+/// consume a key. Ignores modified keys and text editing.
+private struct KeyCommandMonitor: NSViewRepresentable {
+    let handler: (UInt16) -> Bool
+
+    func makeNSView(context: Context) -> KeyCommandMonitorView {
+        let view = KeyCommandMonitorView()
+        view.handler = handler
+        return view
+    }
+
+    func updateNSView(_ nsView: KeyCommandMonitorView, context: Context) {
+        nsView.handler = handler
+    }
+}
+
+@MainActor
+private final class KeyCommandMonitorView: NSView {
+    var handler: ((UInt16) -> Bool)?
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let code = event.keyCode
+            let modified = !event.modifierFlags
+                .intersection([.command, .control, .option, .shift]).isEmpty
+            let consumed = MainActor.assumeIsolated {
+                self?.consume(keyCode: code, modified: modified) ?? false
+            }
+            return consumed ? nil : event
+        }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil, let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func consume(keyCode: UInt16, modified: Bool) -> Bool {
+        guard !modified, let window, window.isKeyWindow,
+              !(window.firstResponder is NSText)
+        else { return false }
+        return handler?(keyCode) ?? false
     }
 }
