@@ -723,9 +723,11 @@ struct MediaViewer: View {
     private var copyHotkey: some View {
         hotkey("c", .command) {
             // Selected Live Text in the image wins over copying the file.
-            if !LiveTextSelection.shared.copySelectedText() { model.copyToClipboard() }
+            if LiveTextSelection.shared.copySelectedText() { return }
+            if NSApp.copyTextSelectionIfAny() { return }
+            model.copyToClipboard()
         }
-            .disabled(!model.canCopySelection || model.showTagInput)
+            .disabled(!model.canCopySelection && NSApp.focusedTextView == nil)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)

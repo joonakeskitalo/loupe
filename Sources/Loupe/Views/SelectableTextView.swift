@@ -49,3 +49,28 @@ extension NSApplication {
         keyWindow?.firstResponder as? NSTextView
     }
 }
+
+extension NSApplication {
+    /// Copies text through the responder chain when something text-like owns
+    /// ⌘C: a focused text field or text view, or SwiftUI selectable text
+    /// (`.textSelection`) that has a selection. Returns false when there is no
+    /// such target, so the caller can fall back to copying the selected files.
+    @MainActor
+    func copyTextSelectionIfAny() -> Bool {
+        let action = #selector(NSText.copy(_:))
+        if focusedTextView != nil {
+            // A focused field/text view owns ⌘C even with an empty selection,
+            // so the files are never copied by accident while typing.
+            sendAction(action, to: nil, from: nil)
+            return true
+        }
+        guard let responder = target(forAction: action, to: nil, from: nil) else {
+            return false
+        }
+        if let validator = responder as? NSUserInterfaceValidations {
+            let item = NSMenuItem(title: "Copy", action: action, keyEquivalent: "c")
+            if !validator.validateUserInterfaceItem(item) { return false }
+        }
+        return sendAction(action, to: nil, from: nil)
+    }
+}

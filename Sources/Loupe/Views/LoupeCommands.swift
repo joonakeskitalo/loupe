@@ -34,14 +34,16 @@ struct LoupeCommands: Commands {
             Button(copyTitle) {
                 // A focused text view (sidebar OCR text, search field, sheet
                 // filter) owns ⌘C: copy its selected text, not the files.
-                if NSApp.focusedTextView != nil {
-                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
-                } else {
+                // Selected text anywhere (including SwiftUI selectable text)
+                // wins over copying the files.
+                if !NSApp.copyTextSelectionIfAny() {
                     model?.copyToClipboard()
                 }
             }
                 .keyboardShortcut("c", modifiers: .command)
-                .disabled(!hasSelection || viewerOpen || searchFocused || textEditingActive)
+                // Not gated on selection/focus state: those are stale by the
+                // time a key is pressed, and the action routes correctly itself.
+                .disabled(viewerOpen || model == nil)
 
             // Cut — forwarded to the first responder. Like Paste below, this
             // relays the standard `cut:` action so ⌘X cuts text in a focused
