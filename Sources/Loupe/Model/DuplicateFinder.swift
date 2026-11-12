@@ -2,6 +2,8 @@ import Foundation
 import CryptoKit
 import ImageIO
 import CoreGraphics
+import AVFoundation
+import PDFKit
 
 /// How strictly images must match to count as duplicates.
 enum DuplicateSensitivity: String, CaseIterable, Sendable, Identifiable {
@@ -30,7 +32,8 @@ struct DuplicateGroup: Identifiable, Sendable {
     enum Kind: Sendable {
         /// Byte-for-byte identical files.
         case exact
-        /// Visually matching images that differ on disk (resized, re-encoded…).
+        /// Matching content that differs on disk: images resized or re-encoded,
+        /// videos or audio re-encoded, documents with edited whitespace, etc.
         case similar
     }
 
@@ -40,23 +43,57 @@ struct DuplicateGroup: Identifiable, Sendable {
     /// Pixel dimensions of the image members, for display and ranking.
     let pixelSizes: [URL: CGSize]
 
+    /// Plural noun for what a similar-match group contains.
+    var similarNoun: String {
+        switch items.first?.kind {
+        case .image: return "images"
+        case .video: return "videos"
+        case .audio: return "audio files"
+        default: return "documents"
+        }
+    }
+
     /// Bytes freed by removing everything except the suggested keeper.
     var reclaimableBytes: Int64 {
         items.dropFirst().reduce(Int64(0)) { $0 + $1.fileSize }
     }
 }
 
-/// Finds duplicate files: byte-identical copies of any file type (size, then
-/// SHA-256), plus visually similar images via a 64-bit difference hash (dHash)
-/// compared by Hamming distance. Everything runs on-device.
+/// Finds duplicate files, all on-device:
+/// - Exact: byte-identical copies of any file type (size, then SHA-256).
+/// - Similar images: 64-bit difference hash (dHash).
+/// - Similar videos: dHashes of three frames, plus matching duration.
+/// - Similar audio: a 64-bit loudness-envelope hash of the first minute, plus
+///   matching duration (survives re-encoding to another format/bitrate).
+/// - Similar documents (PDF, text, Markdown): a SimHash of the words, so
+///   reformatted or lightly edited copies still match.
+/// Fingerprints are compared by Hamming distance within the same family.
 enum DuplicateFinder {
     /// Aspect ratios further apart than this (relative) are never matched, which
     /// keeps flat/low-detail images with colliding hashes from grouping.
     private static let aspectTolerance = 0.05
 
     private struct Fingerprint: Sendable {
-        let hash: UInt64
-        let size: CGSize
+        enum Family: Sendable { case image, video, audio, document }
+        let family: Family
+        /// One 64-bit hash (two or more for videos: one per sampled frame).
+        let words: [UInt64]
+        /// Width / height for images and videos.
+        let aspect: Double?
+        /// Duration in seconds (audio, video) or word count (documents).
+        let scalar: Double?
+        /// Pixel size for display and ranking (images, videos).
+        let size: CGSize?
+    }
+
+    private static func family(of kind: MediaKind) -> Fingerprint.Family? {
+        switch kind {
+        case .image: return .image
+        case .video: return .video
+        case .audio: return .audio
+        case .pdf, .markdown, .text: return .document
+        case .other: return nil
+        }
     }
 
     /// Searches `items` and returns duplicate groups, largest savings first.
@@ -86,8 +123,8 @@ enum DuplicateFinder {
         let bySize = Dictionary(grouping: items.indices) { items[$0].fileSize }
         let hashCandidates = bySize.filter { $0.key > 0 && $0.value.count > 1 }
             .values.flatMap { $0 }.sorted()
-        let imageCandidates = sensitivity.maxDistance == nil
-            ? [] : items.indices.filter { items[$0].kind == .image }
+        let fuzzyCandidates = sensitivity.maxDistance == nil
+            ? [] : items.indices.filter { family(of: items[$0].kind) != nil }
         var total = hashCandidates.count
         var done = 0
         await progress(0, total)
@@ -107,31 +144,40 @@ enum DuplicateFinder {
         }
         let exactRoot = (0..<items.count).map { root($0) }
 
-        // --- Similar images: greedy clustering on dHash. ---
+        // --- Similar content: greedy clustering on fingerprints. ---
         var sizes: [Int: CGSize] = [:]
         if let maxDistance = sensitivity.maxDistance {
             // Exact copies share a fingerprint; compute it once per class.
-            let reps = imageCandidates.filter { root($0) == $0 }
+            let reps = fuzzyCandidates.filter { root($0) == $0 }
             total += reps.count
-            let prints = await parallelMap(reps, limit: limit, onDone: {
-                done += 1
-                await progress(done, total)
-            }, work: { fingerprint(of: urls[$0]) })
-            if Task.isCancelled { return [] }
 
             struct Cluster { var rep: Fingerprint; var index: Int }
             var clusters: [Cluster] = []
-            for (n, idx) in reps.enumerated() {
-                guard let fp = prints[n] else { continue }
-                sizes[idx] = fp.size
-                var matched = false
-                for c in clusters where similar(fp, c.rep, maxDistance) {
-                    union(c.index, idx)
-                    matched = true
-                    break
+            // Videos decode frames and are heavy, so fewer run at once.
+            let families: [(Fingerprint.Family, Int)] = [
+                (.image, limit), (.video, 2), (.audio, max(2, limit / 2)), (.document, limit),
+            ]
+            for (fam, familyLimit) in families {
+                let indices = reps.filter { family(of: items[$0].kind) == fam }
+                guard !indices.isEmpty else { continue }
+                let prints = await parallelMap(indices, limit: familyLimit, onDone: {
+                    done += 1
+                    await progress(done, total)
+                }, work: { await fingerprint(of: items[$0], family: fam) })
+                if Task.isCancelled { return [] }
+
+                for (n, idx) in indices.enumerated() {
+                    guard let fp = prints[n] else { continue }
+                    if let size = fp.size { sizes[idx] = size }
+                    var matched = false
+                    for c in clusters where similar(fp, c.rep, maxDistance) {
+                        union(c.index, idx)
+                        matched = true
+                        break
+                    }
+                    if !matched { clusters.append(Cluster(rep: fp, index: idx)) }
+                    if n % 256 == 0, Task.isCancelled { return [] }
                 }
-                if !matched { clusters.append(Cluster(rep: fp, index: idx)) }
-                if n % 256 == 0, Task.isCancelled { return [] }
             }
         }
 
@@ -143,8 +189,9 @@ enum DuplicateFinder {
         for (_, indices) in members where indices.count > 1 {
             // Dimensions for every image member (exact copies share a size).
             var pixelSizes: [URL: CGSize] = [:]
-            for i in indices where items[i].kind == .image {
-                let size = sizes[exactRoot[i]] ?? pixelSize(of: items[i].url)
+            for i in indices where items[i].kind == .image || items[i].kind == .video {
+                let size = sizes[exactRoot[i]]
+                    ?? (items[i].kind == .image ? pixelSize(of: items[i].url) : nil)
                 if let size { pixelSizes[items[i].url] = size }
             }
             func pixels(_ item: MediaItem) -> CGFloat {
@@ -181,7 +228,7 @@ enum DuplicateFinder {
         _ inputs: [T],
         limit: Int,
         onDone: () async -> Void,
-        work: @escaping @Sendable (T) -> R?
+        work: @escaping @Sendable (T) async -> R?
     ) async -> [R?] {
         var results = [R?](repeating: nil, count: inputs.count)
         await withTaskGroup(of: (Int, R?).self) { group in
@@ -191,7 +238,7 @@ enum DuplicateFinder {
                 let i = next
                 let input = inputs[i]
                 next += 1
-                group.addTask { (i, Task.isCancelled ? nil : work(input)) }
+                group.addTask { (i, Task.isCancelled ? nil : await work(input)) }
             }
             for _ in 0..<min(limit, inputs.count) { addNext() }
             while let (i, r) = await group.next() {
@@ -222,11 +269,34 @@ enum DuplicateFinder {
     }
 
     private static func similar(_ a: Fingerprint, _ b: Fingerprint, _ maxDistance: Int) -> Bool {
-        guard (a.hash ^ b.hash).nonzeroBitCount <= maxDistance else { return false }
-        guard a.size.height > 0, b.size.height > 0 else { return true }
-        let ra = a.size.width / a.size.height
-        let rb = b.size.width / b.size.height
-        return abs(ra - rb) / max(ra, rb) <= aspectTolerance
+        guard a.family == b.family, a.words.count == b.words.count else { return false }
+        let bits = zip(a.words, b.words).reduce(0) { $0 + ($1.0 ^ $1.1).nonzeroBitCount }
+        guard Double(bits) / Double(a.words.count) <= Double(maxDistance) else { return false }
+        if let x = a.aspect, let y = b.aspect, x > 0, y > 0,
+           abs(x - y) / max(x, y) > aspectTolerance {
+            return false
+        }
+        if let x = a.scalar, let y = b.scalar {
+            switch a.family {
+            case .audio, .video:
+                // Same recording should run the same length.
+                if abs(x - y) > max(1.5, 0.03 * max(x, y)) { return false }
+            case .document:
+                if min(x, y) / max(x, y) < 0.5 { return false }
+            case .image:
+                break
+            }
+        }
+        return true
+    }
+
+    private static func fingerprint(of item: MediaItem, family: Fingerprint.Family) async -> Fingerprint? {
+        switch family {
+        case .image: return imageFingerprint(of: item.url)
+        case .video: return await videoFingerprint(of: item.url)
+        case .audio: return await audioFingerprint(of: item.url)
+        case .document: return documentFingerprint(of: item)
+        }
     }
 
     // MARK: - Image fingerprint
@@ -243,10 +313,7 @@ enum DuplicateFinder {
         return orientation >= 5 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
     }
 
-    /// 64-bit difference hash: the image is shrunk to 9×8 grayscale and each bit
-    /// records whether a pixel is brighter than its right neighbor. Robust to
-    /// resizing, recompression and small color shifts.
-    private static func fingerprint(of url: URL) -> Fingerprint? {
+    private static func imageFingerprint(of url: URL) -> Fingerprint? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
               let size = pixelSize(of: url)
@@ -257,9 +324,19 @@ enum DuplicateFinder {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: 128,
         ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary)
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary),
+              let hash = differenceHash(of: image)
         else { return nil }
+        return Fingerprint(
+            family: .image, words: [hash],
+            aspect: size.height > 0 ? size.width / size.height : nil,
+            scalar: nil, size: size)
+    }
 
+    /// 64-bit difference hash: the image is shrunk to 9×8 grayscale and each bit
+    /// records whether a pixel is brighter than its right neighbor. Robust to
+    /// resizing, recompression and small color shifts.
+    private static func differenceHash(of image: CGImage) -> UInt64? {
         let w = 9, h = 8
         var pixels = [UInt8](repeating: 0, count: w * h)
         let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
@@ -273,13 +350,157 @@ enum DuplicateFinder {
             return true
         }
         guard drawn else { return nil }
-
         var hash: UInt64 = 0
         for y in 0..<h {
             for x in 0..<(w - 1) {
                 hash = (hash << 1) | (pixels[y * w + x] > pixels[y * w + x + 1] ? 1 : 0)
             }
         }
-        return Fingerprint(hash: hash, size: size)
+        return hash
+    }
+
+    // MARK: - Video fingerprint
+
+    /// dHashes of frames at 15%, 50% and 85% of the runtime, plus the duration.
+    /// Containers AVFoundation can't open (mkv/webm) return nil and are only
+    /// matched as exact copies.
+    private static func videoFingerprint(of url: URL) async -> Fingerprint? {
+        let asset = AVURLAsset(url: url)
+        guard let duration = try? await asset.load(.duration).seconds,
+              duration.isFinite, duration > 0
+        else { return nil }
+
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 128, height: 128)
+        let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+        generator.requestedTimeToleranceBefore = tolerance
+        generator.requestedTimeToleranceAfter = tolerance
+
+        var words: [UInt64] = []
+        var aspect: Double?
+        for fraction in [0.15, 0.5, 0.85] {
+            if Task.isCancelled { return nil }
+            let time = CMTime(seconds: duration * fraction, preferredTimescale: 600)
+            guard let frame = try? await generator.image(at: time).image,
+                  let hash = differenceHash(of: frame)
+            else { return nil }
+            words.append(hash)
+            if aspect == nil, frame.height > 0 { aspect = Double(frame.width) / Double(frame.height) }
+        }
+
+        var size: CGSize?
+        if let track = try? await asset.loadTracks(withMediaType: .video).first,
+           let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform) {
+            let rect = CGRect(origin: .zero, size: natural).applying(transform)
+            size = CGSize(width: abs(rect.width), height: abs(rect.height))
+        }
+        return Fingerprint(family: .video, words: words, aspect: aspect, scalar: duration, size: size)
+    }
+
+    // MARK: - Audio fingerprint
+
+    /// Loudness-envelope hash of the first minute, decoded to 8 kHz mono: the
+    /// signal is split into 65 slices and each bit says whether a slice is
+    /// louder than the next. Independent of container, codec and bitrate.
+    private static func audioFingerprint(of url: URL) async -> Fingerprint? {
+        let asset = AVURLAsset(url: url)
+        guard let duration = try? await asset.load(.duration).seconds,
+              duration.isFinite, duration > 1,
+              let track = try? await asset.loadTracks(withMediaType: .audio).first
+        else { return nil }
+        guard let samples = readAudioSamples(asset: asset, track: track, seconds: min(duration, 60)),
+              samples.count >= 65 * 16
+        else { return nil }
+
+        let slice = samples.count / 65
+        var envelope = [Float](repeating: 0, count: 65)
+        for i in 0..<65 {
+            var sum: Float = 0
+            for j in (i * slice)..<((i + 1) * slice) { sum += abs(samples[j]) }
+            envelope[i] = sum / Float(slice)
+        }
+        var hash: UInt64 = 0
+        for i in 0..<64 { hash = (hash << 1) | (envelope[i] > envelope[i + 1] ? 1 : 0) }
+        return Fingerprint(family: .audio, words: [hash], aspect: nil, scalar: duration, size: nil)
+    }
+
+    /// Decodes up to `seconds` of the track to mono 8 kHz Float32. Synchronous
+    /// on purpose: `copyNextSampleBuffer` blocks and must not run in an async
+    /// context.
+    private static func readAudioSamples(asset: AVAsset, track: AVAssetTrack, seconds: Double) -> [Float]? {
+        guard let reader = try? AVAssetReader(asset: asset) else { return nil }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 8000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        guard reader.canAdd(output) else { return nil }
+        reader.add(output)
+        reader.timeRange = CMTimeRange(
+            start: .zero, duration: CMTime(seconds: seconds, preferredTimescale: 600))
+        guard reader.startReading() else { return nil }
+
+        var samples: [Float] = []
+        samples.reserveCapacity(Int(seconds * 8000))
+        while let buffer = output.copyNextSampleBuffer() {
+            if Task.isCancelled { reader.cancelReading(); return nil }
+            guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
+            let count = CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size
+            guard count > 0 else { continue }
+            let start = samples.count
+            samples.append(contentsOf: repeatElement(0, count: count))
+            let status = samples.withUnsafeMutableBytes { raw -> OSStatus in
+                CMBlockBufferCopyDataBytes(
+                    block, atOffset: 0, dataLength: count * MemoryLayout<Float>.size,
+                    destination: raw.baseAddress! + start * MemoryLayout<Float>.size)
+            }
+            if status != kCMBlockBufferNoErr { return nil }
+        }
+        return reader.status == .completed ? samples : nil
+    }
+
+    // MARK: - Document fingerprint
+
+    /// SimHash of word 3-grams. Case, punctuation and whitespace are ignored,
+    /// so reflowed or lightly edited copies land close together. Scanned PDFs
+    /// without a text layer return nil (exact matching only).
+    private static func documentFingerprint(of item: MediaItem) -> Fingerprint? {
+        let text: String
+        if item.kind == .pdf {
+            guard let s = PDFDocument(url: item.url)?.string else { return nil }
+            text = String(s.prefix(400_000))
+        } else {
+            guard let handle = try? FileHandle(forReadingFrom: item.url) else { return nil }
+            defer { try? handle.close() }
+            guard let data = (try? handle.read(upToCount: 2 << 20)) ?? nil else { return nil }
+            text = String(decoding: data, as: UTF8.self)
+        }
+        let tokens = text.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .prefix(50_000)
+            .map(String.init)
+        guard tokens.count >= 8 else { return nil }
+
+        var weights = [Int32](repeating: 0, count: 64)
+        for i in 0..<(tokens.count - 2) {
+            // FNV-1a over the shingle's bytes.
+            var h: UInt64 = 0xcbf29ce484222325
+            for token in tokens[i...(i + 2)] {
+                for byte in token.utf8 { h = (h ^ UInt64(byte)) &* 0x100000001b3 }
+                h = (h ^ 0x20) &* 0x100000001b3
+            }
+            for bit in 0..<64 { weights[bit] += (h >> UInt64(bit)) & 1 == 1 ? 1 : -1 }
+        }
+        var hash: UInt64 = 0
+        for bit in 0..<64 where weights[bit] > 0 { hash |= 1 << UInt64(bit) }
+        return Fingerprint(
+            family: .document, words: [hash], aspect: nil,
+            scalar: Double(tokens.count), size: nil)
     }
 }

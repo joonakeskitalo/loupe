@@ -120,7 +120,7 @@ struct DuplicatesView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label(
-                    group.kind == .exact ? "Exact copies" : "Similar images",
+                    group.kind == .exact ? "Exact copies" : "Similar \(group.similarNoun)",
                     systemImage: group.kind == .exact ? "equal.circle" : "square.on.square"
                 )
                 .font(.subheadline.weight(.semibold))
