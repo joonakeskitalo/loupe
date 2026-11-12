@@ -35,7 +35,9 @@ struct DuplicatesView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 760, idealWidth: 960, maxWidth: .infinity,
+               minHeight: 520, idealHeight: 680, maxHeight: .infinity)
+        .background(ResizableSheet(minSize: CGSize(width: 760, height: 520)))
         .overlay { previewOverlay }
         .onAppear { resetMarks() }
         .onChange(of: model.duplicateRunID) { resetMarks() }
@@ -387,5 +389,52 @@ private struct DuplicateThumbnail: View {
             )
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// Makes the hosting sheet window user-resizable (SwiftUI sheets are fixed-size
+/// on macOS by default) and remembers the size the user chose between opens.
+private struct ResizableSheet: NSViewRepresentable {
+    let minSize: CGSize
+
+    func makeNSView(context: Context) -> ResizableSheetView {
+        let view = ResizableSheetView()
+        view.minSize = minSize
+        return view
+    }
+
+    func updateNSView(_ nsView: ResizableSheetView, context: Context) {}
+}
+
+private final class ResizableSheetView: NSView {
+    var minSize = CGSize(width: 760, height: 520)
+    private static let sizeKey = "duplicatesSheetSize"
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.styleMask.insert(.resizable)
+        window.contentMinSize = minSize
+
+        // Apply the remembered size after SwiftUI's initial layout pass.
+        if let saved = UserDefaults.standard.string(forKey: Self.sizeKey) {
+            let size = NSSizeFromString(saved)
+            if size.width >= minSize.width, size.height >= minSize.height {
+                DispatchQueue.main.async { [weak window] in window?.setContentSize(size) }
+            }
+        }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(didEndLiveResize(_:)),
+            name: NSWindow.didEndLiveResizeNotification, object: window)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { NotificationCenter.default.removeObserver(self) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    @objc private func didEndLiveResize(_ note: Notification) {
+        guard let size = window?.contentView?.frame.size else { return }
+        UserDefaults.standard.set(NSStringFromSize(size), forKey: Self.sizeKey)
     }
 }
