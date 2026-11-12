@@ -14,6 +14,20 @@ enum DuplicateSensitivity: String, CaseIterable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
+    /// One-line explanation shown when choosing a match type.
+    var summary: String {
+        switch self {
+        case .exact:
+            return "Byte-for-byte identical files of any type. Fastest, and never a false match."
+        case .strict:
+            return "Also matches re-saved or resized copies of images, videos, audio and documents that look or sound the same."
+        case .normal:
+            return "Balanced: catches edited exports, recompressed and re-encoded copies. Recommended."
+        case .loose:
+            return "Broadest: also catches lightly cropped or altered versions. May include false matches, so review the results."
+        }
+    }
+
     /// Largest perceptual-hash Hamming distance (of 64 bits) that still counts
     /// as a match. `nil` disables perceptual matching entirely.
     var maxDistance: Int? {

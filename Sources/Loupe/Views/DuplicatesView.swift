@@ -70,26 +70,26 @@ struct DuplicatesView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Picker("Match", selection: $model.duplicateSensitivity) {
-                ForEach(DuplicateSensitivity.allCases) { Text($0.rawValue).tag($0) }
+            if model.hasSearchedDuplicates {
+                Picker("Match", selection: $model.duplicateSensitivity) {
+                    ForEach(DuplicateSensitivity.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .frame(width: 260)
+                .disabled(model.isFindingDuplicates)
+                // Changing the match type only takes effect on the next search.
+                Button("Search Again") { model.findDuplicates() }
+                    .disabled(model.isFindingDuplicates)
             }
-            .frame(width: 260)
-            .disabled(model.isFindingDuplicates)
-            .onChange(of: model.duplicateSensitivity) { model.findDuplicates() }
-            Button(model.hasSearchedDuplicates ? "Search Again" : "Search") {
-                model.findDuplicates()
-            }
-            .disabled(model.isFindingDuplicates)
         }
         .padding(10)
     }
 
     private var scopeText: String {
-        let n = model.duplicateScanCount
+        let started = model.hasSearchedDuplicates || model.isFindingDuplicates
+        let n = started ? model.duplicateScanCount : model.duplicateSearchItems.count
         let files = "\(n) \(n == 1 ? "file" : "files")"
-        return model.duplicateSearchIsSelection && !model.hasSearchedDuplicates
-            ? "Searching \(files) in the selection"
-            : "Searched \(files)"
+        if started { return "Searched \(files)" }
+        return model.duplicateSearchIsSelection ? "\(files) selected" : "\(files) in the current view"
     }
 
     // MARK: Content
@@ -110,7 +110,7 @@ struct DuplicatesView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !model.hasSearchedDuplicates {
-            placeholder("Press Search to look for duplicates.")
+            setup
         } else if model.duplicateGroups.isEmpty {
             placeholder("No duplicates found.")
         } else {
@@ -128,6 +128,27 @@ struct DuplicatesView: View {
                 }
             }
         }
+    }
+
+    /// Pre-search step: pick how strictly files must match, then start.
+    private var setup: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Match type").font(.headline)
+            Picker("Match type", selection: $model.duplicateSensitivity) {
+                ForEach(DuplicateSensitivity.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            Text(model.duplicateSensitivity.summary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 420, alignment: .leading)
+            Button("Start Search") { model.findDuplicates() }
+                .keyboardShortcut(.defaultAction)
+                .disabled(model.duplicateSearchItems.count < 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func placeholder(_ text: String) -> some View {

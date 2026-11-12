@@ -1067,10 +1067,15 @@ final class BrowserModel {
     /// Whether the search is limited to a multi-file selection.
     var duplicateSearchIsSelection: Bool { selectedMediaItems.count > 1 }
 
-    /// Opens the duplicate sheet and starts a search (unless one is running).
+    /// Opens the duplicate sheet on its setup step so the user can choose the
+    /// match type before anything runs. Stale results from an earlier search
+    /// are discarded (the scope may have changed); a running search is kept.
     func openDuplicateFinder() {
+        if !isFindingDuplicates {
+            duplicateGroups = []
+            hasSearchedDuplicates = false
+        }
         showDuplicatesPanel = true
-        if !isFindingDuplicates { findDuplicates() }
     }
 
     /// Searches for exact and similar files among `duplicateSearchItems`.
