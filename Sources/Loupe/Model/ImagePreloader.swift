@@ -23,18 +23,41 @@ actor ImagePreloader {
     nonisolated(unsafe) private let cache = NSCache<NSURL, NSImage>()
     private var inFlight: [URL: Task<NSImage?, Never>] = [:]
 
-    /// Byte budget for cached full images: 15% of physical RAM. Full images are
-    /// much larger than thumbnails, so this stays modest while still keeping a
-    /// handful of neighbors warm for smooth navigation. NSCache evicts the
-    /// least-recently-used entries once the summed cost exceeds the budget.
+    /// Byte budget for cached full images: 15% of physical RAM, but never more
+    /// than 1 GB. A fraction of RAM alone scaled to several GB on large
+    /// machines, and since each fullscreen image is tens of MB (a 49 MB RAF
+    /// decoded to display size is ~80 MB of RGBA), browsing a big folder just
+    /// kept filling the cache and read as a leak. A handful of neighbors is all
+    /// the viewer needs for instant navigation.
     private static let cacheByteLimit: Int = {
         let fraction = 0.15
         let total = Double(ProcessInfo.processInfo.physicalMemory)
-        return Int((total * fraction).rounded())
+        return min(Int((total * fraction).rounded()), 1_024 * 1_024 * 1_024)
     }()
+    /// Most decodes allowed to run at once. Rapid arrow-key browsing queues a
+    /// decode per step; unbounded, they all ran in parallel, each holding
+    /// sensor-sized RAW intermediates, which spiked memory.
+    private static let maxConcurrentDecodes = 2
+    private var activeDecodes = 0
+    private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
+    private func acquireDecodeSlot() async {
+        if activeDecodes < Self.maxConcurrentDecodes {
+            activeDecodes += 1
+            return
+        }
+        await withCheckedContinuation { decodeWaiters.append($0) }
+    }
+    private func releaseDecodeSlot() {
+        if decodeWaiters.isEmpty {
+            activeDecodes -= 1
+        } else {
+            decodeWaiters.removeFirst().resume()  // slot handed straight over
+        }
+    }
 
     init() {
         cache.totalCostLimit = Self.cacheByteLimit
+        cache.countLimit = 12
     }
 
     /// Returns the cached image for `url` if it's already decoded, without
@@ -70,7 +93,10 @@ actor ImagePreloader {
             return existing
         }
         let maxPixel = Self.maxDecodePixelSize
-        let task = Task<NSImage?, Never>.detached(priority: .userInitiated) {
+        let wrapper = Task<NSImage?, Never> { [weak self] in
+            guard let self else { return nil }
+            await self.acquireDecodeSlot()
+            let image = await Task<NSImage?, Never>.detached(priority: .userInitiated) {
             // Decode with ImageIO at a display-sized cap rather than
             // `NSImage(contentsOf:)`. For ordinary photos the two are
             // equivalent, but a camera-raw file (e.g. Fujifilm `.raf`) decoded
@@ -88,11 +114,9 @@ actor ImagePreloader {
             autoreleasepool {
                 Self.decode(url: url, maxPixelSize: maxPixel)
             }
-        }
-        // Wrap the detached task so we can record completion on the actor.
-        let wrapper = Task<NSImage?, Never> { [weak self] in
-            let image = await task.value
-            await self?.finish(url: url, image: image)
+            }.value
+            await self.releaseDecodeSlot()
+            await self.finish(url: url, image: image)
             return image
         }
         inFlight[url] = wrapper

@@ -548,12 +548,14 @@ actor FaceRecognizer {
         for url: URL, embedder: any FaceEmbedder
     ) async -> [FaceFeaturePrint] {
         await Task.detached(priority: .utility) {
-            guard let base = CIImage(contentsOf: url) else { return [] }
-
-            // Bake the EXIF orientation into the pixels so the detector and the
-            // crops below all operate on an upright image.
-            let orientation = Self.orientation(of: url)
-            let image = base.oriented(orientation)
+            // Decode a capped bitmap rather than `CIImage(contentsOf:)`, which
+            // realizes the full-resolution image (hundreds of MB for a RAW).
+            // `decodeCGImage` applies EXIF orientation, so the result is already
+            // upright for the detector and the crops below.
+            guard let cg = autoreleasepool(invoking: {
+                ImageDecoding.decodeCGImage(url: url, maxPixelSize: 3072)
+            }) else { return [] }
+            let image = CIImage(cgImage: cg)
             let extent = image.extent
             guard extent.width > 0, extent.height > 0 else { return [] }
 

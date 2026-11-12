@@ -115,7 +115,12 @@ actor ImageClassifier {
     /// classifications behind actor isolation.
     nonisolated private static func visionLabels(for url: URL) async -> [String] {
         await Task.detached(priority: .utility) {
-            guard let image = CIImage(contentsOf: url) else { return [] }
+            // Decode a capped, autoreleased bitmap instead of
+            // `CIImage(contentsOf:)`, which realizes the full-resolution image
+            guard let cg = autoreleasepool(invoking: {
+                ImageDecoding.decodeCGImage(url: url, maxPixelSize: 1280)
+            }) else { return [] }
+            let image = CIImage(cgImage: cg)
             do {
                 var request = ClassifyImageRequest()
                 request.cropAndScaleAction = .scaleToFit
