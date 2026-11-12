@@ -997,7 +997,7 @@ final class BrowserModel {
             let maxConcurrent = min(3, max(2, ProcessInfo.processInfo.activeProcessorCount / 4))
             var iterator = pending.makeIterator()
 
-            await withTaskGroup(of: (MediaItem.ID, String).self) { group in
+            await withTaskGroup(of: (MediaItem.ID, String?).self) { group in
                 var inFlight = 0
 
                 func addNext() {
@@ -1012,7 +1012,8 @@ final class BrowserModel {
 
                 while inFlight > 0, let (id, text) = await group.next() {
                     inFlight -= 1
-                    self.ocrText[id] = text
+                    // nil = timed out: leave unscanned so a later run retries it.
+                    if let text { self.ocrText[id] = text }
                     self.classifyProgress += 1
                     addNext()
                 }
