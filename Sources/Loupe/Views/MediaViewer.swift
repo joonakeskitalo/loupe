@@ -101,7 +101,7 @@ struct MediaViewer: View {
             .background {
                 if canShowFilmStrip {
                     hotkey("t", []) {
-                        withAnimation(.easeInOut(duration: 0.2)) { model.toggleFilmStrip() }
+                        model.toggleFilmStrip()
                     }
                     .disabled(model.showTagInput)
                     .opacity(0)
@@ -153,7 +153,6 @@ struct MediaViewer: View {
             if model.showInfoSidebar {
                 ItemInfoSidebar(model: model)
                     .environment(\.colorScheme, .dark)
-                    .transition(.move(edge: .trailing))
             }
             }
 
@@ -564,9 +563,7 @@ struct MediaViewer: View {
     /// Toggle button for the info sidebar's visibility (shared with the grid).
     private var infoSidebarToggle: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                model.toggleInfoSidebar()
-            }
+            model.toggleInfoSidebar()
         } label: {
             Image(systemName: "sidebar.right")
                 .font(.body)
@@ -581,9 +578,7 @@ struct MediaViewer: View {
     /// Toggle button for the film strip's visibility.
     private var filmStripToggle: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                model.toggleFilmStrip()
-            }
+            model.toggleFilmStrip()
         } label: {
             Image(systemName: model.isFilmStripVisible ? "rectangle.bottomthird.inset.filled" : "rectangle")
                 .font(.body)
