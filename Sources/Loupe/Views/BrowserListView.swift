@@ -398,7 +398,11 @@ struct BrowserListView: View {
             dragURLs: { dragURLs(for: item) },
             isSelected: { model.selectedItems.contains(item.id) }
         )
-        .contextMenu { contextMenu(for: item) }
+        .contextMenu {
+            // The fullscreen viewer overlays the grid; right-click there flags the
+            // item, so the menu underneath must stay empty (no menu shown).
+            if !model.isViewerPresented { contextMenu(for: item) }
+        }
     }
 
     /// A pinned section header for the grouped list layout. Clicking it
