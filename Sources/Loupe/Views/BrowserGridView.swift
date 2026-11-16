@@ -654,7 +654,7 @@ struct BrowserGridView: View {
                 // after the grid has rebuilt its content.
                 .onChange(of: model.displayRevision) { _, _ in
                     guard canAutoFocus, !searchFocused,
-                          !model.isViewerPresented, !model.showTagInput else { return }
+                          !model.isViewerPresented, !model.isTagEntryActive else { return }
                     // Re-check the *live* search-focus flag at execution time:
                     // typing in the search field bumps `displayRevision`, and
                     // the `searchFocused` parameter captured above can still be
@@ -863,7 +863,7 @@ struct BrowserGridView: View {
         // equivalents can silently stop firing depending on which view holds
         // first responder. A focused grid consuming the key here (returning
         // .handled) means the window-level copy never double-fires.
-        if press.modifiers.isEmpty, !model.showTagInput {
+        if press.modifiers.isEmpty, !model.isTagEntryActive {
             if press.key == KeyEquivalent("x") {
                 guard !model.selectedItems.isEmpty else { return .ignored }
                 model.hideSelection()

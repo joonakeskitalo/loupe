@@ -176,7 +176,7 @@ struct BrowserListView: View {
                 // has rebuilt its rows.
                 .onChange(of: model.displayRevision) { _, _ in
                     guard canAutoFocus, !searchFocused,
-                          !model.isViewerPresented, !model.showTagInput else { return }
+                          !model.isViewerPresented, !model.isTagEntryActive else { return }
                     // Re-check the *live* search-focus flag at execution time:
                     // typing in the search field bumps `displayRevision`, and
                     // the captured `searchFocused` parameter can still be stale

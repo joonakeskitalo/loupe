@@ -271,6 +271,10 @@ final class BrowserModel {
     /// Lives on the model so both the grid and the fullscreen viewer can open
     /// it, and so each surface can suspend its single-key hotkeys while it's up.
     var showTagInput = false
+    /// True while the sidebar's "Add tag…" field has keyboard focus.
+    var isTagFieldFocused = false
+    /// Single-key hotkeys must stand down while the user is typing a tag.
+    var isTagEntryActive: Bool { showTagInput || isTagFieldFocused }
 
     /// The bulk-rename panel's settings (prefix/suffix, numbering, date, etc.).
     /// Held on the model — which lives for the window/tab's lifetime — rather

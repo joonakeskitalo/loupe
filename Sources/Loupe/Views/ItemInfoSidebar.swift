@@ -1403,6 +1403,8 @@ private struct TagsSection: View {
                                       lineWidth: draftFocused ? 2 : 1)
                 )
                 .focused($draftFocused)
+                .onChange(of: draftFocused) { _, focused in model.isTagFieldFocused = focused }
+                .onDisappear { model.isTagFieldFocused = false }
                 .padding(.top, 6)
                 .onSubmit {
                     model.addTextTag(draft, item: item)

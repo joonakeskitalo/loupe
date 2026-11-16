@@ -222,8 +222,8 @@ struct ContentView: View {
         .modifier(KeyWindowSceneValues(
             isKeyWindow: isKeyWindow,
             model: model,
-            trashEligible: !(searchFocused || model.showTagInput || model.isViewerPresented),
-            searchFieldFocused: searchFocused || model.showTagInput || model.showOCRPanel
+            trashEligible: !(searchFocused || model.isTagEntryActive || model.isViewerPresented),
+            searchFieldFocused: searchFocused || model.isTagEntryActive || model.showOCRPanel
                 || model.showDuplicatesPanel
         ))
         // Hide the window chrome's controls while the full viewer is up so the
@@ -259,21 +259,21 @@ struct ContentView: View {
             // viewer is open so it doesn't swap layouts behind the viewer.
             Button("Toggle Grid/List") { model.toggleLayout() }
                 .keyboardShortcut("g", modifiers: [])
-                .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.isViewerPresented || searchFocused || model.isTagEntryActive)
             // ⌘S toggles the sidebar. Lives here (not in the menu) because the
             // visibility is view-local state. Suspended while the viewer is up.
             Button("Toggle Sidebar") { toggleSidebar() }
                 .keyboardShortcut("s", modifiers: .command)
-                .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.isViewerPresented || searchFocused || model.isTagEntryActive)
             // Space and Return both open the full viewer on the selection.
             Button("Open Viewer") {
                 if model.isAudioPlayerActive { model.toggleAudioPlayback() } else { model.openSelection() }
             }
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
             Button("Open") { model.openSelection() }
                 .keyboardShortcut(.return, modifiers: [])
-                .disabled(model.displayedItems.isEmpty || searchFocused || model.showTagInput)
+                .disabled(model.displayedItems.isEmpty || searchFocused || model.isTagEntryActive)
             // The ⌘-modified actions (Refresh ⌘R, Select All ⌘A, Open with
             // Default App ⌘↓, Reveal in Finder ⇧⌘R, Flag ⌘K, Show Flagged Only
             // ⇧⌘F, zoom ⌘=/⌘−, Move to Trash ⌘⌫) now live in the menu bar (see
@@ -285,7 +285,7 @@ struct ContentView: View {
             Button("Reveal in Finder (F1)") { model.revealInFinder() }
                 // F1 — NSF1FunctionKey is U+F704.
                 .keyboardShortcut(KeyEquivalent("\u{F704}"), modifiers: [])
-                .disabled(model.selectedItems.isEmpty || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || searchFocused || model.isTagEntryActive)
 
             // J/L step the selection; I flags the selection. Suspended while the
             // viewer is open (it carries its own copies so it can navigate/flag
@@ -293,16 +293,16 @@ struct ContentView: View {
             // (K is play/pause inside the viewer, handled there.)
             Button("Previous Item") { model.moveSelection(by: -1) }
                 .keyboardShortcut("j", modifiers: [])
-                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
             Button("Next Item") { model.moveSelection(by: 1) }
                 .keyboardShortcut("l", modifiers: [])
-                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
             Button("Flag Item") { model.toggleFlag() }
                 .keyboardShortcut("i", modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
             Button("Flag Item (S)") { model.toggleFlag() }
                 .keyboardShortcut("s", modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
             // F also flags. The grid normally owns F through its focused
             // `.onKeyPress`, but when a non-grid subview holds first responder —
             // e.g. the preview sidebar's video player (an AVPlayerView) — that
@@ -311,12 +311,12 @@ struct ContentView: View {
             // F first (returning .handled), so this never double-toggles.
             Button("Flag Item (F)") { model.toggleFlag() }
                 .keyboardShortcut("f", modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // Y opens the free-text tag input for the selection.
             Button("Tag Item") { model.beginTagging() }
                 .keyboardShortcut("y", modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // ⌫ (backspace) hides/unhides the selection. Kept here (not in the
             // menu bar) as a modifier-less hotkey, gated on search/viewer focus
@@ -325,7 +325,7 @@ struct ContentView: View {
             // is plain backspace only.
             Button("Hide Item") { model.toggleHidden() }
                 .keyboardShortcut(.deleteBackspace, modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // X marks the selection as hidden (triage), always hiding rather
             // than toggling — so repeating it never un-hides — then advances
@@ -335,13 +335,13 @@ struct ContentView: View {
             // searching and the viewer owns its own keys.
             Button("Hide Item (X)") { model.hideSelection() }
                 .keyboardShortcut("x", modifiers: [])
-                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // C advances the selection to the next item (same as L), so the
             // user can mark with X and step forward with C from the home row.
             Button("Next Item (C)") { model.moveSelection(by: 1) }
                 .keyboardShortcut("c", modifiers: [])
-                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.displayedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // Quick sort presets. Moved off ⌃1–⌃3 (now color-tag keys) to the
             // function row: F2 Name, F3 Size, F4 File Type. (F1 is Reveal in
@@ -349,13 +349,13 @@ struct ContentView: View {
             // F4 U+F707.
             Button("Sort by Name (A→Z)") { model.sortByNameAscending() }
                 .keyboardShortcut(KeyEquivalent("\u{F705}"), modifiers: [])
-                .disabled(searchFocused || model.showTagInput)
+                .disabled(searchFocused || model.isTagEntryActive)
             Button("Sort by Size (Largest First)") { model.sortBySizeDescending() }
                 .keyboardShortcut(KeyEquivalent("\u{F706}"), modifiers: [])
-                .disabled(searchFocused || model.showTagInput)
+                .disabled(searchFocused || model.isTagEntryActive)
             Button("Sort by File Type (A→Z)") { model.sortByTypeAscending() }
                 .keyboardShortcut(KeyEquivalent("\u{F707}"), modifiers: [])
-                .disabled(searchFocused || model.showTagInput)
+                .disabled(searchFocused || model.isTagEntryActive)
 
             // Color-tag hotkeys: 1 red, 2 blue, 3 green, 4 orange, 5 purple.
             // Both the plain digit and ⌃digit apply the tag; pressing the same
@@ -366,24 +366,24 @@ struct ContentView: View {
             ForEach(Array(ColorTag.allInHotkeyOrder.enumerated()), id: \.element) { index, tag in
                 Button("Tag \(tag.displayName)") { model.toggleColorTag(tag) }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
-                    .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                    .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
                 Button("Tag \(tag.displayName) (Ctrl)") { model.toggleColorTag(tag) }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
-                    .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.showTagInput)
+                    .disabled(model.selectedItems.isEmpty || model.isViewerPresented || searchFocused || model.isTagEntryActive)
             }
 
             // Escape clears the selection; if nothing is selected it clears the
             // active type/extension filters instead.
             Button("Clear Selection or Filters") { model.escape() }
                 .keyboardShortcut(.escape, modifiers: [])
-                .disabled(!model.canEscape || model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(!model.canEscape || model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // Grid zoom-in via ⌘+ (the plus-key alias). The menu owns ⌘= and
             // ⌘−; this extra alias stays in-window, gated so the viewer's own
             // image-zoom shortcuts take precedence while it's open.
             Button("Zoom Grid In (plus)") { model.zoomGridIn() }
                 .keyboardShortcut("+", modifiers: .command)
-                .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.isViewerPresented || searchFocused || model.isTagEntryActive)
 
             // ⌘F focuses the toolbar search field — the standard macOS "Find"
             // shortcut. Lives here (not the menu bar) because the field's focus
@@ -394,7 +394,7 @@ struct ContentView: View {
             // commands; only plain ⌘F lands here.
             Button("Find") { searchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(model.isViewerPresented || searchFocused || model.showTagInput)
+                .disabled(model.isViewerPresented || searchFocused || model.isTagEntryActive)
         }
         .opacity(0)
         .frame(width: 0, height: 0)

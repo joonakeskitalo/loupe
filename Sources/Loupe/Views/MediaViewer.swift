@@ -103,7 +103,7 @@ struct MediaViewer: View {
                     hotkey("t", []) {
                         model.toggleFilmStrip()
                     }
-                    .disabled(model.showTagInput)
+                    .disabled(model.isTagEntryActive)
                     .opacity(0)
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
@@ -117,7 +117,7 @@ struct MediaViewer: View {
                         model.viewerMultiLayout =
                             model.viewerMultiLayout == .grid ? .columns : .grid
                     }
-                    .disabled(model.showTagInput)
+                    .disabled(model.isTagEntryActive)
                     .opacity(0)
                     .frame(width: 0, height: 0)
                     .accessibilityHidden(true)
@@ -672,7 +672,7 @@ struct MediaViewer: View {
             hotkey("1", [.command]) { zoomCommand = .actualSize }
             hotkey("1", []) { zoomCommand = .actualSize }
         }
-        .disabled(model.showTagInput)
+        .disabled(model.isTagEntryActive)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -690,7 +690,7 @@ struct MediaViewer: View {
                 }
             }
         }
-        .disabled(model.showTagInput)
+        .disabled(model.isTagEntryActive)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -717,7 +717,7 @@ struct MediaViewer: View {
             hotkey("0", [.command]) { zoom.fit() }
             hotkey("z", []) { zoom.fit() }
         }
-        .disabled(model.showTagInput)
+        .disabled(model.isTagEntryActive)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -786,7 +786,7 @@ struct MediaViewer: View {
         // Suspend the viewer's single-key hotkeys while the tag-input overlay
         // is up, so typing a tag name (and its 1–9 quick-assign keys) isn't
         // hijacked by these key equivalents.
-        .disabled(model.showTagInput)
+        .disabled(model.isTagEntryActive)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
@@ -809,7 +809,7 @@ struct MediaViewer: View {
     @ViewBuilder
     private var trashHotkey: some View {
         hotkey(.deleteBackspace, .command) { Task { await model.moveToTrash() } }
-            .disabled(!model.canTrashSelection || model.showTagInput)
+            .disabled(!model.canTrashSelection || model.isTagEntryActive)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -827,7 +827,7 @@ struct MediaViewer: View {
                 LiveTextSelection.shared.selectAllText()
             }
         }
-            .disabled(model.showTagInput)
+            .disabled(model.isTagEntryActive)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
@@ -860,7 +860,7 @@ struct MediaViewer: View {
     @ViewBuilder
     private var hideHotkey: some View {
         hotkey(.deleteBackspace, []) { model.toggleHidden() }
-            .disabled(items.isEmpty || model.showTagInput)
+            .disabled(items.isEmpty || model.isTagEntryActive)
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
