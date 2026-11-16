@@ -148,6 +148,7 @@ struct ItemInfoSidebar: View {
                     }
                 }
 
+                TagsSection(model: model, item: nil)
                 SectionSeparator()
                 RenameSection(model: model, item: nil)
 
@@ -283,27 +284,7 @@ private struct SingleItemInfo: View {
                     exifSection
                 }
 
-                if hasAnnotations {
-                    InfoSection(title: "Tags") {
-                        if model.isFlagged(item.id) {
-                            InfoRow(label: "Flagged", value: "Yes")
-                        }
-                        if let tag = model.colorTag(item.id) {
-                            HStack {
-                                Text("Color")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                HStack(spacing: 5) {
-                                    Image(systemName: tag.symbol)
-                                        .foregroundStyle(tag.color)
-                                    Text(tag.displayName)
-                                }
-                            }
-                            .font(.callout)
-                        }
-                    }
-                }
-
+                TagsSection(model: model, item: item)
                 if item.kind == .image {
                     InfoSection(title: "Recognized Text") {
                         if let text = model.ocrText[item.id] {
@@ -444,9 +425,6 @@ private struct SingleItemInfo: View {
         return ext.isEmpty ? base : "\(base) · \(ext)"
     }
 
-    private var hasAnnotations: Bool {
-        model.isFlagged(item.id) || model.colorTag(item.id) != nil
-    }
 
     private var metadataNeedsProbe: Bool {
         guard item.kind == .video || item.kind == .image else { return false }
@@ -1371,5 +1349,123 @@ private struct EXIFTab: View {
         self.groups = groups
         self.sidecar = sidecar
         loaded = true
+    }
+}
+
+
+/// Editable color and text tags for the selection (or one item). Color
+/// swatches and tag chips toggle on click; the field adds a new text tag.
+/// A filled swatch or chip means every target carries it.
+private struct TagsSection: View {
+    var model: BrowserModel
+    /// The single item shown, or `nil` to act on the whole multi-selection.
+    let item: MediaItem?
+    @State private var draft = ""
+    @FocusState private var draftFocused: Bool
+
+    private var targetIDs: [MediaItem.ID] {
+        if let item { return [item.id] }
+        return model.selectedMediaItems.map(\.id)
+    }
+
+    var body: some View {
+        InfoSection(title: "Tags") {
+            if let item, model.isFlagged(item.id) {
+                InfoRow(label: "Flagged", value: "Yes")
+            }
+            HStack(spacing: 8) {
+                ForEach(ColorTag.allInHotkeyOrder, id: \.self) { tag in
+                    swatch(tag)
+                }
+                Spacer(minLength: 0)
+            }
+            if !model.allTextTags.isEmpty {
+                TagFlowLayout(spacing: 5) {
+                    ForEach(model.allTextTags, id: \.self) { name in
+                        chip(name)
+                    }
+                }
+            }
+            TextField("Add tag…", text: $draft)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .foregroundStyle(.primary)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(draftFocused ? Color.accentColor : Color(nsColor: .separatorColor),
+                                      lineWidth: draftFocused ? 2 : 1)
+                )
+                .focused($draftFocused)
+                .padding(.top, 6)
+                .onSubmit {
+                    model.addTextTag(draft, item: item)
+                    draft = ""
+                }
+        }
+    }
+
+    private func swatch(_ tag: ColorTag) -> some View {
+        let ids = targetIDs
+        let on = !ids.isEmpty && ids.allSatisfy { model.colorTag($0) == tag }
+        return Button {
+            model.toggleColorTag(tag, item: item)
+        } label: {
+            Circle()
+                .fill(on ? tag.color : tag.color.opacity(0.25))
+                .overlay(Circle().strokeBorder(tag.color, lineWidth: 1.5))
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.plain)
+        .help(on ? "Remove \(tag.displayName) tag" : "Tag \(tag.displayName)")
+        .accessibilityLabel(tag.displayName)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    private func chip(_ name: String) -> some View {
+        let on = model.allTargetsHaveTextTag(name, item: item)
+        return Button {
+            model.toggleTextTag(name, item: item)
+        } label: {
+            Text(name)
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(on ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                .foregroundStyle(on ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// Wraps children onto new lines when they exceed the available width.
+private struct TagFlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, width: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            width = max(width, x - spacing)
+        }
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX { x = bounds.minX; y += rowHeight + spacing; rowHeight = 0 }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
