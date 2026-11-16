@@ -104,7 +104,7 @@ final class BrowserModel {
             invalidateDisplayCache()
             if sortOrder == .codec {
                 prefetchCodecs()
-            } else if oldValue == .codec {
+            } else if oldValue == .codec, searchText.isEmpty {
                 // Leaving the codec sort: nothing needs codecs anymore, so stop
                 // a running pass from probing the rest of the folder off disk.
                 cancelCodecPrefetch()
@@ -571,7 +571,12 @@ final class BrowserModel {
 
     /// Free-text filter, scoped to the current browse mode / selected folder.
     var searchText: String = "" {
-        didSet { clampSelection() }
+        didSet {
+            clampSelection()
+            // Search terms can match a video's codec, which is probed lazily.
+            if !searchText.isEmpty { prefetchCodecs() }
+            else if sortOrder != .codec { cancelCodecPrefetch() }
+        }
     }
 
     /// Live mirror of whether the toolbar search field currently holds keyboard
@@ -1872,6 +1877,7 @@ final class BrowserModel {
         let useOCR = searchRecognizedText && !ocrText.isEmpty
         let matchesNameOrText: (MediaItem, String) -> Bool = { item, term in
             if matches(item.name, term) { return true }
+            if self.typeSearchKeywords(for: item).contains(where: { matches($0, term) }) { return true }
             guard useOCR, let text = self.ocrText[item.id], !text.isEmpty else { return false }
             return matches(text, term)
         }
@@ -1884,6 +1890,31 @@ final class BrowserModel {
             }
         }
         return base
+    }
+
+    /// Cached file-type descriptions (e.g. "JPEG image") keyed by lowercase
+    /// extension, so search doesn't resolve a `UTType` per item per keystroke.
+    @ObservationIgnored private var typeDescriptionByExtension: [String: String] = [:]
+
+    /// Words that let a search term match an item by its type rather than its
+    /// name: the kind ("image", "video", "markdown", "text"), the file type
+    /// description ("JPEG image", "MPEG-4 movie"), and for videos the codec
+    /// ("h264", "hevc"). The extension is already part of the name.
+    private func typeSearchKeywords(for item: MediaItem) -> [String] {
+        var words = [item.kind.rawValue, item.kind.displayName]
+        let ext = item.url.pathExtension.lowercased()
+        if !ext.isEmpty {
+            let description: String
+            if let cached = typeDescriptionByExtension[ext] {
+                description = cached
+            } else {
+                description = UTType(filenameExtension: ext)?.localizedDescription ?? ""
+                typeDescriptionByExtension[ext] = description
+            }
+            if !description.isEmpty { words.append(description) }
+        }
+        if item.kind == .video, let codec = resolvedCodec(for: item) { words.append(codec) }
+        return words
     }
 
     /// Memoized result of `displayedItems`. `displayedItems` is read many times
@@ -2268,7 +2299,7 @@ final class BrowserModel {
         for (url, codec) in results { codecsByURL[url] = codec }
         // Codec order depends on this map, so the memoized list is now stale.
         // Only the codec sort cares; skip the churn otherwise.
-        if sortOrder == .codec { invalidateDisplayCache() }
+        if sortOrder == .codec || !searchText.isEmpty { invalidateDisplayCache() }
     }
 
     /// Applies a sort field and direction together. Used by the quick-sort

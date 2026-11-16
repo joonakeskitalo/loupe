@@ -49,7 +49,11 @@ QuickLook thumbnail and preview.
   open a new folder or close the window.
 - **Search** — a scoped search field in the toolbar filters by filename within
   the current scope (the selected folder in Folders mode, or All Media when
-  flattened).
+  flattened). Terms also match a file's type: its kind (`image`, `video`,
+  `markdown`, `text`), its type description (`jpeg`, `png`, `mpeg-4`), and a
+  video's codec (`h264`, `hevc`). So `video -hevc` finds videos that aren't
+  HEVC. Video codecs are probed in the background, so those matches fill in
+  as probing finishes.
 - **Type & extension chips** — a chip bar above the grid lets you filter by
   file type (Images, Videos, PDFs, Audio, Markdown, Text, and Other for
   anything else) and/or specific file extensions. Clicking a chip filters by just that one; Shift- or ⌘-click adds
