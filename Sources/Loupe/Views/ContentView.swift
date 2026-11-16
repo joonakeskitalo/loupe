@@ -148,6 +148,9 @@ struct ContentView: View {
         }
     }
 
+    /// Minimum space kept for the grid/list column when sidebars are open.
+    private static let minBrowserWidth: CGFloat = 320
+    private static let minBrowserHeight: CGFloat = 220
     @ViewBuilder
     private var detail: some View {
         VStack(spacing: 0) {
@@ -159,6 +162,13 @@ struct ContentView: View {
                 // to the PathBar, so it sits alongside — not under — the filter
                 // bar. The filter bar and the grid/list share the left column
                 // and therefore end at the sidebar's left edge.
+                // Measure the available space so the sidebars can shrink instead
+                // of overflowing when the window is small. The info sidebar gets
+                // priority; the preview takes what's left of the budget.
+                GeometryReader { geo in
+                    let budget = max(0, geo.size.width - Self.minBrowserWidth)
+                    let infoCap = model.showInfoSidebar ? min(CGFloat(model.infoSidebarWidth), budget) : 0
+                    let previewCap = max(0, budget - infoCap)
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
                         FilterBar(model: model)
@@ -173,18 +183,19 @@ struct ContentView: View {
                                             searchFocused: searchFocused)
                         }
                         if model.showPreviewSidebar && model.previewPlacement == .bottom {
-                            ItemPreviewSidebar(model: model)
+                            ItemPreviewSidebar(model: model, heightCap: max(0, geo.size.height - Self.minBrowserHeight))
                                 .transition(.move(edge: .bottom))
                         }
                     }
                     if model.showPreviewSidebar && model.previewPlacement == .side {
-                        ItemPreviewSidebar(model: model)
+                        ItemPreviewSidebar(model: model, widthCap: previewCap)
                             .transition(.move(edge: .trailing))
                     }
                     if model.showInfoSidebar {
-                        ItemInfoSidebar(model: model)
+                        ItemInfoSidebar(model: model, widthCap: infoCap)
                             .transition(.move(edge: .trailing))
                     }
+                }
                 }
                 if model.showAudioPlayer {
                     AudioPlayerBar(model: model)

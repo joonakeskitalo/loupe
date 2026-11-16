@@ -11,6 +11,9 @@ import SwiftUI
 /// video resolves its dimensions without decoding pixels.
 struct ItemInfoSidebar: View {
     @Bindable var model: BrowserModel
+    /// Upper bound on the rendered width imposed by the window size, so the
+    /// sidebar never pushes past the window's edge when the window is small.
+    var widthCap: CGFloat = .infinity
 
     /// The live width while a resize drag is in flight, driven off local state
     /// (not the model) so dragging avoids the model's per-tick `UserDefaults`
@@ -31,7 +34,7 @@ struct ItemInfoSidebar: View {
             resizeHandle
             panel
         }
-        .frame(width: CGFloat(effectiveWidth))
+        .frame(width: min(CGFloat(effectiveWidth), widthCap))
     }
 
     private var panel: some View {

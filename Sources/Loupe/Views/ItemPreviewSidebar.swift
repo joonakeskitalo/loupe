@@ -15,6 +15,10 @@ import SwiftUI
 /// persisted across windows or launches.
 struct ItemPreviewSidebar: View {
     @Bindable var model: BrowserModel
+    /// Upper bounds on the rendered size imposed by the window size, so the
+    /// panel never pushes past the window's edge when the window is small.
+    var widthCap: CGFloat = .infinity
+    var heightCap: CGFloat = .infinity
 
     /// The live width while a resize drag is in flight. Driving the frame off
     /// local state (not the model) keeps dragging smooth: it avoids the model's
@@ -48,13 +52,13 @@ struct ItemPreviewSidebar: View {
                 resizeHandle
                 panel
             }
-            .frame(height: CGFloat(effectiveHeight))
+            .frame(height: min(CGFloat(effectiveHeight), heightCap))
         } else {
             HStack(spacing: 0) {
                 resizeHandle
                 panel
             }
-            .frame(width: CGFloat(effectiveWidth))
+            .frame(width: min(CGFloat(effectiveWidth), widthCap))
         }
     }
 
