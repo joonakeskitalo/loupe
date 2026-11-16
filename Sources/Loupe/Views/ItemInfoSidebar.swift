@@ -254,6 +254,7 @@ private struct SingleItemInfo: View {
     /// the rename/export tools.
     @ViewBuilder
     private var infoSections: some View {
+        VStack(alignment: .leading, spacing: 16) {
                 InfoSection(title: "General") {
                     InfoRow(label: "Name", value: item.name)
                     InfoRow(label: "Kind", value: kindLabel)
@@ -284,6 +285,7 @@ private struct SingleItemInfo: View {
                     exifSection
                 }
 
+                SectionSeparator()
                 TagsSection(model: model, item: item)
                 if item.kind == .image {
                     InfoSection(title: "Recognized Text") {
@@ -313,6 +315,7 @@ private struct SingleItemInfo: View {
                     }
                 }
 
+                SectionSeparator()
                 InfoSection(title: "Location") {
                     Text(item.url.path)
                         .font(.callout)
@@ -336,6 +339,7 @@ private struct SingleItemInfo: View {
                 if item.kind == .video {
                     VideoExportSection(model: model, item: item)
                 }
+        }
     }
 
     /// Camera / shooting metadata, shown only for images that carry EXIF.
@@ -886,7 +890,7 @@ private struct SteppableIntField: View {
 private struct SectionSeparator: View {
     var body: some View {
         Divider()
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
     }
 }
 
