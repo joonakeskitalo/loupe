@@ -169,8 +169,31 @@ actor VideoMetadataProvider {
         else {
             return .empty
         }
-        return MediaMetadata(codec: nil, pixelSize: PixelSize(width: width, height: height),
-                             duration: nil, bitrate: nil)
+        // Swap the dimensions for 90°/270° orientations (EXIF 5...8) so
+        // portrait shots stored as rotated landscape pixels report correctly.
+        let swapped = (exifOrientation(props) ?? rawFallbackOrientation(source)) .map { $0 >= 5 && $0 <= 8 } ?? false
+        let size = swapped ? PixelSize(width: height, height: width)
+                           : PixelSize(width: width, height: height)
+        return MediaMetadata(codec: nil, pixelSize: size, duration: nil, bitrate: nil)
+    }
+
+    /// EXIF orientation from the top-level properties, falling back to the TIFF
+    /// dictionary (where some RAW formats, e.g. Fujifilm RAF, keep it).
+    private static func exifOrientation(_ props: [CFString: Any]) -> Int? {
+        if let o = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue { return o }
+        if let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
+           let o = (tiff[kCGImagePropertyTIFFOrientation] as? NSNumber)?.intValue { return o }
+        return nil
+    }
+
+    /// RAW containers often carry no orientation on the sensor image, but the
+    /// embedded JPEG preview (another image in the source) does.
+    private static func rawFallbackOrientation(_ source: CGImageSource) -> Int? {
+        for i in 1..<max(1, CGImageSourceGetCount(source)) {
+            if let p = CGImageSourceCopyPropertiesAtIndex(source, i, nil) as? [CFString: Any],
+               let o = exifOrientation(p) { return o }
+        }
+        return nil
     }
 
     // MARK: - Video
