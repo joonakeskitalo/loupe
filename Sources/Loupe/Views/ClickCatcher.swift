@@ -118,8 +118,18 @@ struct ClickCatcher: NSViewRepresentable {
 
         private func beginDrag(urls: [URL], event: NSEvent) {
             let image = dragImage()
-            let dragItems: [NSDraggingItem] = urls.enumerated().map { index, url in
+            // RAWs carry their XMP sidecars, so a drag-copy (or move) to
+            // Finder keeps tags attached. Sidecars get no drag preview of
+            // their own; only the images fan out under the cursor.
+            let shown = Set(urls)
+            let dragItems: [NSDraggingItem] = XMPSidecar.addingSidecars(to: urls).enumerated().map { index, url in
+                guard shown.contains(url) else {
+                    let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+                    item.setDraggingFrame(CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1), contents: nil)
+                    return item
+                }
                 let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+                let index = urls.firstIndex(of: url) ?? index
                 // Stagger multiple drag previews slightly so they fan out.
                 let size = CGSize(width: 96, height: 96)
                 let origin = CGPoint(x: bounds.midX - size.width / 2 + CGFloat(index) * 6,

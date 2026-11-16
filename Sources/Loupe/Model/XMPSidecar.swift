@@ -84,6 +84,56 @@ enum XMPSidecar {
         return adobe
     }
 
+    /// The XMP sidecars that actually exist for a camera RAW (`name.xmp`
+    /// and/or darktable's `name.RAF.xmp`), with their on-disk spelling (e.g.
+    /// `.XMP`). Empty for non-RAW files, matching how Bulk Rename pairs them.
+    /// Each directory is listed once per call.
+    static func existingSidecars(forImages urls: [URL]) -> [URL: [URL]] {
+        var listings: [URL: [String: String]] = [:]
+        var result: [URL: [URL]] = [:]
+        for url in urls where ImageDecoding.isRAW(url) {
+            let directory = url.deletingLastPathComponent()
+            if listings[directory] == nil {
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+                listings[directory] = Dictionary(names.map { ($0.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+            }
+            let names = listings[directory] ?? [:]
+            let base = url.deletingPathExtension().lastPathComponent
+            let found = ["\(base).xmp", "\(url.lastPathComponent).xmp"].compactMap { candidate in
+                names[candidate.lowercased()].map { directory.appendingPathComponent($0) }
+            }
+            if !found.isEmpty { result[url] = found }
+        }
+        return result
+    }
+
+    /// `urls` with each RAW's existing sidecars inserted right after it, so
+    /// copying or dragging a RAW carries its tags along. Order is preserved
+    /// and nothing is listed twice (e.g. when the `.xmp` was also selected).
+    static func addingSidecars(to urls: [URL]) -> [URL] {
+        let sidecars = existingSidecars(forImages: urls)
+        guard !sidecars.isEmpty else { return urls }
+        var seen = Set<String>()
+        var result: [URL] = []
+        for url in urls {
+            for candidate in [url] + (sidecars[url] ?? [])
+            where seen.insert(candidate.standardizedFileURL.path.lowercased()).inserted {
+                result.append(candidate)
+            }
+        }
+        return result
+    }
+
+    /// True when `url` is the sidecar of a RAW that's also in `urls`. Used to
+    /// skip sidecars that arrive alongside their image (e.g. a drop), so they
+    /// aren't opened as separate items.
+    static func isSidecar(_ url: URL, ofAnyIn urls: [URL]) -> Bool {
+        guard url.pathExtension.lowercased() == "xmp" else { return false }
+        let paired = existingSidecars(forImages: urls).values.joined()
+        let path = url.standardizedFileURL.path.lowercased()
+        return paired.contains { $0.standardizedFileURL.path.lowercased() == path }
+    }
+
     // MARK: - Reading
 
     /// Reads the sidecar for `imageURL`, or nil if there is none (or it can't

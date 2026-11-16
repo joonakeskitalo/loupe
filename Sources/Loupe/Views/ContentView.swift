@@ -624,7 +624,10 @@ struct ContentView: View {
 
     /// Opens a batch of folders/files into the current window, appending to any
     /// folders already present. Preserves the drop order.
-    private func openURLs(_ urls: [URL]) {
+    private func openURLs(_ dropped: [URL]) {
+        // Sidecars dragged in with their RAW (Loupe drags include them) belong
+        // to the image; don't open them as separate items.
+        let urls = dropped.filter { !XMPSidecar.isSidecar($0, ofAnyIn: dropped) }
         guard !urls.isEmpty else { return }
 
         var folders: [URL] = []

@@ -4630,8 +4630,11 @@ final class BrowserModel {
     /// plain-text targets (editors, terminals) receive the paths.
     @discardableResult
     func copyToClipboard(_ item: MediaItem? = nil) -> Int {
-        let urls = actionURLs(preferring: item)
-        guard !urls.isEmpty else { return 0 }
+        let selected = actionURLs(preferring: item)
+        guard !selected.isEmpty else { return 0 }
+        // RAWs bring their XMP sidecars along, so pasting in Finder copies the
+        // tags / develop settings with the image.
+        let urls = XMPSidecar.addingSidecars(to: selected)
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -4639,7 +4642,7 @@ final class BrowserModel {
         // Tab-separated paths as a plain-text fallback for non-file targets.
         let paths = urls.map(\.path).joined(separator: "\n")
         pasteboard.setString(paths, forType: .string)
-        return urls.count
+        return selected.count
     }
 
     /// Image URLs among the given items (or the current selection), in display
